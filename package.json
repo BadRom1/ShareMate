@@ -2,6 +2,7 @@
   "name": "sharemate",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Application de partage de matériel entre particuliers (équipements, réservations, usage, frais partagés)",
   "workspaces": [
     "server",

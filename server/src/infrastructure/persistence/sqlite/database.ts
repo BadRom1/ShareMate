@@ -1,0 +1,105 @@
+import Database from 'better-sqlite3';
+import fs from 'node:fs';
+import path from 'node:path';
+
+export type SqliteDb = Database.Database;
+
+/** Ouvre (et migre) la base SQLite. `:memory:` pour les tests. */
+export function openDatabase(filePath: string): SqliteDb {
+  if (filePath !== ':memory:') {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  }
+  const db = new Database(filePath);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+  migrate(db);
+  return db;
+}
+
+function migrate(db: SqliteDb): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS members (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS "groups" (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS group_members (
+      group_id TEXT NOT NULL REFERENCES "groups"(id) ON DELETE CASCADE,
+      member_id TEXT NOT NULL REFERENCES members(id),
+      position INTEGER NOT NULL,
+      PRIMARY KEY (group_id, member_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS equipments (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL REFERENCES "groups"(id),
+      name TEXT NOT NULL,
+      category TEXT NOT NULL,
+      acquisition_date TEXT NOT NULL,
+      purchase_value_cents INTEGER NOT NULL,
+      meter_unit TEXT NOT NULL CHECK (meter_unit IN ('HOURS', 'KILOMETERS')),
+      maintenance_threshold REAL
+    );
+
+    CREATE TABLE IF NOT EXISTS equipment_access (
+      equipment_id TEXT NOT NULL REFERENCES equipments(id) ON DELETE CASCADE,
+      member_id TEXT NOT NULL REFERENCES members(id),
+      position INTEGER NOT NULL,
+      PRIMARY KEY (equipment_id, member_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS reservations (
+      id TEXT PRIMARY KEY,
+      equipment_id TEXT NOT NULL REFERENCES equipments(id) ON DELETE CASCADE,
+      member_id TEXT NOT NULL REFERENCES members(id),
+      start_at TEXT NOT NULL,
+      end_at TEXT NOT NULL,
+      notes TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_reservations_equipment ON reservations(equipment_id);
+
+    CREATE TABLE IF NOT EXISTS usage_records (
+      id TEXT PRIMARY KEY,
+      equipment_id TEXT NOT NULL REFERENCES equipments(id) ON DELETE CASCADE,
+      member_id TEXT NOT NULL REFERENCES members(id),
+      recorded_at TEXT NOT NULL,
+      meter_reading REAL NOT NULL,
+      fuel_added_liters REAL,
+      notes TEXT,
+      is_maintenance INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_usage_equipment ON usage_records(equipment_id);
+    CREATE INDEX IF NOT EXISTS idx_usage_member ON usage_records(member_id);
+
+    CREATE TABLE IF NOT EXISTS expenses (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL REFERENCES "groups"(id),
+      equipment_id TEXT REFERENCES equipments(id) ON DELETE SET NULL,
+      label TEXT NOT NULL,
+      amount_cents INTEGER NOT NULL,
+      payer_id TEXT NOT NULL REFERENCES members(id),
+      date TEXT NOT NULL,
+      category TEXT NOT NULL,
+      split_json TEXT NOT NULL,
+      receipt_path TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_expenses_group ON expenses(group_id);
+
+    CREATE TABLE IF NOT EXISTS reimbursements (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL REFERENCES "groups"(id),
+      from_member_id TEXT NOT NULL REFERENCES members(id),
+      to_member_id TEXT NOT NULL REFERENCES members(id),
+      amount_cents INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      notes TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_reimbursements_group ON reimbursements(group_id);
+  `);
+}
