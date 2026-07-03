@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api } from './api';
+import { api, setUnauthorizedHandler } from './api';
 import type { Member } from './api';
 import { EquipmentsPage } from './pages/EquipmentsPage';
 import { CalendarPage } from './pages/CalendarPage';
 import { UsagePage } from './pages/UsagePage';
 import { ExpensesPage } from './pages/ExpensesPage';
+import { BootstrapPage, InvitePage, LoginPage } from './pages/AuthPages';
 
 type Tab = 'equipments' | 'calendar' | 'usage' | 'expenses';
 
@@ -15,9 +16,69 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'expenses', label: 'Dépenses & soldes' },
 ];
 
+type Auth =
+  | { kind: 'loading' }
+  | { kind: 'invite'; code: string }
+  | { kind: 'anonymous'; needsBootstrap: boolean }
+  | { kind: 'authenticated'; member: Member };
+
 export function App() {
+  const [auth, setAuth] = useState<Auth>({ kind: 'loading' });
+
+  const backToLogin = useCallback(async () => {
+    try {
+      const state = await api.me();
+      setAuth({ kind: 'anonymous', needsBootstrap: state.needsBootstrap });
+    } catch {
+      setAuth({ kind: 'anonymous', needsBootstrap: false });
+    }
+  }, []);
+
+  const enterApp = useCallback((member: Member) => {
+    // Une invitation consommée ne doit pas rester dans l'URL.
+    if (window.location.pathname !== '/') {
+      window.history.replaceState(null, '', '/');
+    }
+    setAuth({ kind: 'authenticated', member });
+  }, []);
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => void backToLogin());
+    return () => setUnauthorizedHandler(null);
+  }, [backToLogin]);
+
+  useEffect(() => {
+    const inviteMatch = window.location.pathname.match(/^\/invite\/([^/]+)$/);
+    if (inviteMatch) {
+      setAuth({ kind: 'invite', code: decodeURIComponent(inviteMatch[1]) });
+      return;
+    }
+    api
+      .me()
+      .then((state) =>
+        setAuth(
+          state.member
+            ? { kind: 'authenticated', member: state.member }
+            : { kind: 'anonymous', needsBootstrap: state.needsBootstrap },
+        ),
+      )
+      .catch(() => setAuth({ kind: 'anonymous', needsBootstrap: false }));
+  }, []);
+
+  if (auth.kind === 'loading') {
+    return <p className="empty">Chargement…</p>;
+  }
+  if (auth.kind === 'invite') {
+    return <InvitePage code={auth.code} onRedeemed={enterApp} />;
+  }
+  if (auth.kind === 'anonymous') {
+    return auth.needsBootstrap ? <BootstrapPage onCreated={enterApp} /> : <LoginPage onLoggedIn={enterApp} />;
+  }
+  return <AuthenticatedApp member={auth.member} onLoggedOut={() => void backToLogin()} />;
+}
+
+function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut: () => void }) {
   const [members, setMembers] = useState<Member[] | null>(null);
-  const [memberId, setMemberId] = useState<string | null>(() => localStorage.getItem('sharemate.memberId'));
   const [tab, setTab] = useState<Tab>('equipments');
   const [usageEquipmentId, setUsageEquipmentId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -29,33 +90,25 @@ export function App() {
 
   const loadMembers = useCallback(async () => {
     try {
-      const list = await api.listMembers();
-      setMembers(list);
-      if (list.length > 0 && (!memberId || !list.some((m) => m.id === memberId))) {
-        setMemberId(list[0].id);
-      }
+      setMembers(await api.listMembers());
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erreur de chargement.');
     }
-  }, [memberId]);
+  }, []);
 
   useEffect(() => {
     void loadMembers();
   }, [loadMembers]);
 
-  useEffect(() => {
-    if (memberId) localStorage.setItem('sharemate.memberId', memberId);
-  }, [memberId]);
+  async function logout() {
+    try {
+      await api.logout();
+    } finally {
+      onLoggedOut();
+    }
+  }
 
   if (members === null) {
-    return <p className="empty">Chargement…</p>;
-  }
-
-  if (members.length === 0) {
-    return <Onboarding onCreated={() => void loadMembers()} />;
-  }
-
-  if (!memberId) {
     return <p className="empty">Chargement…</p>;
   }
 
@@ -64,14 +117,12 @@ export function App() {
       <header className="topbar">
         <h1>🚜 ShareMate</h1>
         <div className="who">
-          <span>Je suis :</span>
-          <select value={memberId} onChange={(e) => setMemberId(e.target.value)}>
-            {members.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-          </select>
+          <span>
+            Connecté : <strong>{member.name}</strong>
+          </span>
+          <button className="ghost" onClick={() => void logout()}>
+            Déconnexion
+          </button>
         </div>
       </header>
 
@@ -90,70 +141,15 @@ export function App() {
       </nav>
 
       {tab === 'equipments' && (
-        <EquipmentsPage members={members} currentMemberId={memberId} onMembersChanged={() => void loadMembers()} />
+        <EquipmentsPage members={members} currentMemberId={member.id} onMembersChanged={() => void loadMembers()} />
       )}
       {tab === 'calendar' && (
-        <CalendarPage members={members} currentMemberId={memberId} onRecordUsage={openUsageFor} />
+        <CalendarPage members={members} currentMemberId={member.id} onRecordUsage={openUsageFor} />
       )}
       {tab === 'usage' && (
-        <UsagePage members={members} currentMemberId={memberId} initialEquipmentId={usageEquipmentId} />
+        <UsagePage members={members} currentMemberId={member.id} initialEquipmentId={usageEquipmentId} />
       )}
-      {tab === 'expenses' && <ExpensesPage members={members} currentMemberId={memberId} />}
+      {tab === 'expenses' && <ExpensesPage members={members} currentMemberId={member.id} />}
     </>
-  );
-}
-
-function Onboarding({ onCreated }: { onCreated: () => void }) {
-  const [memberNames, setMemberNames] = useState(['', '']);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    const names = memberNames.map((n) => n.trim()).filter(Boolean);
-    if (names.length === 0) {
-      setError('Ajoutez au moins une personne.');
-      return;
-    }
-    setBusy(true);
-    try {
-      for (const name of names) {
-        await api.createMember({ name });
-      }
-      onCreated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erreur.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="card" style={{ marginTop: '3rem' }}>
-      <h2>🚜 Bienvenue sur ShareMate</h2>
-      <p className="muted">
-        Ici, ce sont les objets qui portent leurs utilisateurs : chaque équipement a son propre cercle de
-        partage (réservations, suivi d'usage, frais). Commencez par créer les personnes, puis ajoutez vos
-        équipements en choisissant qui les partage.
-      </p>
-      {error && <div className="alert">{error}</div>}
-      <form className="stack" onSubmit={submit}>
-        <span className="muted">Personnes (vous et ceux avec qui vous partagez)</span>
-        {memberNames.map((n, i) => (
-          <input
-            key={i}
-            value={n}
-            onChange={(e) => setMemberNames(memberNames.map((v, j) => (j === i ? e.target.value : v)))}
-            placeholder={`Personne ${i + 1}`}
-          />
-        ))}
-        <button type="button" className="ghost" onClick={() => setMemberNames([...memberNames, ''])}>
-          + Ajouter une personne
-        </button>
-        <button className="primary" disabled={busy}>
-          C'est parti
-        </button>
-      </form>
-    </div>
   );
 }

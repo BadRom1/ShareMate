@@ -1,15 +1,20 @@
 import Fastify from 'fastify';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
+import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ConflictError, DomainError, NotFoundError } from '../../domain/shared/domain-error.js';
+import { ConflictError, DomainError, NotFoundError, UnauthorizedError } from '../../domain/shared/domain-error.js';
+import type { Member } from '../../domain/member/member.js';
 import type { ExpenseCategory } from '../../domain/expense/expense.js';
 import type { ReservationStatus } from '../../domain/reservation/reservation.js';
 import type { RecurrenceFrequency } from '../../domain/reservation/recurrence.js';
 import { MemberService } from '../../application/member-service.js';
+import { AuthService } from '../../application/auth-service.js';
+import type { AuthSession } from '../../application/auth-service.js';
 import { EquipmentService } from '../../application/equipment-service.js';
 import { ReservationService } from '../../application/reservation-service.js';
 import { UsageService } from '../../application/usage-service.js';
@@ -17,12 +22,16 @@ import { ExpenseService } from '../../application/expense-service.js';
 import type { SplitInput } from '../../application/expense-service.js';
 import type {
   Clock,
+  CredentialRepository,
   EquipmentRepository,
   ExpenseRepository,
   IdGenerator,
   MemberRepository,
+  PasswordHasher,
   ReimbursementRepository,
   ReservationRepository,
+  SessionRepository,
+  TokenGenerator,
   UsageRecordRepository,
 } from '../../application/ports.js';
 import {
@@ -42,17 +51,52 @@ export interface AppDependencies {
   usageRecords: UsageRecordRepository;
   expenses: ExpenseRepository;
   reimbursements: ReimbursementRepository;
+  credentials: CredentialRepository;
+  sessions: SessionRepository;
+  passwordHasher: PasswordHasher;
+  tokenGenerator: TokenGenerator;
   idGenerator: IdGenerator;
   clock: Clock;
+  /** Cookie de session en `Secure` (obligatoire derrière HTTPS en production). */
+  cookieSecure?: boolean;
   /** Répertoire de stockage des justificatifs (null = upload désactivé). */
   uploadsDir?: string | null;
   /** Répertoire des fichiers statiques du front (null = API seule). */
   webDistDir?: string | null;
 }
 
-export function buildApp(deps: AppDependencies): FastifyInstance {
+declare module 'fastify' {
+  interface FastifyRequest {
+    /** Membre authentifié, posé par le hook de session sur les routes protégées. */
+    authMember: Member;
+  }
+  interface FastifyContextConfig {
+    /** Route accessible sans session (login, invitation, santé…). */
+    public?: boolean;
+  }
+}
+
+const SESSION_COOKIE = 'sharemate_session';
+
+/** Limite anti force-brute des routes d'authentification publiques. */
+const AUTH_RATE_LIMIT = { max: 10, timeWindow: '1 minute' };
+
+export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
+  await app.register(cookie);
+  // Chargé avant la déclaration des routes, sinon son hook onRoute ne s'applique pas.
+  await app.register(rateLimit, { global: false });
+
+  const authService = new AuthService(
+    deps.members,
+    deps.credentials,
+    deps.sessions,
+    deps.passwordHasher,
+    deps.tokenGenerator,
+    deps.idGenerator,
+    deps.clock,
+  );
   const memberService = new MemberService(deps.members, deps.idGenerator);
   const equipmentService = new EquipmentService(deps.equipments, deps.members, deps.idGenerator);
   const reservationService = new ReservationService(deps.reservations, deps.equipments, deps.idGenerator, deps.clock);
@@ -65,7 +109,38 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
     deps.idGenerator,
   );
 
+  function setSessionCookie(reply: FastifyReply, session: AuthSession): void {
+    reply.setCookie(SESSION_COOKIE, session.token, {
+      path: '/',
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: deps.cookieSecure ?? false,
+      expires: session.expiresAt,
+    });
+  }
+
+  // Toute route /api/* ou /uploads/* exige une session, sauf celles marquées `config.public`.
+  app.decorateRequest('authMember', null as unknown as Member);
+  app.addHook('onRequest', async (request, reply) => {
+    const url = request.raw.url ?? '';
+    if (!url.startsWith('/api/') && !url.startsWith('/uploads/')) {
+      return; // front statique : l'écran de connexion doit rester accessible
+    }
+    if (request.routeOptions?.config?.public) {
+      return;
+    }
+    const token = request.cookies[SESSION_COOKIE];
+    const member = token ? await authService.authenticate(token) : null;
+    if (!member) {
+      return reply.status(401).send({ error: 'Authentification requise.' });
+    }
+    request.authMember = member;
+  });
+
   app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof UnauthorizedError) {
+      return reply.status(401).send({ error: error.message });
+    }
     if (error instanceof ConflictError) {
       return reply.status(409).send({ error: error.message });
     }
@@ -83,13 +158,85 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
     return reply.status(500).send({ error: 'Erreur interne du serveur.' });
   });
 
-  app.get('/api/health', async () => ({ status: 'ok' }));
+  app.get('/api/health', { config: { public: true } }, async () => ({ status: 'ok' }));
+
+  // --- Authentification ---
+
+  app.get('/api/auth/me', { config: { public: true } }, async (request) => {
+    const token = request.cookies[SESSION_COOKIE];
+    const member = token ? await authService.authenticate(token) : null;
+    return {
+      member: member ? memberDto(member) : null,
+      needsBootstrap: await authService.needsBootstrap(),
+    };
+  });
+
+  app.post<{ Body: { name: string; email?: string | null; password: string } }>(
+    '/api/auth/bootstrap',
+    { config: { public: true, rateLimit: AUTH_RATE_LIMIT } },
+    async (request, reply) => {
+      const { member, session } = await authService.bootstrap(request.body);
+      setSessionCookie(reply, session);
+      return reply.status(201).send({ member: memberDto(member) });
+    },
+  );
+
+  app.post<{ Body: { identifier: string; password: string } }>(
+    '/api/auth/login',
+    { config: { public: true, rateLimit: AUTH_RATE_LIMIT } },
+    async (request, reply) => {
+      const { member, session } = await authService.login(request.body.identifier, request.body.password);
+      setSessionCookie(reply, session);
+      return reply.send({ member: memberDto(member) });
+    },
+  );
+
+  app.post('/api/auth/logout', async (request, reply) => {
+    const token = request.cookies[SESSION_COOKIE];
+    if (token) {
+      await authService.logout(token);
+    }
+    reply.clearCookie(SESSION_COOKIE, { path: '/' });
+    return reply.status(204).send();
+  });
+
+  app.get<{ Params: { code: string } }>(
+    '/api/auth/invites/:code',
+    { config: { public: true, rateLimit: AUTH_RATE_LIMIT } },
+    async (request) => {
+      const member = await authService.inviteInfo(request.params.code);
+      return { memberName: member.name };
+    },
+  );
+
+  app.post<{ Params: { code: string }; Body: { password: string } }>(
+    '/api/auth/invites/:code/redeem',
+    { config: { public: true, rateLimit: AUTH_RATE_LIMIT } },
+    async (request, reply) => {
+      const { member, session } = await authService.redeemInvite(request.params.code, request.body.password);
+      setSessionCookie(reply, session);
+      return reply.send({ member: memberDto(member) });
+    },
+  );
+
+  app.post<{ Body: { currentPassword: string; newPassword: string } }>(
+    '/api/auth/password',
+    async (request, reply) => {
+      await authService.changePassword(request.authMember.id, request.body.currentPassword, request.body.newPassword);
+      return reply.status(204).send();
+    },
+  );
 
   // --- Membres (utilisateurs globaux, portés par les équipements) ---
 
   app.post<{ Body: { name: string; email?: string | null } }>('/api/members', async (request, reply) => {
-    const member = await memberService.createMember(request.body);
-    return reply.status(201).send(memberDto(member));
+    const { member, inviteCode } = await authService.createMemberWithInvite(request.body);
+    return reply.status(201).send({ ...memberDto(member), inviteCode });
+  });
+
+  app.post<{ Params: { id: string } }>('/api/members/:id/invite', async (request, reply) => {
+    const inviteCode = await authService.regenerateInvite(request.params.id);
+    return reply.status(201).send({ inviteCode });
   });
 
   app.get('/api/members', async () => {
@@ -151,14 +298,16 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
   app.post<{
     Body: {
       equipmentId: string;
-      memberId: string;
       start: string;
       end: string;
       status?: ReservationStatus;
       notes?: string | null;
     };
   }>('/api/reservations', async (request, reply) => {
-    const { reservation, conflicts } = await reservationService.reserve(request.body);
+    const { reservation, conflicts } = await reservationService.reserve({
+      ...request.body,
+      memberId: request.authMember.id,
+    });
     return reply.status(201).send(
       reservationDto(
         reservation,
@@ -170,7 +319,6 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
   app.post<{
     Body: {
       equipmentId: string;
-      memberId: string;
       start: string;
       end: string;
       status?: ReservationStatus;
@@ -180,7 +328,10 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
     };
   }>('/api/reservations/recurring', async (request, reply) => {
     const { frequency, until, ...input } = request.body;
-    const results = await reservationService.reserveRecurring(input, { frequency, until });
+    const results = await reservationService.reserveRecurring(
+      { ...input, memberId: request.authMember.id },
+      { frequency, until },
+    );
     return reply.status(201).send(
       results.map(({ reservation, conflicts }) =>
         reservationDto(
@@ -220,14 +371,13 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
   app.post<{
     Body: {
       equipmentId: string;
-      memberId: string;
       meterReading: number;
       fuelAddedLiters?: number | null;
       notes?: string | null;
       isMaintenance?: boolean;
     };
   }>('/api/usage', async (request, reply) => {
-    const record = await usageService.recordUsage(request.body);
+    const record = await usageService.recordUsage({ ...request.body, memberId: request.authMember.id });
     return reply.status(201).send(usageRecordDto(record));
   });
 

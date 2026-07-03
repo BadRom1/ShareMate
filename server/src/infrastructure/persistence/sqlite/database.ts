@@ -109,5 +109,17 @@ function migrate(db: SqliteDb): void {
       notes TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_reimbursements_equipment ON reimbursements(equipment_id);
+
+    CREATE TABLE IF NOT EXISTS member_credentials (
+      member_id TEXT PRIMARY KEY REFERENCES members(id) ON DELETE CASCADE,
+      password_hash TEXT,
+      invite_code TEXT UNIQUE
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY,
+      member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+      expires_at TEXT NOT NULL
+    );
   `);
 }

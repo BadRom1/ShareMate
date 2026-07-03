@@ -97,6 +97,11 @@ export interface SettlementTransaction {
   amountEuros: number;
 }
 
+export interface AuthState {
+  member: Member | null;
+  needsBootstrap: boolean;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -106,11 +111,21 @@ export class ApiError extends Error {
   }
 }
 
+let onUnauthorized: (() => void) | null = null;
+
+/** Rappelé sur tout 401 hors routes d'auth : la session a expiré, retour à l'écran de connexion. */
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  onUnauthorized = handler;
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     headers: options?.body ? { 'Content-Type': 'application/json' } : undefined,
     ...options,
   });
+  if (response.status === 401 && !url.startsWith('/api/auth/')) {
+    onUnauthorized?.();
+  }
   if (!response.ok) {
     let message = `Erreur ${response.status}`;
     try {
@@ -126,9 +141,26 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  me: () => request<AuthState>('/api/auth/me'),
+  bootstrap: (input: { name: string; email?: string; password: string }) =>
+    request<{ member: Member }>('/api/auth/bootstrap', { method: 'POST', body: JSON.stringify(input) }),
+  login: (identifier: string, password: string) =>
+    request<{ member: Member }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ identifier, password }) }),
+  logout: () => request<void>('/api/auth/logout', { method: 'POST', body: JSON.stringify({}) }),
+  inviteInfo: (code: string) => request<{ memberName: string }>(`/api/auth/invites/${encodeURIComponent(code)}`),
+  redeemInvite: (code: string, password: string) =>
+    request<{ member: Member }>(`/api/auth/invites/${encodeURIComponent(code)}/redeem`, {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<void>('/api/auth/password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
+
   listMembers: () => request<Member[]>('/api/members'),
   createMember: (input: { name: string; email?: string }) =>
-    request<Member>('/api/members', { method: 'POST', body: JSON.stringify(input) }),
+    request<Member & { inviteCode: string }>('/api/members', { method: 'POST', body: JSON.stringify(input) }),
+  regenerateInvite: (memberId: string) =>
+    request<{ inviteCode: string }>(`/api/members/${memberId}/invite`, { method: 'POST', body: JSON.stringify({}) }),
 
   listEquipments: () => request<Equipment[]>('/api/equipments'),
   createEquipment: (input: Omit<Equipment, 'id'>) =>
@@ -140,7 +172,6 @@ export const api = {
   calendar: () => request<Reservation[]>('/api/calendar'),
   reserve: (input: {
     equipmentId: string;
-    memberId: string;
     start: string;
     end: string;
     status?: ReservationStatus;
@@ -148,7 +179,6 @@ export const api = {
   }) => request<Reservation>('/api/reservations', { method: 'POST', body: JSON.stringify(input) }),
   reserveRecurring: (input: {
     equipmentId: string;
-    memberId: string;
     start: string;
     end: string;
     status?: ReservationStatus;
@@ -164,7 +194,6 @@ export const api = {
 
   recordUsage: (input: {
     equipmentId: string;
-    memberId: string;
     meterReading: number;
     fuelAddedLiters?: number | null;
     notes?: string | null;

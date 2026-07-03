@@ -257,7 +257,6 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
         }
         const created = await api.reserveRecurring({
           equipmentId: form.equipmentId,
-          memberId: currentMemberId,
           start: formStart.toISOString(),
           end: formEnd.toISOString(),
           status: form.status,
@@ -274,7 +273,6 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
       } else {
         const created = await api.reserve({
           equipmentId: form.equipmentId,
-          memberId: currentMemberId,
           start: formStart.toISOString(),
           end: formEnd.toISOString(),
           status: form.status,

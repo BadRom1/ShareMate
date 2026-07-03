@@ -2,14 +2,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './infrastructure/persistence/sqlite/database.js';
 import {
+  SqliteCredentialRepository,
   SqliteEquipmentRepository,
   SqliteExpenseRepository,
   SqliteMemberRepository,
   SqliteReimbursementRepository,
   SqliteReservationRepository,
+  SqliteSessionRepository,
   SqliteUsageRecordRepository,
 } from './infrastructure/persistence/sqlite/repositories.js';
-import { SystemClock, UuidGenerator } from './infrastructure/tech/adapters.js';
+import { CryptoTokenGenerator, ScryptPasswordHasher, SystemClock, UuidGenerator } from './infrastructure/tech/adapters.js';
 import { buildApp } from './infrastructure/http/app.js';
 
 /** Composition root : câblage des adapters sur les ports. */
@@ -23,15 +25,20 @@ const port = Number(process.env.PORT ?? 3000);
 
 const db = openDatabase(databasePath);
 
-const app = buildApp({
+const app = await buildApp({
   members: new SqliteMemberRepository(db),
   equipments: new SqliteEquipmentRepository(db),
   reservations: new SqliteReservationRepository(db),
   usageRecords: new SqliteUsageRecordRepository(db),
   expenses: new SqliteExpenseRepository(db),
   reimbursements: new SqliteReimbursementRepository(db),
+  credentials: new SqliteCredentialRepository(db),
+  sessions: new SqliteSessionRepository(db),
+  passwordHasher: new ScryptPasswordHasher(),
+  tokenGenerator: new CryptoTokenGenerator(),
   idGenerator: new UuidGenerator(),
   clock: new SystemClock(),
+  cookieSecure: process.env.NODE_ENV === 'production',
   uploadsDir,
   webDistDir,
 });

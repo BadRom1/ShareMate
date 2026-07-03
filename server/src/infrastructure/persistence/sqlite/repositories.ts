@@ -9,12 +9,16 @@ import type { ExpenseCategory, SplitRule } from '../../../domain/expense/expense
 import { Reimbursement } from '../../../domain/expense/reimbursement.js';
 import { Money } from '../../../domain/shared/money.js';
 import { TimeRange } from '../../../domain/shared/time-range.js';
+import { MemberCredential } from '../../../domain/auth/credential.js';
+import type { Session } from '../../../domain/auth/session.js';
 import type {
+  CredentialRepository,
   EquipmentRepository,
   ExpenseRepository,
   MemberRepository,
   ReimbursementRepository,
   ReservationRepository,
+  SessionRepository,
   UsageRecordRepository,
 } from '../../../application/ports.js';
 
@@ -41,6 +45,80 @@ export class SqliteMemberRepository implements MemberRepository {
     this.db
       .prepare('INSERT INTO members (id, name, email) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, email = excluded.email')
       .run(member.id, member.name, member.email);
+  }
+}
+
+interface CredentialRow {
+  member_id: string;
+  password_hash: string | null;
+  invite_code: string | null;
+}
+
+export class SqliteCredentialRepository implements CredentialRepository {
+  constructor(private readonly db: SqliteDb) {}
+
+  private toEntity(row: CredentialRow): MemberCredential {
+    return MemberCredential.create({
+      memberId: row.member_id,
+      passwordHash: row.password_hash,
+      inviteCode: row.invite_code,
+    });
+  }
+
+  async findByMemberId(memberId: string): Promise<MemberCredential | null> {
+    const row = this.db.prepare('SELECT * FROM member_credentials WHERE member_id = ?').get(memberId) as
+      | CredentialRow
+      | undefined;
+    return row ? this.toEntity(row) : null;
+  }
+
+  async findByInviteCode(code: string): Promise<MemberCredential | null> {
+    const row = this.db.prepare('SELECT * FROM member_credentials WHERE invite_code = ?').get(code) as
+      | CredentialRow
+      | undefined;
+    return row ? this.toEntity(row) : null;
+  }
+
+  async count(): Promise<number> {
+    const row = this.db.prepare('SELECT COUNT(*) AS count FROM member_credentials').get() as { count: number };
+    return row.count;
+  }
+
+  async save(credential: MemberCredential): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO member_credentials (member_id, password_hash, invite_code) VALUES (?, ?, ?)
+         ON CONFLICT(member_id) DO UPDATE SET password_hash = excluded.password_hash, invite_code = excluded.invite_code`,
+      )
+      .run(credential.memberId, credential.passwordHash, credential.inviteCode);
+  }
+}
+
+export class SqliteSessionRepository implements SessionRepository {
+  constructor(private readonly db: SqliteDb) {}
+
+  async findByTokenHash(tokenHash: string): Promise<Session | null> {
+    const row = this.db.prepare('SELECT * FROM sessions WHERE token_hash = ?').get(tokenHash) as
+      | { token_hash: string; member_id: string; expires_at: string }
+      | undefined;
+    return row ? { tokenHash: row.token_hash, memberId: row.member_id, expiresAt: new Date(row.expires_at) } : null;
+  }
+
+  async save(session: Session): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO sessions (token_hash, member_id, expires_at) VALUES (?, ?, ?)
+         ON CONFLICT(token_hash) DO UPDATE SET expires_at = excluded.expires_at`,
+      )
+      .run(session.tokenHash, session.memberId, session.expiresAt.toISOString());
+  }
+
+  async delete(tokenHash: string): Promise<void> {
+    this.db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash);
+  }
+
+  async deleteExpired(now: Date): Promise<void> {
+    this.db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(now.toISOString());
   }
 }
 

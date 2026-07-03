@@ -1,4 +1,6 @@
 import type { Member } from '../domain/member/member.js';
+import type { MemberCredential } from '../domain/auth/credential.js';
+import type { Session } from '../domain/auth/session.js';
 import type { Equipment } from '../domain/equipment/equipment.js';
 import type { Reservation } from '../domain/reservation/reservation.js';
 import type { UsageRecord } from '../domain/usage/usage-record.js';
@@ -46,6 +48,20 @@ export interface ReimbursementRepository {
   save(reimbursement: Reimbursement): Promise<void>;
 }
 
+export interface CredentialRepository {
+  findByMemberId(memberId: string): Promise<MemberCredential | null>;
+  findByInviteCode(code: string): Promise<MemberCredential | null>;
+  count(): Promise<number>;
+  save(credential: MemberCredential): Promise<void>;
+}
+
+export interface SessionRepository {
+  findByTokenHash(tokenHash: string): Promise<Session | null>;
+  save(session: Session): Promise<void>;
+  delete(tokenHash: string): Promise<void>;
+  deleteExpired(now: Date): Promise<void>;
+}
+
 /** Ports techniques. */
 
 export interface IdGenerator {
@@ -54,4 +70,18 @@ export interface IdGenerator {
 
 export interface Clock {
   now(): Date;
+}
+
+export interface PasswordHasher {
+  hash(password: string): Promise<string>;
+  verify(password: string, hash: string): Promise<boolean>;
+}
+
+export interface TokenGenerator {
+  /** Jeton de session opaque remis au client (jamais stocké en clair). */
+  sessionToken(): string;
+  /** Code d'invitation court, transmissible hors de l'application. */
+  inviteCode(): string;
+  /** Empreinte non réversible d'un jeton, seule valeur persistée. */
+  hash(token: string): string;
 }

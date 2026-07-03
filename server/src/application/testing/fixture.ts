@@ -2,14 +2,18 @@ import { Member } from '../../domain/member/member.js';
 import { Equipment } from '../../domain/equipment/equipment.js';
 import { Money } from '../../domain/shared/money.js';
 import {
+  FakePasswordHasher,
   FixedClock,
+  InMemoryCredentialRepository,
   InMemoryEquipmentRepository,
   InMemoryExpenseRepository,
   InMemoryMemberRepository,
   InMemoryReimbursementRepository,
   InMemoryReservationRepository,
+  InMemorySessionRepository,
   InMemoryUsageRecordRepository,
   SequentialIdGenerator,
+  SequentialTokenGenerator,
 } from './in-memory.js';
 
 /** Contexte de test : membres m1, m2, m3 + minipelle e1 dont le cercle est m1/m2. */
@@ -20,6 +24,10 @@ export async function makeFixture() {
   const usageRecords = new InMemoryUsageRecordRepository();
   const expenses = new InMemoryExpenseRepository();
   const reimbursements = new InMemoryReimbursementRepository();
+  const credentials = new InMemoryCredentialRepository();
+  const sessions = new InMemorySessionRepository();
+  const hasher = new FakePasswordHasher();
+  const tokens = new SequentialTokenGenerator();
   const idGenerator = new SequentialIdGenerator();
   const clock = new FixedClock(new Date('2026-07-02T10:00:00Z'));
 
@@ -46,6 +54,10 @@ export async function makeFixture() {
     usageRecords,
     expenses,
     reimbursements,
+    credentials,
+    sessions,
+    hasher,
+    tokens,
     idGenerator,
     clock,
   };

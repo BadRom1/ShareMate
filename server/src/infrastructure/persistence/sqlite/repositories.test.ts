@@ -2,14 +2,17 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase } from './database.js';
 import type { SqliteDb } from './database.js';
 import {
+  SqliteCredentialRepository,
   SqliteEquipmentRepository,
   SqliteExpenseRepository,
   SqliteMemberRepository,
   SqliteReimbursementRepository,
   SqliteReservationRepository,
+  SqliteSessionRepository,
   SqliteUsageRecordRepository,
 } from './repositories.js';
 import { Member } from '../../../domain/member/member.js';
+import { MemberCredential } from '../../../domain/auth/credential.js';
 import { Equipment } from '../../../domain/equipment/equipment.js';
 import { Reservation } from '../../../domain/reservation/reservation.js';
 import { UsageRecord } from '../../../domain/usage/usage-record.js';
@@ -55,6 +58,52 @@ describe('SQLite — membres', () => {
   it('liste tous les membres triés par nom', async () => {
     const { members } = await seedBase();
     expect((await members.findAll()).map((m) => m.name)).toEqual(['Alice', 'Bruno']);
+  });
+});
+
+describe('SQLite — accès (credentials)', () => {
+  it('sauve, relit et compte les accès ; retrouve par code d’invitation', async () => {
+    await seedBase();
+    const credentials = new SqliteCredentialRepository(db);
+    expect(await credentials.count()).toBe(0);
+
+    await credentials.save(MemberCredential.create({ memberId: 'm1', passwordHash: 'hash-alice' }));
+    await credentials.save(MemberCredential.create({ memberId: 'm2', inviteCode: 'code-bruno' }));
+    expect(await credentials.count()).toBe(2);
+
+    expect((await credentials.findByMemberId('m1'))?.passwordHash).toBe('hash-alice');
+    expect((await credentials.findByInviteCode('code-bruno'))?.memberId).toBe('m2');
+    expect(await credentials.findByInviteCode('inconnu')).toBeNull();
+  });
+
+  it('la mise à jour écrase mot de passe et invitation', async () => {
+    await seedBase();
+    const credentials = new SqliteCredentialRepository(db);
+    await credentials.save(MemberCredential.create({ memberId: 'm2', inviteCode: 'code-bruno' }));
+    const claimed = (await credentials.findByInviteCode('code-bruno'))!.withPassword('hash-bruno');
+    await credentials.save(claimed);
+    expect(await credentials.findByInviteCode('code-bruno')).toBeNull();
+    expect((await credentials.findByMemberId('m2'))?.passwordHash).toBe('hash-bruno');
+  });
+});
+
+describe('SQLite — sessions', () => {
+  it('sauve, relit, supprime et purge les sessions expirées', async () => {
+    await seedBase();
+    const sessions = new SqliteSessionRepository(db);
+    await sessions.save({ tokenHash: 't1', memberId: 'm1', expiresAt: new Date('2026-08-01T00:00:00Z') });
+    await sessions.save({ tokenHash: 't2', memberId: 'm2', expiresAt: new Date('2026-07-01T00:00:00Z') });
+
+    const found = await sessions.findByTokenHash('t1');
+    expect(found?.memberId).toBe('m1');
+    expect(found?.expiresAt.toISOString()).toBe('2026-08-01T00:00:00.000Z');
+
+    await sessions.deleteExpired(new Date('2026-07-15T00:00:00Z'));
+    expect(await sessions.findByTokenHash('t2')).toBeNull();
+    expect(await sessions.findByTokenHash('t1')).not.toBeNull();
+
+    await sessions.delete('t1');
+    expect(await sessions.findByTokenHash('t1')).toBeNull();
   });
 });
 

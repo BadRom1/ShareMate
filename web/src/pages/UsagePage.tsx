@@ -57,7 +57,6 @@ export function UsagePage({ members, currentMemberId, initialEquipmentId }: Prop
     try {
       await api.recordUsage({
         equipmentId: selectedId,
-        memberId: currentMemberId,
         meterReading: Number(form.meterReading),
         fuelAddedLiters: form.fuelAddedLiters === '' ? null : Number(form.fuelAddedLiters),
         notes: form.notes || null,

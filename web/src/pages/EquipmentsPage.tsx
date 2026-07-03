@@ -27,6 +27,7 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [newMemberName, setNewMemberName] = useState('');
+  const [invite, setInvite] = useState<{ memberName: string; url: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -87,6 +88,10 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
     }
   }
 
+  function inviteUrl(code: string) {
+    return `${window.location.origin}/invite/${code}`;
+  }
+
   async function addMember() {
     const name = newMemberName.trim();
     if (!name) return;
@@ -96,7 +101,18 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
       setNewMemberName('');
       // Le nouvel utilisateur rejoint le cercle en cours d'édition.
       setForm((f) => ({ ...f, memberIds: [...f.memberIds, created.id] }));
+      setInvite({ memberName: created.name, url: inviteUrl(created.inviteCode) });
       onMembersChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erreur.');
+    }
+  }
+
+  async function shareInvite(member: Member) {
+    setError(null);
+    try {
+      const { inviteCode } = await api.regenerateInvite(member.id);
+      setInvite({ memberName: member.name, url: inviteUrl(inviteCode) });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erreur.');
     }
@@ -218,6 +234,45 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
                 + Créer la personne
               </button>
             </div>
+            <div className="row" style={{ alignItems: 'flex-end' }}>
+              <label className="field">
+                Lien d'invitation (premier accès ou mot de passe perdu)
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const m = members.find((x) => x.id === e.target.value);
+                    if (m) void shareInvite(m);
+                  }}
+                >
+                  <option value="" disabled>
+                    Choisir une personne…
+                  </option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            {invite && (
+              <div className="card" style={{ background: 'transparent' }}>
+                <p className="muted">
+                  Transmettez ce lien à <strong>{invite.memberName}</strong> (WhatsApp, SMS…) pour qu'il choisisse
+                  son mot de passe :
+                </p>
+                <div className="row">
+                  <input readOnly value={invite.url} onFocus={(e) => e.target.select()} style={{ flex: 1 }} />
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => void navigator.clipboard.writeText(invite.url)}
+                  >
+                    Copier
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="row">
               <button className="primary">{editing ? 'Enregistrer' : 'Créer'}</button>
               <button type="button" className="ghost" onClick={() => setShowForm(false)}>
