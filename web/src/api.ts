@@ -30,12 +30,20 @@ export interface Equipment {
   maintenanceThreshold: number | null;
 }
 
+/** PLANNED = prévisionnel, REQUIRED = nécessaire/obligatoire. */
+export type ReservationStatus = 'PLANNED' | 'REQUIRED';
+
+export type RecurrenceFrequency = 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY';
+
 export interface Reservation {
   id: string;
   equipmentId: string;
   memberId: string;
   start: string;
   end: string;
+  status: ReservationStatus;
+  createdAt: string;
+  conflictIds: string[];
   notes: string | null;
 }
 
@@ -144,8 +152,28 @@ export const api = {
   deleteEquipment: (id: string) => request<void>(`/api/equipments/${id}`, { method: 'DELETE' }),
 
   groupCalendar: (groupId: string) => request<Reservation[]>(`/api/groups/${groupId}/calendar`),
-  reserve: (input: { equipmentId: string; memberId: string; start: string; end: string; notes?: string }) =>
-    request<Reservation>('/api/reservations', { method: 'POST', body: JSON.stringify(input) }),
+  reserve: (input: {
+    equipmentId: string;
+    memberId: string;
+    start: string;
+    end: string;
+    status?: ReservationStatus;
+    notes?: string;
+  }) => request<Reservation>('/api/reservations', { method: 'POST', body: JSON.stringify(input) }),
+  reserveRecurring: (input: {
+    equipmentId: string;
+    memberId: string;
+    start: string;
+    end: string;
+    status?: ReservationStatus;
+    notes?: string;
+    frequency: RecurrenceFrequency;
+    until: string;
+  }) => request<Reservation[]>('/api/reservations/recurring', { method: 'POST', body: JSON.stringify(input) }),
+  updateReservation: (
+    id: string,
+    changes: { start?: string; end?: string; status?: ReservationStatus; notes?: string | null },
+  ) => request<Reservation>(`/api/reservations/${id}`, { method: 'PUT', body: JSON.stringify(changes) }),
   cancelReservation: (id: string) => request<void>(`/api/reservations/${id}`, { method: 'DELETE' }),
 
   recordUsage: (input: {

@@ -2,6 +2,7 @@ import type { Group } from '../../domain/group/group.js';
 import type { Member } from '../../domain/group/member.js';
 import type { Equipment } from '../../domain/equipment/equipment.js';
 import type { Reservation } from '../../domain/reservation/reservation.js';
+import { conflictMap } from '../../domain/reservation/reservation-conflict.js';
 import type { UsageRecord } from '../../domain/usage/usage-record.js';
 import type { Expense, SplitRule } from '../../domain/expense/expense.js';
 import type { Reimbursement } from '../../domain/expense/reimbursement.js';
@@ -30,15 +31,24 @@ export function equipmentDto(e: Equipment) {
   };
 }
 
-export function reservationDto(r: Reservation) {
+export function reservationDto(r: Reservation, conflictIds: string[] = []) {
   return {
     id: r.id,
     equipmentId: r.equipmentId,
     memberId: r.memberId,
     start: r.range.start.toISOString(),
     end: r.range.end.toISOString(),
+    status: r.status,
+    createdAt: r.createdAt.toISOString(),
+    conflictIds,
     notes: r.notes,
   };
+}
+
+/** Liste de réservations annotées de leurs conflits mutuels. */
+export function reservationListDto(list: Reservation[]) {
+  const conflicts = conflictMap(list);
+  return list.map((r) => reservationDto(r, conflicts.get(r.id)));
 }
 
 export function usageRecordDto(u: UsageRecord) {

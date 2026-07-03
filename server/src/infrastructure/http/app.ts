@@ -7,6 +7,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ConflictError, DomainError, NotFoundError } from '../../domain/shared/domain-error.js';
 import type { ExpenseCategory } from '../../domain/expense/expense.js';
+import type { ReservationStatus } from '../../domain/reservation/reservation.js';
+import type { RecurrenceFrequency } from '../../domain/reservation/recurrence.js';
 import { GroupService } from '../../application/group-service.js';
 import { EquipmentService } from '../../application/equipment-service.js';
 import { ReservationService } from '../../application/reservation-service.js';
@@ -31,6 +33,7 @@ import {
   memberDto,
   reimbursementDto,
   reservationDto,
+  reservationListDto,
   usageRecordDto,
 } from './dto.js';
 
@@ -55,7 +58,7 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
 
   const groupService = new GroupService(deps.groups, deps.members, deps.idGenerator);
   const equipmentService = new EquipmentService(deps.equipments, deps.groups, deps.idGenerator);
-  const reservationService = new ReservationService(deps.reservations, deps.equipments, deps.idGenerator);
+  const reservationService = new ReservationService(deps.reservations, deps.equipments, deps.idGenerator, deps.clock);
   const usageService = new UsageService(deps.usageRecords, deps.equipments, deps.idGenerator, deps.clock);
   const expenseService = new ExpenseService(
     deps.expenses,
@@ -166,20 +169,59 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
 
   // --- Réservations ---
 
-  app.post<{ Body: { equipmentId: string; memberId: string; start: string; end: string; notes?: string | null } }>(
-    '/api/reservations',
-    async (request, reply) => {
-      const reservation = await reservationService.reserve(request.body);
-      return reply.status(201).send(reservationDto(reservation));
-    },
-  );
+  app.post<{
+    Body: {
+      equipmentId: string;
+      memberId: string;
+      start: string;
+      end: string;
+      status?: ReservationStatus;
+      notes?: string | null;
+    };
+  }>('/api/reservations', async (request, reply) => {
+    const { reservation, conflicts } = await reservationService.reserve(request.body);
+    return reply.status(201).send(
+      reservationDto(
+        reservation,
+        conflicts.map((c) => c.id),
+      ),
+    );
+  });
 
-  app.put<{ Params: { id: string }; Body: { start?: string; end?: string; notes?: string | null } }>(
-    '/api/reservations/:id',
-    async (request) => {
-      return reservationDto(await reservationService.update(request.params.id, request.body));
-    },
-  );
+  app.post<{
+    Body: {
+      equipmentId: string;
+      memberId: string;
+      start: string;
+      end: string;
+      status?: ReservationStatus;
+      notes?: string | null;
+      frequency: RecurrenceFrequency;
+      until: string;
+    };
+  }>('/api/reservations/recurring', async (request, reply) => {
+    const { frequency, until, ...input } = request.body;
+    const results = await reservationService.reserveRecurring(input, { frequency, until });
+    return reply.status(201).send(
+      results.map(({ reservation, conflicts }) =>
+        reservationDto(
+          reservation,
+          conflicts.map((c) => c.id),
+        ),
+      ),
+    );
+  });
+
+  app.put<{
+    Params: { id: string };
+    Body: { start?: string; end?: string; status?: ReservationStatus; notes?: string | null };
+  }>('/api/reservations/:id', async (request) => {
+    const { reservation, conflicts } = await reservationService.update(request.params.id, request.body);
+    return reservationDto(
+      reservation,
+      conflicts.map((c) => c.id),
+    );
+  });
 
   app.delete<{ Params: { id: string } }>('/api/reservations/:id', async (request, reply) => {
     await reservationService.cancel(request.params.id);
@@ -187,13 +229,11 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
   });
 
   app.get<{ Params: { id: string } }>('/api/equipments/:id/reservations', async (request) => {
-    const list = await reservationService.listByEquipment(request.params.id);
-    return list.map(reservationDto);
+    return reservationListDto(await reservationService.listByEquipment(request.params.id));
   });
 
   app.get<{ Params: { id: string } }>('/api/groups/:id/calendar', async (request) => {
-    const list = await reservationService.groupCalendar(request.params.id);
-    return list.map(reservationDto);
+    return reservationListDto(await reservationService.groupCalendar(request.params.id));
   });
 
   // --- Suivi d'usage et maintenance ---

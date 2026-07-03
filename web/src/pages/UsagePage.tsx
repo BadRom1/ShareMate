@@ -6,11 +6,13 @@ import { formatDateTime, meterLabel } from '../format';
 interface Props {
   group: GroupDetail;
   currentMemberId: string;
+  /** Équipement à pré-sélectionner (arrivée depuis le calendrier). */
+  initialEquipmentId?: string | null;
 }
 
-export function UsagePage({ group, currentMemberId }: Props) {
+export function UsagePage({ group, currentMemberId, initialEquipmentId }: Props) {
   const [equipments, setEquipments] = useState<Equipment[]>([]);
-  const [selectedId, setSelectedId] = useState('');
+  const [selectedId, setSelectedId] = useState(initialEquipmentId ?? '');
   const [history, setHistory] = useState<UsageRecord[]>([]);
   const [status, setStatus] = useState<MaintenanceStatus | null>(null);
   const [alerts, setAlerts] = useState<MaintenanceStatus[]>([]);

@@ -162,6 +162,8 @@ interface ReservationRow {
   member_id: string;
   start_at: string;
   end_at: string;
+  status: 'PLANNED' | 'REQUIRED';
+  created_at: string;
   notes: string | null;
 }
 
@@ -174,6 +176,8 @@ export class SqliteReservationRepository implements ReservationRepository {
       equipmentId: row.equipment_id,
       memberId: row.member_id,
       range: TimeRange.create(new Date(row.start_at), new Date(row.end_at)),
+      status: row.status,
+      createdAt: new Date(row.created_at),
       notes: row.notes,
     });
   }
@@ -202,9 +206,10 @@ export class SqliteReservationRepository implements ReservationRepository {
   async save(reservation: Reservation): Promise<void> {
     this.db
       .prepare(
-        `INSERT INTO reservations (id, equipment_id, member_id, start_at, end_at, notes)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET start_at = excluded.start_at, end_at = excluded.end_at, notes = excluded.notes`,
+        `INSERT INTO reservations (id, equipment_id, member_id, start_at, end_at, status, created_at, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET start_at = excluded.start_at, end_at = excluded.end_at,
+           status = excluded.status, notes = excluded.notes`,
       )
       .run(
         reservation.id,
@@ -212,6 +217,8 @@ export class SqliteReservationRepository implements ReservationRepository {
         reservation.memberId,
         reservation.range.start.toISOString(),
         reservation.range.end.toISOString(),
+        reservation.status,
+        reservation.createdAt.toISOString(),
         reservation.notes,
       );
   }

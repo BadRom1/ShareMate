@@ -60,6 +60,8 @@ function migrate(db: SqliteDb): void {
       member_id TEXT NOT NULL REFERENCES members(id),
       start_at TEXT NOT NULL,
       end_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'REQUIRED' CHECK (status IN ('PLANNED', 'REQUIRED')),
+      created_at TEXT NOT NULL DEFAULT '',
       notes TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_reservations_equipment ON reservations(equipment_id);
@@ -102,4 +104,14 @@ function migrate(db: SqliteDb): void {
     );
     CREATE INDEX IF NOT EXISTS idx_reimbursements_group ON reimbursements(group_id);
   `);
+
+  // Bases créées avant l'ajout du statut et de l'horodatage des réservations.
+  const reservationColumns = db.pragma('table_info(reservations)') as { name: string }[];
+  if (!reservationColumns.some((c) => c.name === 'status')) {
+    db.exec(`ALTER TABLE reservations ADD COLUMN status TEXT NOT NULL DEFAULT 'REQUIRED'`);
+  }
+  if (!reservationColumns.some((c) => c.name === 'created_at')) {
+    db.exec(`ALTER TABLE reservations ADD COLUMN created_at TEXT NOT NULL DEFAULT ''`);
+    db.exec(`UPDATE reservations SET created_at = start_at WHERE created_at = ''`);
+  }
 }

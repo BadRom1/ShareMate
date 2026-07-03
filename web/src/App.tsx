@@ -21,7 +21,13 @@ export function App() {
   const [group, setGroup] = useState<GroupDetail | null>(null);
   const [memberId, setMemberId] = useState<string | null>(() => localStorage.getItem('sharemate.memberId'));
   const [tab, setTab] = useState<Tab>('equipments');
+  const [usageEquipmentId, setUsageEquipmentId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const openUsageFor = useCallback((equipmentId: string) => {
+    setUsageEquipmentId(equipmentId);
+    setTab('usage');
+  }, []);
 
   const loadGroups = useCallback(async () => {
     try {
@@ -110,8 +116,12 @@ export function App() {
       </nav>
 
       {tab === 'equipments' && <EquipmentsPage group={group} onGroupChanged={refreshGroup} />}
-      {tab === 'calendar' && <CalendarPage group={group} currentMemberId={memberId} />}
-      {tab === 'usage' && <UsagePage group={group} currentMemberId={memberId} />}
+      {tab === 'calendar' && (
+        <CalendarPage group={group} currentMemberId={memberId} onRecordUsage={openUsageFor} />
+      )}
+      {tab === 'usage' && (
+        <UsagePage group={group} currentMemberId={memberId} initialEquipmentId={usageEquipmentId} />
+      )}
       {tab === 'expenses' && <ExpensesPage group={group} currentMemberId={memberId} />}
     </>
   );

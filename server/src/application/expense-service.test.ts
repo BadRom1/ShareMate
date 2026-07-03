@@ -10,7 +10,7 @@ let reservationService: ReservationService;
 beforeEach(async () => {
   f = await makeFixture();
   service = new ExpenseService(f.expenses, f.reimbursements, f.groups, f.reservations, f.idGenerator);
-  reservationService = new ReservationService(f.reservations, f.equipments, f.idGenerator);
+  reservationService = new ReservationService(f.reservations, f.equipments, f.idGenerator, f.clock);
 });
 
 const base = {

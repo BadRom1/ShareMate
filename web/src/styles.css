@@ -307,3 +307,245 @@ th {
   color: var(--muted);
   padding: 2rem 0;
 }
+
+.reservation-item.conflict {
+  border-color: var(--danger);
+  background: var(--danger-light);
+}
+
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.view-toggle button {
+  border: none;
+  background: none;
+  padding: 0.35rem 0.9rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.view-toggle button.active {
+  background: var(--green);
+  color: #fff;
+  font-weight: 600;
+}
+
+.cal-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 0.6rem;
+}
+
+.cal-head {
+  background: var(--green-light);
+  color: var(--green-dark);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-align: center;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.cal-cell {
+  min-height: 5.5rem;
+  padding: 0.25rem;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.cal-cell:nth-child(7n) {
+  border-right: none;
+}
+
+.cal-cell:hover {
+  background: var(--green-light);
+}
+
+.cal-cell.outside {
+  background: var(--bg);
+  color: var(--muted);
+}
+
+.cal-cell.today .cal-day-num {
+  background: var(--green);
+  color: #fff;
+}
+
+.cal-day-num {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 999px;
+  min-width: 1.35rem;
+  text-align: center;
+  padding: 0.05rem 0.25rem;
+  margin-bottom: 0.15rem;
+}
+
+.cal-event {
+  position: relative;
+  font-size: 0.68rem;
+  line-height: 1.25;
+  background: var(--green-light);
+  border-left: 3px solid var(--green);
+  border-radius: 3px;
+  padding: 0.1rem 0.3rem 0.1rem 0.35rem;
+  margin-bottom: 0.15rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cal-event.planned {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--warning-light),
+    var(--warning-light) 4px,
+    #fff 4px,
+    #fff 8px
+  );
+  border-left-style: dashed;
+}
+
+.cal-event.conflict {
+  outline: 1px solid var(--danger);
+}
+
+.cal-event-time {
+  font-weight: 600;
+}
+
+.conflict-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--danger);
+  margin-right: 0.25rem;
+}
+
+.cal-event.mine,
+.week-event.mine {
+  cursor: pointer;
+}
+
+.cal-event.mine:hover,
+.week-event.mine:hover {
+  filter: brightness(0.93);
+}
+
+/* --- Vue semaine --- */
+
+.week-grid {
+  display: grid;
+  grid-template-columns: 3rem repeat(7, 1fr);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 0.6rem;
+}
+
+.week-head {
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--green-light);
+  color: var(--green-dark);
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.week-head.today {
+  background: var(--green);
+  color: #fff;
+}
+
+.week-hours-col .week-head {
+  cursor: default;
+}
+
+.week-hours {
+  position: relative;
+  height: 28rem;
+  border-right: 1px solid var(--border);
+}
+
+.week-hour-label {
+  position: absolute;
+  right: 0.3rem;
+  transform: translateY(-0.05rem);
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+.week-day-col {
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+
+.week-day-col:last-child {
+  border-right: none;
+}
+
+.week-body {
+  position: relative;
+  height: 28rem;
+  cursor: pointer;
+  /* Une ligne toutes les 2 heures (8 tranches sur la plage 6h-22h). */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent,
+    transparent calc(12.5% - 1px),
+    var(--border) calc(12.5% - 1px),
+    var(--border) 12.5%
+  );
+}
+
+.week-event {
+  position: absolute;
+  overflow: hidden;
+  font-size: 0.65rem;
+  line-height: 1.2;
+  background: var(--green-light);
+  border-left: 3px solid var(--green);
+  border-radius: 3px;
+  padding: 0.1rem 0.2rem 0.1rem 0.3rem;
+  box-sizing: border-box;
+}
+
+.week-event.planned {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--warning-light),
+    var(--warning-light) 4px,
+    #fff 4px,
+    #fff 8px
+  );
+  border-left-style: dashed;
+}
+
+.week-event.conflict {
+  outline: 1px solid var(--danger);
+}

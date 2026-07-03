@@ -80,14 +80,20 @@ describe('API — parcours complet du MVP', () => {
     });
     expect(r1.statusCode).toBe(201);
 
-    // Conflit détecté
+    // Conflit signalé mais non bloquant : les deux réservations coexistent
     const conflict = await post('/api/reservations', {
       equipmentId: equipment.id,
       memberId: m2,
       start: '2026-07-10T10:00:00Z',
       end: '2026-07-10T12:00:00Z',
     });
-    expect(conflict.statusCode).toBe(409);
+    expect(conflict.statusCode).toBe(201);
+    expect(conflict.json().conflictIds).toEqual([r1.json().id]);
+    const cancelConflicting = await app.inject({
+      method: 'DELETE',
+      url: `/api/reservations/${conflict.json().id}`,
+    });
+    expect(cancelConflicting.statusCode).toBe(204);
 
     // Créneau libre pour m2 (2 h)
     const r2 = await post('/api/reservations', {
