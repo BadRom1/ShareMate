@@ -1,5 +1,5 @@
 # --- Build : compile le serveur TypeScript et le front Vite ---
-FROM node:22-slim AS build
+FROM node:26-slim AS build
 WORKDIR /app
 
 # Outils nécessaires si better-sqlite3 doit être compilé (pas de prebuild)
@@ -16,7 +16,7 @@ RUN npm run build
 RUN npm prune --omit=dev && mkdir -p server/node_modules
 
 # --- Run : image minimale de production ---
-FROM node:22-slim
+FROM node:26-slim
 WORKDIR /app
 ENV NODE_ENV=production
 # Données persistantes (SQLite + justificatifs) : monter un volume Railway sur /data.
