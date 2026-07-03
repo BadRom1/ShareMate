@@ -1,0 +1,18 @@
+# Hooks git gérés par lefthook (installés via le script npm `prepare`).
+pre-commit:
+  parallel: true
+  jobs:
+    - name: prettier
+      glob: '*.{ts,tsx,js,json,md,yml,yaml,css,html}'
+      run: npx prettier --write {staged_files}
+      stage_fixed: true
+    - name: eslint
+      glob: '*.{ts,tsx,js}'
+      run: npx eslint --max-warnings 0 {staged_files}
+
+pre-push:
+  jobs:
+    - name: typecheck
+      run: npm run typecheck
+    - name: tests
+      run: npm test
