@@ -9,7 +9,7 @@
     "web"
   ],
   "scripts": {
-    "prepare": "lefthook install",
+    "prepare": "lefthook install || true",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
