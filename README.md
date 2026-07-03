@@ -103,7 +103,9 @@ Le dépôt contient un `Dockerfile` multi-stage et un `railway.json` (healthchec
    écrire dans `/data`.
 3. Générer un domaine public (Settings → Networking). Railway injecte `PORT` automatiquement.
 
-Chaque push sur la branche déployée déclenche un build + déploiement.
+Le service actuel n'est pas connecté au dépôt GitHub : déployer avec `railway up` depuis la racine
+(ou connecter le dépôt dans Service → Settings → Source pour un déploiement automatique à chaque
+push sur `main`).
 
 ## CI
 
