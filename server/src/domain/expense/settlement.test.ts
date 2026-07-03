@@ -22,7 +22,7 @@ describe('computeBalances', () => {
     expect(balances.size).toBe(0);
   });
 
-  it('une dépense partagée à deux : le payeur est créditeur de la part de l\'autre', () => {
+  it("une dépense partagée à deux : le payeur est créditeur de la part de l'autre", () => {
     const balances = computeBalances([expense('x1', 1000, 'm1', ['m1', 'm2'])], []);
     expect(balances.get('m1')!.cents).toBe(500); // m1 a avancé 1000, doit 500
     expect(balances.get('m2')!.cents).toBe(-500);

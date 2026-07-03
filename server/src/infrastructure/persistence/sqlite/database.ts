@@ -18,9 +18,7 @@ export function openDatabase(filePath: string): SqliteDb {
 
 function migrate(db: SqliteDb): void {
   // Ancien modèle centré « collectif » : schéma incompatible, on repart de zéro.
-  const hasLegacyGroups = db
-    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'groups'`)
-    .get();
+  const hasLegacyGroups = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'groups'`).get();
   if (hasLegacyGroups) {
     db.pragma('foreign_keys = OFF');
     db.exec(`

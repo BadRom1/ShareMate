@@ -156,7 +156,7 @@ describe('SQLite — réservations', () => {
   });
 });
 
-describe('SQLite — relevés d\'usage', () => {
+describe("SQLite — relevés d'usage", () => {
   it('roundtrip par équipement et par membre', async () => {
     await seedBase();
     const repo = new SqliteUsageRecordRepository(db);
@@ -180,7 +180,7 @@ describe('SQLite — relevés d\'usage', () => {
 });
 
 describe('SQLite — dépenses et remboursements', () => {
-  it('roundtrip d\'une dépense avec répartition custom', async () => {
+  it("roundtrip d'une dépense avec répartition custom", async () => {
     await seedBase();
     const repo = new SqliteExpenseRepository(db);
     await repo.save(
@@ -205,7 +205,7 @@ describe('SQLite — dépenses et remboursements', () => {
     expect(await repo.findById('x1')).toBeNull();
   });
 
-  it('roundtrip d\'une répartition au prorata', async () => {
+  it("roundtrip d'une répartition au prorata", async () => {
     await seedBase();
     const repo = new SqliteExpenseRepository(db);
     await repo.save(
@@ -224,7 +224,7 @@ describe('SQLite — dépenses et remboursements', () => {
     expect(x?.shares().get('m1')?.cents).toBe(15000);
   });
 
-  it('roundtrip d\'un remboursement', async () => {
+  it("roundtrip d'un remboursement", async () => {
     await seedBase();
     const repo = new SqliteReimbursementRepository(db);
     await repo.save(
@@ -245,8 +245,8 @@ describe('SQLite — dépenses et remboursements', () => {
   });
 });
 
-describe('SQLite — migration depuis l\'ancien modèle « collectif »', () => {
-  it('détecte l\'ancien schéma et repart de zéro', async () => {
+describe("SQLite — migration depuis l'ancien modèle « collectif »", () => {
+  it("détecte l'ancien schéma et repart de zéro", async () => {
     const fs = await import('node:fs');
     const os = await import('node:os');
     const path = await import('node:path');

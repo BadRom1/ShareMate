@@ -37,9 +37,9 @@ describe('ExpenseService — saisie', () => {
   });
 
   it('refuse un équipement inexistant', async () => {
-    await expect(
-      service.addExpense({ ...base, equipmentId: 'nope', split: { type: 'EQUAL' } }),
-    ).rejects.toThrow(/introuvable/i);
+    await expect(service.addExpense({ ...base, equipmentId: 'nope', split: { type: 'EQUAL' } })).rejects.toThrow(
+      /introuvable/i,
+    );
   });
 
   it('refuse un payeur hors du cercle', async () => {
@@ -47,9 +47,9 @@ describe('ExpenseService — saisie', () => {
   });
 
   it('refuse une répartition incluant un membre hors du cercle', async () => {
-    await expect(
-      service.addExpense({ ...base, split: { type: 'EQUAL', memberIds: ['m1', 'm3'] } }),
-    ).rejects.toThrow(/cercle/i);
+    await expect(service.addExpense({ ...base, split: { type: 'EQUAL', memberIds: ['m1', 'm3'] } })).rejects.toThrow(
+      /cercle/i,
+    );
   });
 
   it('répartition custom en euros', async () => {
@@ -61,7 +61,7 @@ describe('ExpenseService — saisie', () => {
     expect(x.shares().get('m1')!.cents).toBe(7000);
   });
 
-  it('prorata du temps d\'usage : poids issus des réservations de l\'équipement', async () => {
+  it("prorata du temps d'usage : poids issus des réservations de l'équipement", async () => {
     // m1 a réservé 6 h, m2 a réservé 2 h → m1 paie 3/4, m2 1/4
     await reservationService.reserve({
       equipmentId: 'e1',
@@ -80,13 +80,13 @@ describe('ExpenseService — saisie', () => {
     expect(x.shares().get('m2')!.cents).toBe(2500);
   });
 
-  it('prorata impossible sans données d\'usage', async () => {
+  it("prorata impossible sans données d'usage", async () => {
     await expect(service.addExpense({ ...base, split: { type: 'USAGE_PRORATED' } })).rejects.toThrow(/usage/i);
   });
 });
 
 describe('ExpenseService — soldes et remboursements', () => {
-  it('calcule les soldes du cercle de l\'équipement', async () => {
+  it("calcule les soldes du cercle de l'équipement", async () => {
     await service.addExpense({ ...base, amountEuros: 90, split: { type: 'EQUAL' } });
     const balances = await service.equipmentBalances('e1');
     expect(balances.find((b) => b.memberId === 'm1')!.balanceCents).toBe(4500);
@@ -129,7 +129,7 @@ describe('ExpenseService — soldes et remboursements', () => {
     ).rejects.toThrow(/cercle/i);
   });
 
-  it('liste les dépenses et remboursements de l\'équipement', async () => {
+  it("liste les dépenses et remboursements de l'équipement", async () => {
     await service.addExpense({ ...base, split: { type: 'EQUAL' } });
     await service.recordReimbursement({
       equipmentId: 'e1',

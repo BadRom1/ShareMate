@@ -53,9 +53,12 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 
 ```bash
 npm install
-npm test              # 122 tests (domaine, application, intégration SQLite + HTTP)
-npm run lint          # ESLint (avec règles de frontières hexagonales)
+npm test              # 157 tests (domaine, application, intégration SQLite + HTTP)
+npm run test:coverage # Tests + seuils de couverture (90 % lignes/fonctions, 85 % branches)
+npm run lint          # ESLint (frontières hexagonales + règles React hooks)
+npm run format        # Prettier (format:check en CI)
 npm run typecheck     # tsc sur les deux workspaces
+npm run audit:prod    # npm audit des dépendances de production (high+)
 npm run dev:server    # API sur http://localhost:3000
 npm run dev:web       # Front Vite sur http://localhost:5173 (proxy /api → 3000)
 npm run build         # Build de production (server/dist + web/dist)
@@ -64,13 +67,27 @@ npm start             # Sert l'API + le front buildé
 
 Variables d'environnement du serveur :
 
-| Variable        | Défaut               | Rôle                                   |
-| --------------- | -------------------- | -------------------------------------- |
-| `PORT`          | `3000`               | Port HTTP                              |
-| `DATA_DIR`      | `./data`             | Répertoire des données persistantes    |
-| `DATABASE_PATH` | `$DATA_DIR/sharemate.sqlite` | Fichier SQLite                 |
-| `UPLOADS_DIR`   | `$DATA_DIR/uploads`  | Justificatifs uploadés                 |
-| `WEB_DIST_DIR`  | `../web/dist`        | Front statique servi par le serveur    |
+| Variable        | Défaut                       | Rôle                                                    |
+| --------------- | ---------------------------- | ------------------------------------------------------- |
+| `PORT`          | `3000`                       | Port HTTP                                               |
+| `DATA_DIR`      | `./data`                     | Répertoire des données persistantes                     |
+| `DATABASE_PATH` | `$DATA_DIR/sharemate.sqlite` | Fichier SQLite                                          |
+| `UPLOADS_DIR`   | `$DATA_DIR/uploads`          | Justificatifs uploadés                                  |
+| `WEB_DIST_DIR`  | `../web/dist`                | Front statique servi par le serveur                     |
+| `NODE_ENV`      | —                            | `production` : cookie `Secure`, `trustProxy`, logs JSON |
+
+## Sécurité
+
+- **Sessions** : cookies `httpOnly` + `SameSite=Lax` (+ `Secure` en production), tokens hachés en
+  base, mots de passe en scrypt avec comparaison à temps constant.
+- **Headers** : `@fastify/helmet` (CSP `default-src 'self'`, `frame-ancestors 'none'`,
+  `nosniff`, HSTS…).
+- **Rate-limit** : anti force-brute sur les routes d'authentification (10 req/min/IP,
+  `trustProxy` activé en production pour identifier la vraie IP derrière le proxy Railway).
+- **Logs** : pino JSON en production, en-têtes `cookie`/`set-cookie` expurgés.
+- **Conteneur** : image non-root (`USER node`), `HEALTHCHECK` intégré.
+- **Chaîne d'appro** : audit npm en CI (bloquant à partir de high), CodeQL hebdomadaire,
+  Dependabot (npm, GitHub Actions, image Docker de base).
 
 ## Déploiement sur Railway
 
@@ -80,14 +97,23 @@ Le dépôt contient un `Dockerfile` multi-stage et un `railway.json` (healthchec
    automatiquement.
 2. **Ajouter un volume** monté sur `/data` (Service → Settings → Volumes) : c'est là que vivent la
    base SQLite et les justificatifs. Sans volume, les données sont perdues à chaque déploiement.
+   ⚠️ Les volumes Railway sont montés `root` alors que l'image tourne en `node` : définir la
+   variable de service `RAILWAY_RUN_UID=0`
+   ([doc Railway](https://docs.railway.com/volumes/reference#caveats)), sinon SQLite ne pourra pas
+   écrire dans `/data`.
 3. Générer un domaine public (Settings → Networking). Railway injecte `PORT` automatiquement.
 
 Chaque push sur la branche déployée déclenche un build + déploiement.
 
 ## CI
 
-GitHub Actions (`.github/workflows/ci.yml`) : install → lint → typecheck → tests → build, à chaque
-push et pull request.
+GitHub Actions :
+
+- **`ci.yml`** : lint → format → typecheck → tests avec couverture (seuils bloquants) → audit npm →
+  build, plus un job de build de l'image Docker — à chaque push sur `main` et pull request.
+- **`codeql.yml`** : analyse statique de sécurité (push, PR, et chaque lundi).
+- **Dependabot** (`.github/dependabot.yml`) : mises à jour hebdomadaires groupées des dépendances
+  npm, des actions GitHub et de l'image Docker de base.
 
 ## Feuille de route
 

@@ -41,9 +41,7 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: (member: Member) => void
         <button className="primary" disabled={busy}>
           Se connecter
         </button>
-        <p className="muted">
-          Pas encore de mot de passe ? Demandez un lien d'invitation à un membre de votre cercle.
-        </p>
+        <p className="muted">Pas encore de mot de passe ? Demandez un lien d'invitation à un membre de votre cercle.</p>
       </form>
     </div>
   );
@@ -73,9 +71,9 @@ export function BootstrapPage({ onCreated }: { onCreated: (member: Member) => vo
     <div className="card" style={{ marginTop: '3rem', maxWidth: '30rem', marginInline: 'auto' }}>
       <h2>🚜 Bienvenue sur ShareMate</h2>
       <p className="muted">
-        Ici, ce sont les objets qui portent leurs utilisateurs : chaque équipement a son propre cercle de
-        partage (réservations, suivi d'usage, frais). Créez d'abord votre compte ; vous inviterez ensuite les
-        personnes avec qui vous partagez, depuis l'onglet Équipements.
+        Ici, ce sont les objets qui portent leurs utilisateurs : chaque équipement a son propre cercle de partage
+        (réservations, suivi d'usage, frais). Créez d'abord votre compte ; vous inviterez ensuite les personnes avec qui
+        vous partagez, depuis l'onglet Équipements.
       </p>
       {error && <div className="alert">{error}</div>}
       <form className="stack" onSubmit={submit}>
@@ -85,7 +83,13 @@ export function BootstrapPage({ onCreated }: { onCreated: (member: Member) => vo
         </label>
         <label className="field">
           Mot de passe (8 caractères minimum)
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} required />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            minLength={8}
+            required
+          />
         </label>
         <button className="primary" disabled={busy}>
           C'est parti

@@ -56,7 +56,9 @@ function findNextFreeSlot(start: Date, end: Date, others: Reservation[]): { star
   let candidateStart = start.getTime();
   for (let i = 0; i < 200; i += 1) {
     const candidateEnd = candidateStart + duration;
-    const blocking = others.filter((r) => new Date(r.start).getTime() < candidateEnd && candidateStart < new Date(r.end).getTime());
+    const blocking = others.filter(
+      (r) => new Date(r.start).getTime() < candidateEnd && candidateStart < new Date(r.end).getTime(),
+    );
     if (blocking.length === 0) {
       return { start: new Date(candidateStart), end: new Date(candidateEnd) };
     }
@@ -127,8 +129,14 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
     return EQUIPMENT_COLORS[(index + EQUIPMENT_COLORS.length) % EQUIPMENT_COLORS.length];
   }
 
-  const formStart = form.startDate && form.startTime ? new Date(`${form.startDate}T${form.startTime}`) : null;
-  const formEnd = form.endDate && form.endTime ? new Date(`${form.endDate}T${form.endTime}`) : null;
+  const formStart = useMemo(
+    () => (form.startDate && form.startTime ? new Date(`${form.startDate}T${form.startTime}`) : null),
+    [form.startDate, form.startTime],
+  );
+  const formEnd = useMemo(
+    () => (form.endDate && form.endTime ? new Date(`${form.endDate}T${form.endTime}`) : null),
+    [form.endDate, form.endTime],
+  );
 
   /** Réservations de l'équipement du formulaire, hors réservation en cours d'édition. */
   const sameEquipment = useMemo(
@@ -140,13 +148,13 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
   const liveConflicts = useMemo(() => {
     if (!formStart || !formEnd || formEnd <= formStart) return [];
     return sameEquipment.filter((r) => new Date(r.start) < formEnd && formStart < new Date(r.end));
-  }, [sameEquipment, formStart?.getTime(), formEnd?.getTime()]);
+  }, [sameEquipment, formStart, formEnd]);
 
   /** Suggestion : premier créneau libre de même durée après le créneau demandé. */
   const nextFreeSlot = useMemo(() => {
     if (liveConflicts.length === 0 || !formStart || !formEnd) return null;
     return findNextFreeSlot(formStart, formEnd, sameEquipment);
-  }, [liveConflicts, sameEquipment, formStart?.getTime(), formEnd?.getTime()]);
+  }, [liveConflicts, sameEquipment, formStart, formEnd]);
 
   const byId = useMemo(() => new Map(reservations.map((r) => [r.id, r])), [reservations]);
 
@@ -425,10 +433,8 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
       {myLosingConflicts.length > 0 && (
         <div className="alert">
           ⚠️ Vous n'êtes pas prioritaire sur {myLosingConflicts.length} de vos réservations :{' '}
-          {myLosingConflicts
-            .map((r) => `${equipmentName(r.equipmentId)} le ${formatDateTime(r.start)}`)
-            .join(' ; ')}
-          . Voyez avec les membres concernés ou déplacez vos créneaux.
+          {myLosingConflicts.map((r) => `${equipmentName(r.equipmentId)} le ${formatDateTime(r.start)}`).join(' ; ')}.
+          Voyez avec les membres concernés ou déplacez vos créneaux.
         </div>
       )}
 
@@ -730,7 +736,11 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
                 <div className="week-head" />
                 <div className="week-hours">
                   {Array.from({ length: (WEEK_HOUR_END - WEEK_HOUR_START) / 2 }, (_, i) => (
-                    <span className="week-hour-label" key={i} style={{ top: `${(i * 2 * 100) / (WEEK_HOUR_END - WEEK_HOUR_START)}%` }}>
+                    <span
+                      className="week-hour-label"
+                      key={i}
+                      style={{ top: `${(i * 2 * 100) / (WEEK_HOUR_END - WEEK_HOUR_START)}%` }}
+                    >
                       {WEEK_HOUR_START + i * 2} h
                     </span>
                   ))}

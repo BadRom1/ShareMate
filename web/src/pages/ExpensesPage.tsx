@@ -79,16 +79,19 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
     loadForEquipment().catch((e: Error) => setError(e.message));
   }, [loadForEquipment]);
 
-  // À chaque changement d'équipement, recale le formulaire sur son cercle.
+  // À chaque changement d'équipement (ou de son cercle), recale le formulaire.
+  // Clé primitive : évite de relancer l'effet quand le rechargement recrée des objets identiques.
+  const selectedMemberKey = selected ? selected.memberIds.join(',') : null;
   useEffect(() => {
-    if (!selected) return;
+    if (selectedMemberKey === null) return;
+    const memberIds = selectedMemberKey === '' ? [] : selectedMemberKey.split(',');
     setForm((f) => ({
       ...f,
-      payerId: selected.memberIds.includes(f.payerId) ? f.payerId : selected.memberIds[0] ?? '',
-      equalMemberIds: [...selected.memberIds],
+      payerId: memberIds.includes(f.payerId) ? f.payerId : (memberIds[0] ?? ''),
+      equalMemberIds: memberIds,
       customAmounts: {},
     }));
-  }, [selectedId, selected?.memberIds.join(',')]);
+  }, [selectedId, selectedMemberKey]);
 
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;
@@ -145,7 +148,11 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
 
   async function markSettled(t: SettlementTransaction) {
     if (!selectedId) return;
-    if (!confirm(`Confirmer : ${memberName(t.fromMemberId)} a remboursé ${formatEuros(t.amountEuros)} à ${memberName(t.toMemberId)} ?`))
+    if (
+      !confirm(
+        `Confirmer : ${memberName(t.fromMemberId)} a remboursé ${formatEuros(t.amountEuros)} à ${memberName(t.toMemberId)} ?`,
+      )
+    )
       return;
     await api.recordReimbursement({
       equipmentId: selectedId,
@@ -190,8 +197,7 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
           </label>
           {selected && (
             <p className="muted" style={{ margin: 0 }}>
-              Cercle : {circle.map((m) => m.name).join(', ')} — chaque équipement a ses propres dépenses et
-              soldes.
+              Cercle : {circle.map((m) => m.name).join(', ')} — chaque équipement a ses propres dépenses et soldes.
             </p>
           )}
         </div>
@@ -334,8 +340,8 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
 
             {form.splitType === 'USAGE_PRORATED' && (
               <p className="muted">
-                Les parts seront calculées à partir des heures réservées par chaque membre du cercle sur{' '}
-                {selected.name}.
+                Les parts seront calculées à partir des heures réservées par chaque membre du cercle sur {selected.name}
+                .
               </p>
             )}
 

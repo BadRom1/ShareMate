@@ -2,12 +2,19 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  ci:
-    name: Lint, tests, build
+  checks:
+    name: Lint, format, types, tests, build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,11 +30,33 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Format (Prettier)
+        run: npm run format:check
+
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Tests (domaine, application, infrastructure)
-        run: npm test
+      - name: Tests avec couverture (seuils appliqués)
+        run: npm run test:coverage
+
+      - name: Audit des dépendances de production
+        run: npm run audit:prod
 
       - name: Build (serveur + front)
         run: npm run build
+
+  docker:
+    name: Build de l'image Docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build (sans push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

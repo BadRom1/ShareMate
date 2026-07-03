@@ -8,7 +8,7 @@ const range = (start: string, end: string) => TimeRange.create(new Date(start), 
 describe('generateOccurrences', () => {
   const base = range('2026-07-04T08:00:00Z', '2026-07-04T18:00:00Z');
 
-  it('hebdomadaire : une occurrence par semaine jusqu\'à la borne incluse', () => {
+  it("hebdomadaire : une occurrence par semaine jusqu'à la borne incluse", () => {
     const occurrences = generateOccurrences(base, 'WEEKLY', new Date('2026-07-25T23:59:59Z'));
     expect(occurrences.map((o) => o.start.toISOString())).toEqual([
       '2026-07-04T08:00:00.000Z',

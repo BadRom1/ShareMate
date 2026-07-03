@@ -33,9 +33,7 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
   const load = useCallback(async () => {
     const list = await api.listEquipments();
     setEquipments(list);
-    const entries = await Promise.all(
-      list.map(async (e) => [e.id, await api.maintenanceStatus(e.id)] as const),
-    );
+    const entries = await Promise.all(list.map(async (e) => [e.id, await api.maintenanceStatus(e.id)] as const));
     setStatuses(Object.fromEntries(entries));
   }, []);
 
@@ -258,8 +256,8 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
             {invite && (
               <div className="card" style={{ background: 'transparent' }}>
                 <p className="muted">
-                  Transmettez ce lien à <strong>{invite.memberName}</strong> (WhatsApp, SMS…) pour qu'il choisisse
-                  son mot de passe :
+                  Transmettez ce lien à <strong>{invite.memberName}</strong> (WhatsApp, SMS…) pour qu'il choisisse son
+                  mot de passe :
                 </p>
                 <div className="row">
                   <input readOnly value={invite.url} onFocus={(e) => e.target.select()} style={{ flex: 1 }} />

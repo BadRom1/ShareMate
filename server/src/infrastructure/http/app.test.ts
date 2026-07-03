@@ -175,10 +175,18 @@ describe('API — authentification', () => {
 
   it('changement de mot de passe', async () => {
     const alice = await bootstrapAlice();
-    const wrong = await post('/api/auth/password', { currentPassword: 'mauvais-mdp', newPassword: 'nouveau-mdp' }, alice.cookies);
+    const wrong = await post(
+      '/api/auth/password',
+      { currentPassword: 'mauvais-mdp', newPassword: 'nouveau-mdp' },
+      alice.cookies,
+    );
     expect(wrong.statusCode).toBe(401);
 
-    const ok = await post('/api/auth/password', { currentPassword: PASSWORD, newPassword: 'nouveau-mdp' }, alice.cookies);
+    const ok = await post(
+      '/api/auth/password',
+      { currentPassword: PASSWORD, newPassword: 'nouveau-mdp' },
+      alice.cookies,
+    );
     expect(ok.statusCode).toBe(204);
     expect((await post('/api/auth/login', { identifier: 'Alice', password: 'nouveau-mdp' })).statusCode).toBe(200);
   });
@@ -343,7 +351,7 @@ describe('API — parcours complet du MVP', () => {
     expect(Object.keys(shares).sort()).toEqual([m1, m3].sort());
   });
 
-  it('CRUD équipement via l\'API', async () => {
+  it("CRUD équipement via l'API", async () => {
     const { equipment, alice, bruno, chloe } = await setupMembersAndEquipment();
     const [m1, m2, m3] = [alice.id, bruno.id, chloe.id];
 

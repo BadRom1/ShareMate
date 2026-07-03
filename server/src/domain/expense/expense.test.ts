@@ -32,7 +32,7 @@ describe('Expense — répartition', () => {
     expect(total).toBe(1000);
   });
 
-  it('au prorata de poids (temps d\'usage)', () => {
+  it("au prorata de poids (temps d'usage)", () => {
     const e = Expense.create({
       ...base,
       amount: Money.fromCents(1000),
@@ -73,8 +73,6 @@ describe('Expense — répartition', () => {
   });
 
   it('rejette un libellé vide', () => {
-    expect(() =>
-      Expense.create({ ...base, label: ' ', split: { type: 'EQUAL', memberIds: ['m1'] } }),
-    ).toThrow();
+    expect(() => Expense.create({ ...base, label: ' ', split: { type: 'EQUAL', memberIds: ['m1'] } })).toThrow();
   });
 });

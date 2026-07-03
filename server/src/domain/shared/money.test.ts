@@ -7,7 +7,7 @@ describe('Money', () => {
     expect(m.cents).toBe(1250);
   });
 
-  it('se construit à partir d\'euros décimaux avec arrondi au centime', () => {
+  it("se construit à partir d'euros décimaux avec arrondi au centime", () => {
     expect(Money.fromEuros(12.5).cents).toBe(1250);
     expect(Money.fromEuros(0.1).cents).toBe(10);
     expect(Money.fromEuros(10.005).cents).toBe(1001);

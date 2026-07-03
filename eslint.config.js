@@ -1,5 +1,6 @@
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
+import reactHooks from 'eslint-plugin-react-hooks';
 
 export default tseslint.config(
   { ignores: ['**/dist/**', '**/node_modules/**', 'web/dist/**'] },
@@ -18,7 +19,14 @@ export default tseslint.config(
     rules: {
       'no-restricted-imports': [
         'error',
-        { patterns: [{ group: ['*application*', '*infrastructure*'], message: 'Le domaine ne doit dépendre ni de la couche application ni de la couche infrastructure.' }] },
+        {
+          patterns: [
+            {
+              group: ['*application*', '*infrastructure*'],
+              message: 'Le domaine ne doit dépendre ni de la couche application ni de la couche infrastructure.',
+            },
+          ],
+        },
       ],
     },
   },
@@ -28,8 +36,21 @@ export default tseslint.config(
     rules: {
       'no-restricted-imports': [
         'error',
-        { patterns: [{ group: ['*infrastructure*'], message: "La couche application ne doit pas dépendre de l'infrastructure." }] },
+        {
+          patterns: [
+            { group: ['*infrastructure*'], message: "La couche application ne doit pas dépendre de l'infrastructure." },
+          ],
+        },
       ],
+    },
+  },
+  {
+    // Règles React hooks (dépendances d'effets, ordre d'appel).
+    files: ['web/src/**/*.{ts,tsx}'],
+    plugins: { 'react-hooks': reactHooks },
+    rules: {
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'error',
     },
   },
 );

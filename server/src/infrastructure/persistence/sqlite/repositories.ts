@@ -27,8 +27,7 @@ export class SqliteMemberRepository implements MemberRepository {
 
   async findById(id: string): Promise<Member | null> {
     const row = this.db.prepare('SELECT * FROM members WHERE id = ?').get(id) as
-      | { id: string; name: string; email: string | null }
-      | undefined;
+      { id: string; name: string; email: string | null } | undefined;
     return row ? Member.create(row) : null;
   }
 
@@ -43,7 +42,9 @@ export class SqliteMemberRepository implements MemberRepository {
 
   async save(member: Member): Promise<void> {
     this.db
-      .prepare('INSERT INTO members (id, name, email) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, email = excluded.email')
+      .prepare(
+        'INSERT INTO members (id, name, email) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, email = excluded.email',
+      )
       .run(member.id, member.name, member.email);
   }
 }
@@ -67,15 +68,13 @@ export class SqliteCredentialRepository implements CredentialRepository {
 
   async findByMemberId(memberId: string): Promise<MemberCredential | null> {
     const row = this.db.prepare('SELECT * FROM member_credentials WHERE member_id = ?').get(memberId) as
-      | CredentialRow
-      | undefined;
+      CredentialRow | undefined;
     return row ? this.toEntity(row) : null;
   }
 
   async findByInviteCode(code: string): Promise<MemberCredential | null> {
     const row = this.db.prepare('SELECT * FROM member_credentials WHERE invite_code = ?').get(code) as
-      | CredentialRow
-      | undefined;
+      CredentialRow | undefined;
     return row ? this.toEntity(row) : null;
   }
 
@@ -99,8 +98,7 @@ export class SqliteSessionRepository implements SessionRepository {
 
   async findByTokenHash(tokenHash: string): Promise<Session | null> {
     const row = this.db.prepare('SELECT * FROM sessions WHERE token_hash = ?').get(tokenHash) as
-      | { token_hash: string; member_id: string; expires_at: string }
-      | undefined;
+      { token_hash: string; member_id: string; expires_at: string } | undefined;
     return row ? { tokenHash: row.token_hash, memberId: row.member_id, expiresAt: new Date(row.expires_at) } : null;
   }
 
@@ -182,7 +180,9 @@ export class SqliteEquipmentRepository implements EquipmentRepository {
           equipment.maintenanceThreshold,
         );
       this.db.prepare('DELETE FROM equipment_members WHERE equipment_id = ?').run(equipment.id);
-      const insert = this.db.prepare('INSERT INTO equipment_members (equipment_id, member_id, position) VALUES (?, ?, ?)');
+      const insert = this.db.prepare(
+        'INSERT INTO equipment_members (equipment_id, member_id, position) VALUES (?, ?, ?)',
+      );
       equipment.memberIds.forEach((memberId, i) => insert.run(equipment.id, memberId, i));
     });
     tx();

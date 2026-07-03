@@ -26,7 +26,7 @@ describe('Equipment', () => {
     expect(() => Equipment.create({ ...base, name: '' })).toThrow();
   });
 
-  it('rejette une valeur d\'achat négative', () => {
+  it("rejette une valeur d'achat négative", () => {
     expect(() => Equipment.create({ ...base, purchaseValue: Money.fromEuros(-1) })).toThrow();
   });
 
@@ -44,12 +44,12 @@ describe('Equipment', () => {
     expect(() => Equipment.create({ ...base, maintenanceThreshold: -5 })).toThrow();
   });
 
-  it('accepte l\'absence de seuil de maintenance', () => {
+  it("accepte l'absence de seuil de maintenance", () => {
     const e = Equipment.create({ ...base, maintenanceThreshold: null });
     expect(e.maintenanceThreshold).toBeNull();
   });
 
-  it('vérifie l\'accès d\'un membre', () => {
+  it("vérifie l'accès d'un membre", () => {
     const e = Equipment.create(base);
     expect(e.canBeUsedBy('m1')).toBe(true);
     expect(e.canBeUsedBy('m9')).toBe(false);

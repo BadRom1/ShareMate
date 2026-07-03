@@ -27,19 +27,19 @@ const usage = (id: string, reading: number, isMaintenance = false) =>
   });
 
 describe('computeMaintenanceStatus', () => {
-  it('sans seuil configuré : pas d\'alerte', () => {
+  it("sans seuil configuré : pas d'alerte", () => {
     const s = computeMaintenanceStatus(equipment(null), [usage('u1', 100)]);
     expect(s.alert).toBe(false);
     expect(s.threshold).toBeNull();
   });
 
-  it('sans aucun relevé : pas d\'alerte, compteur inconnu', () => {
+  it("sans aucun relevé : pas d'alerte, compteur inconnu", () => {
     const s = computeMaintenanceStatus(equipment(50), []);
     expect(s.alert).toBe(false);
     expect(s.currentReading).toBeNull();
   });
 
-  it('sous le seuil depuis la dernière maintenance : pas d\'alerte', () => {
+  it("sous le seuil depuis la dernière maintenance : pas d'alerte", () => {
     const records = [usage('u1', 100, true), usage('u2', 130)];
     const s = computeMaintenanceStatus(equipment(50), records);
     expect(s.alert).toBe(false);

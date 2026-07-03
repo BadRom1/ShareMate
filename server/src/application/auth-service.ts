@@ -62,7 +62,10 @@ export class AuthService {
   }
 
   /** Crée un membre et son invitation ; le code est à transmettre hors application. */
-  async createMemberWithInvite(input: { name: string; email?: string | null }): Promise<{ member: Member; inviteCode: string }> {
+  async createMemberWithInvite(input: {
+    name: string;
+    email?: string | null;
+  }): Promise<{ member: Member; inviteCode: string }> {
     const member = Member.create({ id: this.idGenerator.next(), name: input.name, email: input.email ?? null });
     await this.members.save(member);
     const inviteCode = this.tokens.inviteCode();
@@ -78,7 +81,9 @@ export class AuthService {
     }
     const existing = await this.credentials.findByMemberId(memberId);
     const inviteCode = this.tokens.inviteCode();
-    await this.credentials.save(existing ? existing.withInvite(inviteCode) : MemberCredential.create({ memberId, inviteCode }));
+    await this.credentials.save(
+      existing ? existing.withInvite(inviteCode) : MemberCredential.create({ memberId, inviteCode }),
+    );
     return inviteCode;
   }
 

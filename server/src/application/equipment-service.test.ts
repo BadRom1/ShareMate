@@ -11,7 +11,7 @@ beforeEach(async () => {
 });
 
 describe('EquipmentService', () => {
-  it('crée un équipement avec son cercle d\'utilisateurs', async () => {
+  it("crée un équipement avec son cercle d'utilisateurs", async () => {
     const created = await service.create({
       name: 'Remorque',
       category: 'Transport',
@@ -48,7 +48,7 @@ describe('EquipmentService', () => {
     expect(updated.maintenanceThreshold).toBe(100);
   });
 
-  it('met à jour le cercle d\'un équipement', async () => {
+  it("met à jour le cercle d'un équipement", async () => {
     const updated = await service.update('e1', { memberIds: ['m1', 'm2', 'm3'] });
     expect(updated.memberIds).toEqual(['m1', 'm2', 'm3']);
   });

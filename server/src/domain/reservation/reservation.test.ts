@@ -51,7 +51,7 @@ describe('findConflicts', () => {
     expect(findConflicts(candidate, existing).map((r) => r.id)).toEqual(['r1']);
   });
 
-  it('un chevauchement sur un autre équipement n\'est pas un conflit', () => {
+  it("un chevauchement sur un autre équipement n'est pas un conflit", () => {
     const candidate = make('r3', 'e2', '2026-07-02T10:00Z', '2026-07-02T14:00Z', 'm2');
     expect(findConflicts(candidate, existing)).toHaveLength(0);
   });

@@ -19,7 +19,7 @@ const input = {
 };
 
 describe('UsageService', () => {
-  it('enregistre un relevé de fin d\'utilisation', async () => {
+  it("enregistre un relevé de fin d'utilisation", async () => {
     const u = await service.recordUsage(input);
     expect(u.meterReading).toBe(120);
     expect(u.recordedAt.toISOString()).toBe('2026-07-02T10:00:00.000Z');

@@ -60,7 +60,7 @@ describe('ReservationService', () => {
     expect(conflicts).toHaveLength(0);
   });
 
-  it('refuse un membre sans accès à l\'équipement', async () => {
+  it("refuse un membre sans accès à l'équipement", async () => {
     await expect(service.reserve({ ...input, memberId: 'm3' })).rejects.toThrow(/accès/i);
   });
 
@@ -89,7 +89,7 @@ describe('ReservationService', () => {
     expect(reservation.createdAt.toISOString()).toBe('2026-07-02T10:00:00.000Z');
   });
 
-  it('récurrence hebdomadaire : crée toutes les occurrences jusqu\'à la borne', async () => {
+  it("récurrence hebdomadaire : crée toutes les occurrences jusqu'à la borne", async () => {
     const results = await service.reserveRecurring(input, { frequency: 'WEEKLY', until: '2026-07-24' });
     expect(results).toHaveLength(3); // 10, 17 et 24 juillet
     expect(await f.reservations.findByEquipmentId('e1')).toHaveLength(3);

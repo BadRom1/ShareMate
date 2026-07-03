@@ -19,10 +19,7 @@ export interface MaintenanceStatus {
  * atteint le seuil configuré sur l'équipement. Sans maintenance déclarée,
  * la référence est le premier relevé connu.
  */
-export function computeMaintenanceStatus(
-  equipment: Equipment,
-  records: readonly UsageRecord[],
-): MaintenanceStatus {
+export function computeMaintenanceStatus(equipment: Equipment, records: readonly UsageRecord[]): MaintenanceStatus {
   const readings = records.map((r) => r.meterReading);
   const currentReading = readings.length > 0 ? Math.max(...readings) : null;
 
@@ -35,9 +32,7 @@ export function computeMaintenanceStatus(
         : null;
 
   const unitsSinceMaintenance =
-    currentReading !== null && lastMaintenanceReading !== null
-      ? currentReading - lastMaintenanceReading
-      : null;
+    currentReading !== null && lastMaintenanceReading !== null ? currentReading - lastMaintenanceReading : null;
 
   const alert =
     equipment.maintenanceThreshold !== null &&

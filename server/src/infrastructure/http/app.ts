@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyServerOptions } from 'fastify';
 import cookie from '@fastify/cookie';
+import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
@@ -59,6 +60,10 @@ export interface AppDependencies {
   clock: Clock;
   /** Cookie de session en `Secure` (obligatoire derrière HTTPS en production). */
   cookieSecure?: boolean;
+  /** Logger Fastify (false par défaut pour les tests, pino en production). */
+  logger?: FastifyServerOptions['logger'];
+  /** Fait confiance aux en-têtes X-Forwarded-* (obligatoire derrière le proxy Railway pour le rate-limit par IP). */
+  trustProxy?: boolean;
   /** Répertoire de stockage des justificatifs (null = upload désactivé). */
   uploadsDir?: string | null;
   /** Répertoire des fichiers statiques du front (null = API seule). */
@@ -82,8 +87,25 @@ const SESSION_COOKIE = 'sharemate_session';
 const AUTH_RATE_LIMIT = { max: 10, timeWindow: '1 minute' };
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: deps.logger ?? false, trustProxy: deps.trustProxy ?? false });
 
+  await app.register(helmet, {
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        // 'unsafe-inline' : requis pour les attributs style= posés par React.
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:'],
+        objectSrc: ["'none'"],
+        frameAncestors: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"],
+        // Désactivé : casserait l'accès en HTTP simple (réseau local) ; Railway force déjà HTTPS.
+        upgradeInsecureRequests: null,
+      },
+    },
+  });
   await app.register(cookie);
   // Chargé avant la déclaration des routes, sinon son hook onRoute ne s'applique pas.
   await app.register(rateLimit, { global: false });
@@ -219,13 +241,10 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     },
   );
 
-  app.post<{ Body: { currentPassword: string; newPassword: string } }>(
-    '/api/auth/password',
-    async (request, reply) => {
-      await authService.changePassword(request.authMember.id, request.body.currentPassword, request.body.newPassword);
-      return reply.status(204).send();
-    },
-  );
+  app.post<{ Body: { currentPassword: string; newPassword: string } }>('/api/auth/password', async (request, reply) => {
+    await authService.changePassword(request.authMember.id, request.body.currentPassword, request.body.newPassword);
+    return reply.status(204).send();
+  });
 
   // --- Membres (utilisateurs globaux, portés par les équipements) ---
 
@@ -428,7 +447,14 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   });
 
   app.post<{
-    Body: { equipmentId: string; fromMemberId: string; toMemberId: string; amountEuros: number; date: string; notes?: string | null };
+    Body: {
+      equipmentId: string;
+      fromMemberId: string;
+      toMemberId: string;
+      amountEuros: number;
+      date: string;
+      notes?: string | null;
+    };
   }>('/api/reimbursements', async (request, reply) => {
     const reimbursement = await expenseService.recordReimbursement(request.body);
     return reply.status(201).send(reimbursementDto(reimbursement));

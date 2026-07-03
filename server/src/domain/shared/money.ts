@@ -89,9 +89,7 @@ export class Money {
     let remainder = this.cents - floored.reduce((s, f) => s + f, 0);
 
     // Distribue le reste aux plus forts restes (ordre stable en cas d'égalité).
-    const order = raw
-      .map((r, i) => ({ i, frac: r - Math.floor(r) }))
-      .sort((a, b) => b.frac - a.frac || a.i - b.i);
+    const order = raw.map((r, i) => ({ i, frac: r - Math.floor(r) })).sort((a, b) => b.frac - a.frac || a.i - b.i);
     const result = [...floored];
     for (const { i } of order) {
       if (remainder <= 0) break;

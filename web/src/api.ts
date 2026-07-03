@@ -170,13 +170,8 @@ export const api = {
   deleteEquipment: (id: string) => request<void>(`/api/equipments/${id}`, { method: 'DELETE' }),
 
   calendar: () => request<Reservation[]>('/api/calendar'),
-  reserve: (input: {
-    equipmentId: string;
-    start: string;
-    end: string;
-    status?: ReservationStatus;
-    notes?: string;
-  }) => request<Reservation>('/api/reservations', { method: 'POST', body: JSON.stringify(input) }),
+  reserve: (input: { equipmentId: string; start: string; end: string; status?: ReservationStatus; notes?: string }) =>
+    request<Reservation>('/api/reservations', { method: 'POST', body: JSON.stringify(input) }),
   reserveRecurring: (input: {
     equipmentId: string;
     start: string;
@@ -201,8 +196,7 @@ export const api = {
   }) => request<UsageRecord>('/api/usage', { method: 'POST', body: JSON.stringify(input) }),
   usageByEquipment: (equipmentId: string) => request<UsageRecord[]>(`/api/equipments/${equipmentId}/usage`),
   usageByMember: (memberId: string) => request<UsageRecord[]>(`/api/members/${memberId}/usage`),
-  maintenanceStatus: (equipmentId: string) =>
-    request<MaintenanceStatus>(`/api/equipments/${equipmentId}/maintenance`),
+  maintenanceStatus: (equipmentId: string) => request<MaintenanceStatus>(`/api/equipments/${equipmentId}/maintenance`),
   alerts: () => request<MaintenanceStatus[]>('/api/alerts'),
 
   listExpenses: (equipmentId: string) => request<Expense[]>(`/api/equipments/${equipmentId}/expenses`),
@@ -218,8 +212,7 @@ export const api = {
   }) => request<Expense>('/api/expenses', { method: 'POST', body: JSON.stringify(input) }),
   deleteExpense: (id: string) => request<void>(`/api/expenses/${id}`, { method: 'DELETE' }),
   balances: (equipmentId: string) => request<Balance[]>(`/api/equipments/${equipmentId}/balances`),
-  settlement: (equipmentId: string) =>
-    request<SettlementTransaction[]>(`/api/equipments/${equipmentId}/settlement`),
+  settlement: (equipmentId: string) => request<SettlementTransaction[]>(`/api/equipments/${equipmentId}/settlement`),
   listReimbursements: (equipmentId: string) =>
     request<Reimbursement[]>(`/api/equipments/${equipmentId}/reimbursements`),
   recordReimbursement: (input: {
@@ -237,7 +230,7 @@ export const api = {
     const response = await fetch('/api/uploads/receipts', { method: 'POST', body: form });
     if (!response.ok) {
       const body = (await response.json().catch(() => ({}))) as { error?: string };
-      throw new ApiError(body.error ?? 'Échec de l\'upload.', response.status);
+      throw new ApiError(body.error ?? "Échec de l'upload.", response.status);
     }
     return ((await response.json()) as { path: string }).path;
   },

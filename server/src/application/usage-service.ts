@@ -73,9 +73,7 @@ export class UsageService {
   async alerts(): Promise<MaintenanceStatus[]> {
     const equipments = await this.equipments.findAll();
     const statuses = await Promise.all(
-      equipments.map(async (e) =>
-        computeMaintenanceStatus(e, await this.usageRecords.findByEquipmentId(e.id)),
-      ),
+      equipments.map(async (e) => computeMaintenanceStatus(e, await this.usageRecords.findByEquipmentId(e.id))),
     );
     return statuses.filter((s) => s.alert);
   }

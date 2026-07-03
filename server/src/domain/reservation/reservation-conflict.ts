@@ -7,10 +7,7 @@ import type { Reservation } from './reservation.js';
  */
 export function findConflicts(candidate: Reservation, existing: readonly Reservation[]): Reservation[] {
   return existing.filter(
-    (r) =>
-      r.id !== candidate.id &&
-      r.equipmentId === candidate.equipmentId &&
-      r.range.overlaps(candidate.range),
+    (r) => r.id !== candidate.id && r.equipmentId === candidate.equipmentId && r.range.overlaps(candidate.range),
   );
 }
 

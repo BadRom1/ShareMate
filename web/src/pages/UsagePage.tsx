@@ -83,9 +83,9 @@ export function UsagePage({ members, currentMemberId, initialEquipmentId }: Prop
 
       {alerts.map((a) => (
         <div className="notice" key={a.equipmentId}>
-          🔧 <strong>{equipmentName(a.equipmentId)}</strong> : entretien recommandé — {a.unitsSinceMaintenance}{' '}
-          unités depuis la dernière maintenance (seuil : {a.threshold}). Déclarez la maintenance via un relevé
-          coché « maintenance effectuée ».
+          🔧 <strong>{equipmentName(a.equipmentId)}</strong> : entretien recommandé — {a.unitsSinceMaintenance} unités
+          depuis la dernière maintenance (seuil : {a.threshold}). Déclarez la maintenance via un relevé coché «
+          maintenance effectuée ».
         </div>
       ))}
 
