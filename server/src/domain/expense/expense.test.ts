@@ -4,7 +4,6 @@ import { Expense } from './expense.js';
 
 const base = {
   id: 'x1',
-  groupId: 'g1',
   equipmentId: 'e1',
   label: 'Plein gasoil',
   amount: Money.fromEuros(90),

@@ -113,10 +113,10 @@ describe('ReservationService', () => {
     );
   });
 
-  it('calendrier du groupe : toutes les réservations de tous ses équipements', async () => {
+  it('calendrier partagé : toutes les réservations de tous les équipements', async () => {
     await service.reserve(input);
     await service.reserve({ ...input, memberId: 'm2', start: '2026-07-11T08:00:00Z', end: '2026-07-11T10:00:00Z' });
-    const calendar = await service.groupCalendar('g1');
+    const calendar = await service.calendar();
     expect(calendar).toHaveLength(2);
   });
 });

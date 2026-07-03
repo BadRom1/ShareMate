@@ -57,13 +57,13 @@ describe('UsageService', () => {
     expect(status.unitsSinceMaintenance).toBe(60);
   });
 
-  it('alertes du groupe : uniquement les équipements en alerte', async () => {
+  it('alertes globales : uniquement les équipements en alerte', async () => {
     await service.recordUsage({ ...input, meterReading: 100, isMaintenance: true });
     await service.recordUsage({ ...input, meterReading: 130 });
-    expect(await service.groupAlerts('g1')).toHaveLength(0);
+    expect(await service.alerts()).toHaveLength(0);
 
     await service.recordUsage({ ...input, meterReading: 155 });
-    const alerts = await service.groupAlerts('g1');
+    const alerts = await service.alerts();
     expect(alerts).toHaveLength(1);
     expect(alerts[0]!.equipmentId).toBe('e1');
   });

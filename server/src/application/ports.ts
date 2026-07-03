@@ -1,5 +1,4 @@
-import type { Group } from '../domain/group/group.js';
-import type { Member } from '../domain/group/member.js';
+import type { Member } from '../domain/member/member.js';
 import type { Equipment } from '../domain/equipment/equipment.js';
 import type { Reservation } from '../domain/reservation/reservation.js';
 import type { UsageRecord } from '../domain/usage/usage-record.js';
@@ -7,12 +6,6 @@ import type { Expense } from '../domain/expense/expense.js';
 import type { Reimbursement } from '../domain/expense/reimbursement.js';
 
 /** Ports de persistance — implémentés par la couche infrastructure. */
-
-export interface GroupRepository {
-  findById(id: string): Promise<Group | null>;
-  findAll(): Promise<Group[]>;
-  save(group: Group): Promise<void>;
-}
 
 export interface MemberRepository {
   findById(id: string): Promise<Member | null>;
@@ -22,7 +15,7 @@ export interface MemberRepository {
 
 export interface EquipmentRepository {
   findById(id: string): Promise<Equipment | null>;
-  findByGroupId(groupId: string): Promise<Equipment[]>;
+  findAll(): Promise<Equipment[]>;
   save(equipment: Equipment): Promise<void>;
   delete(id: string): Promise<void>;
 }
@@ -30,7 +23,7 @@ export interface EquipmentRepository {
 export interface ReservationRepository {
   findById(id: string): Promise<Reservation | null>;
   findByEquipmentId(equipmentId: string): Promise<Reservation[]>;
-  findByEquipmentIds(equipmentIds: string[]): Promise<Reservation[]>;
+  findAll(): Promise<Reservation[]>;
   save(reservation: Reservation): Promise<void>;
   delete(id: string): Promise<void>;
 }
@@ -43,13 +36,13 @@ export interface UsageRecordRepository {
 
 export interface ExpenseRepository {
   findById(id: string): Promise<Expense | null>;
-  findByGroupId(groupId: string): Promise<Expense[]>;
+  findByEquipmentId(equipmentId: string): Promise<Expense[]>;
   save(expense: Expense): Promise<void>;
   delete(id: string): Promise<void>;
 }
 
 export interface ReimbursementRepository {
-  findByGroupId(groupId: string): Promise<Reimbursement[]>;
+  findByEquipmentId(equipmentId: string): Promise<Reimbursement[]>;
   save(reimbursement: Reimbursement): Promise<void>;
 }
 

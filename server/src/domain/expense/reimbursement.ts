@@ -3,7 +3,7 @@ import type { Money } from '../shared/money.js';
 
 export interface ReimbursementProps {
   id: string;
-  groupId: string;
+  equipmentId: string;
   fromMemberId: string;
   toMemberId: string;
   amount: Money;
@@ -11,11 +11,11 @@ export interface ReimbursementProps {
   notes?: string | null;
 }
 
-/** Remboursement déclaré entre deux membres (pas de paiement intégré au MVP). */
+/** Remboursement déclaré entre deux membres du cercle d'un équipement (pas de paiement intégré au MVP). */
 export class Reimbursement {
   private constructor(
     readonly id: string,
-    readonly groupId: string,
+    readonly equipmentId: string,
     readonly fromMemberId: string,
     readonly toMemberId: string,
     readonly amount: Money,
@@ -32,7 +32,7 @@ export class Reimbursement {
     }
     return new Reimbursement(
       props.id,
-      props.groupId,
+      props.equipmentId,
       props.fromMemberId,
       props.toMemberId,
       props.amount,

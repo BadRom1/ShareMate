@@ -4,7 +4,6 @@ import { openDatabase } from './infrastructure/persistence/sqlite/database.js';
 import {
   SqliteEquipmentRepository,
   SqliteExpenseRepository,
-  SqliteGroupRepository,
   SqliteMemberRepository,
   SqliteReimbursementRepository,
   SqliteReservationRepository,
@@ -25,7 +24,6 @@ const port = Number(process.env.PORT ?? 3000);
 const db = openDatabase(databasePath);
 
 const app = buildApp({
-  groups: new SqliteGroupRepository(db),
   members: new SqliteMemberRepository(db),
   equipments: new SqliteEquipmentRepository(db),
   reservations: new SqliteReservationRepository(db),

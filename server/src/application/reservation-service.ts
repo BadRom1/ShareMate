@@ -133,9 +133,8 @@ export class ReservationService {
     return this.reservations.findByEquipmentId(equipmentId);
   }
 
-  /** Vue calendrier partagée : réservations de tous les équipements du groupe. */
-  async groupCalendar(groupId: string): Promise<Reservation[]> {
-    const equipments = await this.equipments.findByGroupId(groupId);
-    return this.reservations.findByEquipmentIds(equipments.map((e) => e.id));
+  /** Vue calendrier partagée : réservations de tous les équipements. */
+  async calendar(): Promise<Reservation[]> {
+    return this.reservations.findAll();
   }
 }

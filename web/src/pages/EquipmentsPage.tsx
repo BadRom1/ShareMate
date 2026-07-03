@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
-import type { Equipment, GroupDetail, MaintenanceStatus, MeterUnit } from '../api';
+import type { Equipment, MaintenanceStatus, Member, MeterUnit } from '../api';
 import { formatDate, formatEuros, meterLabel } from '../format';
 
 interface Props {
-  group: GroupDetail;
-  onGroupChanged: () => void;
+  members: Member[];
+  currentMemberId: string;
+  /** À rappeler quand un nouvel utilisateur est créé depuis cette page. */
+  onMembersChanged: () => void;
 }
 
 const EMPTY_FORM = {
@@ -14,26 +16,27 @@ const EMPTY_FORM = {
   acquisitionDate: new Date().toISOString().slice(0, 10),
   purchaseValueEuros: '',
   meterUnit: 'HOURS' as MeterUnit,
-  accessMemberIds: [] as string[],
+  memberIds: [] as string[],
   maintenanceThreshold: '',
 };
 
-export function EquipmentsPage({ group }: Props) {
+export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: Props) {
   const [equipments, setEquipments] = useState<Equipment[]>([]);
   const [statuses, setStatuses] = useState<Record<string, MaintenanceStatus>>({});
   const [editing, setEditing] = useState<Equipment | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [newMemberName, setNewMemberName] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const list = await api.listEquipments(group.id);
+    const list = await api.listEquipments();
     setEquipments(list);
     const entries = await Promise.all(
       list.map(async (e) => [e.id, await api.maintenanceStatus(e.id)] as const),
     );
     setStatuses(Object.fromEntries(entries));
-  }, [group.id]);
+  }, []);
 
   useEffect(() => {
     load().catch((e: Error) => setError(e.message));
@@ -41,7 +44,7 @@ export function EquipmentsPage({ group }: Props) {
 
   function startCreate() {
     setEditing(null);
-    setForm({ ...EMPTY_FORM, accessMemberIds: group.members.map((m) => m.id) });
+    setForm({ ...EMPTY_FORM, memberIds: [currentMemberId] });
     setShowForm(true);
   }
 
@@ -53,7 +56,7 @@ export function EquipmentsPage({ group }: Props) {
       acquisitionDate: e.acquisitionDate.slice(0, 10),
       purchaseValueEuros: String(e.purchaseValueEuros),
       meterUnit: e.meterUnit,
-      accessMemberIds: [...e.accessMemberIds],
+      memberIds: [...e.memberIds],
       maintenanceThreshold: e.maintenanceThreshold === null ? '' : String(e.maintenanceThreshold),
     });
     setShowForm(true);
@@ -68,14 +71,14 @@ export function EquipmentsPage({ group }: Props) {
       acquisitionDate: form.acquisitionDate,
       purchaseValueEuros: Number(form.purchaseValueEuros || 0),
       meterUnit: form.meterUnit,
-      accessMemberIds: form.accessMemberIds,
+      memberIds: form.memberIds,
       maintenanceThreshold: form.maintenanceThreshold === '' ? null : Number(form.maintenanceThreshold),
     };
     try {
       if (editing) {
         await api.updateEquipment(editing.id, payload);
       } else {
-        await api.createEquipment({ ...payload, groupId: group.id });
+        await api.createEquipment(payload);
       }
       setShowForm(false);
       await load();
@@ -84,14 +87,29 @@ export function EquipmentsPage({ group }: Props) {
     }
   }
 
+  async function addMember() {
+    const name = newMemberName.trim();
+    if (!name) return;
+    setError(null);
+    try {
+      const created = await api.createMember({ name });
+      setNewMemberName('');
+      // Le nouvel utilisateur rejoint le cercle en cours d'édition.
+      setForm((f) => ({ ...f, memberIds: [...f.memberIds, created.id] }));
+      onMembersChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erreur.');
+    }
+  }
+
   async function remove(e: Equipment) {
-    if (!confirm(`Supprimer « ${e.name} » ? Ses réservations et relevés seront perdus.`)) return;
+    if (!confirm(`Supprimer « ${e.name} » ? Ses réservations, relevés et dépenses seront perdus.`)) return;
     await api.deleteEquipment(e.id);
     await load();
   }
 
   function memberName(id: string) {
-    return group.members.find((m) => m.id === id)?.name ?? id;
+    return members.find((m) => m.id === id)?.name ?? id;
   }
 
   return (
@@ -167,25 +185,38 @@ export function EquipmentsPage({ group }: Props) {
                 />
               </label>
             </div>
-            <span className="muted">Membres ayant accès</span>
+            <span className="muted">Cercle de partage : qui utilise cet équipement ?</span>
             <div className="row">
-              {group.members.map((m) => (
+              {members.map((m) => (
                 <label key={m.id} className="check">
                   <input
                     type="checkbox"
-                    checked={form.accessMemberIds.includes(m.id)}
+                    checked={form.memberIds.includes(m.id)}
                     onChange={(e) =>
                       setForm({
                         ...form,
-                        accessMemberIds: e.target.checked
-                          ? [...form.accessMemberIds, m.id]
-                          : form.accessMemberIds.filter((id) => id !== m.id),
+                        memberIds: e.target.checked
+                          ? [...form.memberIds, m.id]
+                          : form.memberIds.filter((id) => id !== m.id),
                       })
                     }
                   />
                   {m.name}
                 </label>
               ))}
+            </div>
+            <div className="row" style={{ alignItems: 'flex-end' }}>
+              <label className="field">
+                Ajouter une personne au cercle
+                <input
+                  value={newMemberName}
+                  onChange={(e) => setNewMemberName(e.target.value)}
+                  placeholder="Prénom du nouvel utilisateur"
+                />
+              </label>
+              <button type="button" className="ghost" onClick={() => void addMember()}>
+                + Créer la personne
+              </button>
             </div>
             <div className="row">
               <button className="primary">{editing ? 'Enregistrer' : 'Créer'}</button>
@@ -204,6 +235,7 @@ export function EquipmentsPage({ group }: Props) {
       <div className="grid">
         {equipments.map((e) => {
           const status = statuses[e.id];
+          const mine = e.memberIds.includes(currentMemberId);
           return (
             <div className="card" key={e.id}>
               <h3>{e.name}</h3>
@@ -222,9 +254,10 @@ export function EquipmentsPage({ group }: Props) {
                   </span>
                 ) : (
                   <span className="badge warn">Aucun relevé</span>
-                )}
+                )}{' '}
+                {!mine && <span className="badge warn">Je n'en fais pas partie</span>}
               </p>
-              <p className="muted">Accès : {e.accessMemberIds.map(memberName).join(', ')}</p>
+              <p className="muted">Cercle : {e.memberIds.map(memberName).join(', ')}</p>
               <div className="row">
                 <button className="ghost" onClick={() => startEdit(e)}>
                   Modifier

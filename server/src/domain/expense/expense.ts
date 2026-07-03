@@ -12,8 +12,7 @@ export type SplitRule =
 
 export interface ExpenseProps {
   id: string;
-  groupId: string;
-  equipmentId?: string | null;
+  equipmentId: string;
   label: string;
   amount: Money;
   payerId: string;
@@ -23,12 +22,11 @@ export interface ExpenseProps {
   receiptPath?: string | null;
 }
 
-/** Dépense partagée, répartie entre membres selon une règle configurable. */
+/** Dépense liée à un équipement, répartie entre les membres de son cercle selon une règle configurable. */
 export class Expense {
   private constructor(
     readonly id: string,
-    readonly groupId: string,
-    readonly equipmentId: string | null,
+    readonly equipmentId: string,
     readonly label: string,
     readonly amount: Money,
     readonly payerId: string,
@@ -49,8 +47,7 @@ export class Expense {
     Expense.validateSplit(props.split, props.amount);
     return new Expense(
       props.id,
-      props.groupId,
-      props.equipmentId ?? null,
+      props.equipmentId,
       label,
       props.amount,
       props.payerId,

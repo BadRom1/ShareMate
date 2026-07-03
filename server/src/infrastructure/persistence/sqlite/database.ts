@@ -17,6 +17,26 @@ export function openDatabase(filePath: string): SqliteDb {
 }
 
 function migrate(db: SqliteDb): void {
+  // Ancien modèle centré « collectif » : schéma incompatible, on repart de zéro.
+  const hasLegacyGroups = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'groups'`)
+    .get();
+  if (hasLegacyGroups) {
+    db.pragma('foreign_keys = OFF');
+    db.exec(`
+      DROP TABLE IF EXISTS reimbursements;
+      DROP TABLE IF EXISTS expenses;
+      DROP TABLE IF EXISTS usage_records;
+      DROP TABLE IF EXISTS reservations;
+      DROP TABLE IF EXISTS equipment_access;
+      DROP TABLE IF EXISTS equipments;
+      DROP TABLE IF EXISTS group_members;
+      DROP TABLE IF EXISTS "groups";
+      DROP TABLE IF EXISTS members;
+    `);
+    db.pragma('foreign_keys = ON');
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS members (
       id TEXT PRIMARY KEY,
@@ -24,21 +44,8 @@ function migrate(db: SqliteDb): void {
       email TEXT
     );
 
-    CREATE TABLE IF NOT EXISTS "groups" (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS group_members (
-      group_id TEXT NOT NULL REFERENCES "groups"(id) ON DELETE CASCADE,
-      member_id TEXT NOT NULL REFERENCES members(id),
-      position INTEGER NOT NULL,
-      PRIMARY KEY (group_id, member_id)
-    );
-
     CREATE TABLE IF NOT EXISTS equipments (
       id TEXT PRIMARY KEY,
-      group_id TEXT NOT NULL REFERENCES "groups"(id),
       name TEXT NOT NULL,
       category TEXT NOT NULL,
       acquisition_date TEXT NOT NULL,
@@ -47,7 +54,7 @@ function migrate(db: SqliteDb): void {
       maintenance_threshold REAL
     );
 
-    CREATE TABLE IF NOT EXISTS equipment_access (
+    CREATE TABLE IF NOT EXISTS equipment_members (
       equipment_id TEXT NOT NULL REFERENCES equipments(id) ON DELETE CASCADE,
       member_id TEXT NOT NULL REFERENCES members(id),
       position INTEGER NOT NULL,
@@ -81,8 +88,7 @@ function migrate(db: SqliteDb): void {
 
     CREATE TABLE IF NOT EXISTS expenses (
       id TEXT PRIMARY KEY,
-      group_id TEXT NOT NULL REFERENCES "groups"(id),
-      equipment_id TEXT REFERENCES equipments(id) ON DELETE SET NULL,
+      equipment_id TEXT NOT NULL REFERENCES equipments(id) ON DELETE CASCADE,
       label TEXT NOT NULL,
       amount_cents INTEGER NOT NULL,
       payer_id TEXT NOT NULL REFERENCES members(id),
@@ -91,27 +97,17 @@ function migrate(db: SqliteDb): void {
       split_json TEXT NOT NULL,
       receipt_path TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_expenses_group ON expenses(group_id);
+    CREATE INDEX IF NOT EXISTS idx_expenses_equipment ON expenses(equipment_id);
 
     CREATE TABLE IF NOT EXISTS reimbursements (
       id TEXT PRIMARY KEY,
-      group_id TEXT NOT NULL REFERENCES "groups"(id),
+      equipment_id TEXT NOT NULL REFERENCES equipments(id) ON DELETE CASCADE,
       from_member_id TEXT NOT NULL REFERENCES members(id),
       to_member_id TEXT NOT NULL REFERENCES members(id),
       amount_cents INTEGER NOT NULL,
       date TEXT NOT NULL,
       notes TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_reimbursements_group ON reimbursements(group_id);
+    CREATE INDEX IF NOT EXISTS idx_reimbursements_equipment ON reimbursements(equipment_id);
   `);
-
-  // Bases créées avant l'ajout du statut et de l'horodatage des réservations.
-  const reservationColumns = db.pragma('table_info(reservations)') as { name: string }[];
-  if (!reservationColumns.some((c) => c.name === 'status')) {
-    db.exec(`ALTER TABLE reservations ADD COLUMN status TEXT NOT NULL DEFAULT 'REQUIRED'`);
-  }
-  if (!reservationColumns.some((c) => c.name === 'created_at')) {
-    db.exec(`ALTER TABLE reservations ADD COLUMN created_at TEXT NOT NULL DEFAULT ''`);
-    db.exec(`UPDATE reservations SET created_at = start_at WHERE created_at = ''`);
-  }
 }

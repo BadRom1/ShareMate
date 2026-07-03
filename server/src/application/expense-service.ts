@@ -5,8 +5,8 @@ import { computeBalances, settle } from '../domain/expense/settlement.js';
 import { Money } from '../domain/shared/money.js';
 import { DomainError, NotFoundError } from '../domain/shared/domain-error.js';
 import type {
+  EquipmentRepository,
   ExpenseRepository,
-  GroupRepository,
   IdGenerator,
   ReimbursementRepository,
   ReservationRepository,
@@ -19,8 +19,7 @@ export type SplitInput =
   | { type: 'CUSTOM'; amountsEuros: Record<string, number> };
 
 export interface AddExpenseInput {
-  groupId: string;
-  equipmentId?: string | null;
+  equipmentId: string;
   label: string;
   amountEuros: number;
   payerId: string;
@@ -31,7 +30,7 @@ export interface AddExpenseInput {
 }
 
 export interface RecordReimbursementInput {
-  groupId: string;
+  equipmentId: string;
   fromMemberId: string;
   toMemberId: string;
   amountEuros: number;
@@ -50,28 +49,33 @@ export interface SettlementTransactionDto {
   amountCents: number;
 }
 
+/** Dépenses, soldes et remboursements — tout est scopé au cercle d'un équipement. */
 export class ExpenseService {
   constructor(
     private readonly expenses: ExpenseRepository,
     private readonly reimbursements: ReimbursementRepository,
-    private readonly groups: GroupRepository,
+    private readonly equipments: EquipmentRepository,
     private readonly reservations: ReservationRepository,
     private readonly idGenerator: IdGenerator,
   ) {}
 
+  private async getEquipment(equipmentId: string) {
+    const equipment = await this.equipments.findById(equipmentId);
+    if (!equipment) {
+      throw new NotFoundError(`Équipement introuvable : ${equipmentId}`);
+    }
+    return equipment;
+  }
+
   async addExpense(input: AddExpenseInput): Promise<Expense> {
-    const group = await this.groups.findById(input.groupId);
-    if (!group) {
-      throw new NotFoundError(`Groupe introuvable : ${input.groupId}`);
+    const equipment = await this.getEquipment(input.equipmentId);
+    if (!equipment.canBeUsedBy(input.payerId)) {
+      throw new DomainError(`Le payeur ${input.payerId} ne fait pas partie du cercle de l'équipement.`);
     }
-    if (!group.hasMember(input.payerId)) {
-      throw new DomainError(`Le payeur ${input.payerId} n'est pas membre du groupe.`);
-    }
-    const split = await this.resolveSplit(input, group.memberIds);
+    const split = await this.resolveSplit(input, equipment.memberIds);
     const expense = Expense.create({
       id: this.idGenerator.next(),
-      groupId: input.groupId,
-      equipmentId: input.equipmentId ?? null,
+      equipmentId: input.equipmentId,
       label: input.label,
       amount: Money.fromEuros(input.amountEuros),
       payerId: input.payerId,
@@ -84,24 +88,21 @@ export class ExpenseService {
     return expense;
   }
 
-  private async resolveSplit(input: AddExpenseInput, groupMemberIds: readonly string[]): Promise<SplitRule> {
+  private async resolveSplit(input: AddExpenseInput, circleMemberIds: readonly string[]): Promise<SplitRule> {
     switch (input.split.type) {
       case 'EQUAL': {
-        const memberIds = input.split.memberIds ?? [...groupMemberIds];
-        this.assertMembers(memberIds, groupMemberIds);
+        const memberIds = input.split.memberIds ?? [...circleMemberIds];
+        this.assertInCircle(memberIds, circleMemberIds);
         return { type: 'EQUAL', memberIds };
       }
       case 'CUSTOM': {
-        this.assertMembers(Object.keys(input.split.amountsEuros), groupMemberIds);
+        this.assertInCircle(Object.keys(input.split.amountsEuros), circleMemberIds);
         const amounts = Object.fromEntries(
           Object.entries(input.split.amountsEuros).map(([memberId, euros]) => [memberId, Money.fromEuros(euros)]),
         );
         return { type: 'CUSTOM', amounts };
       }
       case 'USAGE_PRORATED': {
-        if (!input.equipmentId) {
-          throw new DomainError('La répartition au prorata d\'usage requiert un équipement associé à la dépense.');
-        }
         // Poids = heures réservées par membre sur cet équipement.
         const reservations = await this.reservations.findByEquipmentId(input.equipmentId);
         const weights: Record<string, number> = {};
@@ -113,16 +114,16 @@ export class ExpenseService {
             "Aucune donnée d'usage (réservation) pour cet équipement : impossible de calculer le prorata.",
           );
         }
-        this.assertMembers(Object.keys(weights), groupMemberIds);
+        this.assertInCircle(Object.keys(weights), circleMemberIds);
         return { type: 'USAGE_PRORATED', weights };
       }
     }
   }
 
-  private assertMembers(memberIds: string[], groupMemberIds: readonly string[]): void {
-    const outsiders = memberIds.filter((m) => !groupMemberIds.includes(m));
+  private assertInCircle(memberIds: string[], circleMemberIds: readonly string[]): void {
+    const outsiders = memberIds.filter((m) => !circleMemberIds.includes(m));
     if (outsiders.length > 0) {
-      throw new DomainError(`Membres hors du groupe : ${outsiders.join(', ')}`);
+      throw new DomainError(`Membres hors du cercle de l'équipement : ${outsiders.join(', ')}`);
     }
   }
 
@@ -134,20 +135,17 @@ export class ExpenseService {
     await this.expenses.delete(id);
   }
 
-  async listExpenses(groupId: string): Promise<Expense[]> {
-    const list = await this.expenses.findByGroupId(groupId);
+  async listExpenses(equipmentId: string): Promise<Expense[]> {
+    const list = await this.expenses.findByEquipmentId(equipmentId);
     return list.sort((a, b) => b.date.getTime() - a.date.getTime());
   }
 
   async recordReimbursement(input: RecordReimbursementInput): Promise<Reimbursement> {
-    const group = await this.groups.findById(input.groupId);
-    if (!group) {
-      throw new NotFoundError(`Groupe introuvable : ${input.groupId}`);
-    }
-    this.assertMembers([input.fromMemberId, input.toMemberId], group.memberIds);
+    const equipment = await this.getEquipment(input.equipmentId);
+    this.assertInCircle([input.fromMemberId, input.toMemberId], equipment.memberIds);
     const reimbursement = Reimbursement.create({
       id: this.idGenerator.next(),
-      groupId: input.groupId,
+      equipmentId: input.equipmentId,
       fromMemberId: input.fromMemberId,
       toMemberId: input.toMemberId,
       amount: Money.fromEuros(input.amountEuros),
@@ -158,32 +156,30 @@ export class ExpenseService {
     return reimbursement;
   }
 
-  async listReimbursements(groupId: string): Promise<Reimbursement[]> {
-    const list = await this.reimbursements.findByGroupId(groupId);
+  async listReimbursements(equipmentId: string): Promise<Reimbursement[]> {
+    const list = await this.reimbursements.findByEquipmentId(equipmentId);
     return list.sort((a, b) => b.date.getTime() - a.date.getTime());
   }
 
-  /** Solde net par membre du groupe (positif = créditeur). */
-  async groupBalances(groupId: string): Promise<MemberBalance[]> {
-    const group = await this.groups.findById(groupId);
-    if (!group) {
-      throw new NotFoundError(`Groupe introuvable : ${groupId}`);
-    }
+  /** Solde net par membre du cercle de l'équipement (positif = créditeur). */
+  async equipmentBalances(equipmentId: string): Promise<MemberBalance[]> {
+    const equipment = await this.getEquipment(equipmentId);
     const balances = computeBalances(
-      await this.expenses.findByGroupId(groupId),
-      await this.reimbursements.findByGroupId(groupId),
+      await this.expenses.findByEquipmentId(equipmentId),
+      await this.reimbursements.findByEquipmentId(equipmentId),
     );
-    return group.memberIds.map((memberId) => ({
+    return equipment.memberIds.map((memberId) => ({
       memberId,
       balanceCents: balances.get(memberId)?.cents ?? 0,
     }));
   }
 
-  /** Plan de remboursement minimisant le nombre de transactions. */
-  async settlementPlan(groupId: string): Promise<SettlementTransactionDto[]> {
+  /** Plan de remboursement minimisant le nombre de transactions, pour un équipement. */
+  async settlementPlan(equipmentId: string): Promise<SettlementTransactionDto[]> {
+    await this.getEquipment(equipmentId);
     const balances = computeBalances(
-      await this.expenses.findByGroupId(groupId),
-      await this.reimbursements.findByGroupId(groupId),
+      await this.expenses.findByEquipmentId(equipmentId),
+      await this.reimbursements.findByEquipmentId(equipmentId),
     );
     return settle(balances).map((t) => ({
       fromMemberId: t.fromMemberId,

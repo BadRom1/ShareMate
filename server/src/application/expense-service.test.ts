@@ -9,12 +9,12 @@ let reservationService: ReservationService;
 
 beforeEach(async () => {
   f = await makeFixture();
-  service = new ExpenseService(f.expenses, f.reimbursements, f.groups, f.reservations, f.idGenerator);
+  service = new ExpenseService(f.expenses, f.reimbursements, f.equipments, f.reservations, f.idGenerator);
   reservationService = new ReservationService(f.reservations, f.equipments, f.idGenerator, f.clock);
 });
 
+// Le cercle de e1 est m1/m2 : les dépenses se répartissent entre eux.
 const base = {
-  groupId: 'g1',
   equipmentId: 'e1',
   label: 'Plein gasoil',
   amountEuros: 90,
@@ -24,26 +24,32 @@ const base = {
 };
 
 describe('ExpenseService — saisie', () => {
-  it('crée une dépense en parts égales sur tout le groupe par défaut', async () => {
+  it('crée une dépense en parts égales sur tout le cercle par défaut', async () => {
     const x = await service.addExpense({ ...base, split: { type: 'EQUAL' } });
     const shares = x.shares();
-    expect([...shares.keys()].sort()).toEqual(['m1', 'm2', 'm3']);
-    expect(shares.get('m1')!.cents).toBe(3000);
+    expect([...shares.keys()].sort()).toEqual(['m1', 'm2']);
+    expect(shares.get('m1')!.cents).toBe(4500);
   });
 
-  it('crée une dépense en parts égales sur un sous-ensemble', async () => {
-    const x = await service.addExpense({ ...base, split: { type: 'EQUAL', memberIds: ['m1', 'm2'] } });
-    expect([...x.shares().keys()].sort()).toEqual(['m1', 'm2']);
+  it('crée une dépense en parts égales sur un sous-ensemble du cercle', async () => {
+    const x = await service.addExpense({ ...base, split: { type: 'EQUAL', memberIds: ['m1'] } });
+    expect([...x.shares().keys()]).toEqual(['m1']);
   });
 
-  it('refuse un payeur hors groupe', async () => {
-    await expect(service.addExpense({ ...base, payerId: 'x', split: { type: 'EQUAL' } })).rejects.toThrow(/membre/i);
-  });
-
-  it('refuse une répartition incluant un non-membre', async () => {
+  it('refuse un équipement inexistant', async () => {
     await expect(
-      service.addExpense({ ...base, split: { type: 'EQUAL', memberIds: ['m1', 'intrus'] } }),
-    ).rejects.toThrow(/membre/i);
+      service.addExpense({ ...base, equipmentId: 'nope', split: { type: 'EQUAL' } }),
+    ).rejects.toThrow(/introuvable/i);
+  });
+
+  it('refuse un payeur hors du cercle', async () => {
+    await expect(service.addExpense({ ...base, payerId: 'm3', split: { type: 'EQUAL' } })).rejects.toThrow(/cercle/i);
+  });
+
+  it('refuse une répartition incluant un membre hors du cercle', async () => {
+    await expect(
+      service.addExpense({ ...base, split: { type: 'EQUAL', memberIds: ['m1', 'm3'] } }),
+    ).rejects.toThrow(/cercle/i);
   });
 
   it('répartition custom en euros', async () => {
@@ -77,74 +83,68 @@ describe('ExpenseService — saisie', () => {
   it('prorata impossible sans données d\'usage', async () => {
     await expect(service.addExpense({ ...base, split: { type: 'USAGE_PRORATED' } })).rejects.toThrow(/usage/i);
   });
-
-  it('prorata impossible sans équipement associé', async () => {
-    await expect(
-      service.addExpense({ ...base, equipmentId: null, split: { type: 'USAGE_PRORATED' } }),
-    ).rejects.toThrow(/équipement/i);
-  });
 });
 
 describe('ExpenseService — soldes et remboursements', () => {
-  it('calcule les soldes du groupe', async () => {
+  it('calcule les soldes du cercle de l\'équipement', async () => {
     await service.addExpense({ ...base, amountEuros: 90, split: { type: 'EQUAL' } });
-    const balances = await service.groupBalances('g1');
-    expect(balances.find((b) => b.memberId === 'm1')!.balanceCents).toBe(6000);
-    expect(balances.find((b) => b.memberId === 'm2')!.balanceCents).toBe(-3000);
+    const balances = await service.equipmentBalances('e1');
+    expect(balances.find((b) => b.memberId === 'm1')!.balanceCents).toBe(4500);
+    expect(balances.find((b) => b.memberId === 'm2')!.balanceCents).toBe(-4500);
+    expect(balances.some((b) => b.memberId === 'm3')).toBe(false);
   });
 
   it('propose un plan de remboursement minimal', async () => {
     await service.addExpense({ ...base, amountEuros: 90, split: { type: 'EQUAL' } });
-    const plan = await service.settlementPlan('g1');
-    expect(plan).toHaveLength(2);
-    expect(plan.every((t) => t.toMemberId === 'm1')).toBe(true);
-    expect(plan.reduce((s, t) => s + t.amountCents, 0)).toBe(6000);
+    const plan = await service.settlementPlan('e1');
+    expect(plan).toHaveLength(1);
+    expect(plan[0]!.fromMemberId).toBe('m2');
+    expect(plan[0]!.toMemberId).toBe('m1');
+    expect(plan[0]!.amountCents).toBe(4500);
   });
 
   it('un remboursement déclaré apure le solde', async () => {
     await service.addExpense({ ...base, amountEuros: 90, split: { type: 'EQUAL' } });
     await service.recordReimbursement({
-      groupId: 'g1',
+      equipmentId: 'e1',
       fromMemberId: 'm2',
       toMemberId: 'm1',
-      amountEuros: 30,
+      amountEuros: 45,
       date: '2026-07-02',
     });
-    const balances = await service.groupBalances('g1');
+    const balances = await service.equipmentBalances('e1');
     expect(balances.find((b) => b.memberId === 'm2')!.balanceCents).toBe(0);
-    const plan = await service.settlementPlan('g1');
-    expect(plan).toHaveLength(1);
-    expect(plan[0]!.fromMemberId).toBe('m3');
+    expect(await service.settlementPlan('e1')).toHaveLength(0);
   });
 
-  it('refuse un remboursement entre non-membres', async () => {
+  it('refuse un remboursement impliquant un membre hors du cercle', async () => {
     await expect(
       service.recordReimbursement({
-        groupId: 'g1',
-        fromMemberId: 'x',
+        equipmentId: 'e1',
+        fromMemberId: 'm3',
         toMemberId: 'm1',
         amountEuros: 10,
         date: '2026-07-02',
       }),
-    ).rejects.toThrow(/membre/i);
+    ).rejects.toThrow(/cercle/i);
   });
 
-  it('liste les dépenses et remboursements du groupe', async () => {
+  it('liste les dépenses et remboursements de l\'équipement', async () => {
     await service.addExpense({ ...base, split: { type: 'EQUAL' } });
     await service.recordReimbursement({
-      groupId: 'g1',
+      equipmentId: 'e1',
       fromMemberId: 'm2',
       toMemberId: 'm1',
       amountEuros: 10,
       date: '2026-07-02',
     });
-    expect(await service.listExpenses('g1')).toHaveLength(1);
-    expect(await service.listReimbursements('g1')).toHaveLength(1);
+    expect(await service.listExpenses('e1')).toHaveLength(1);
+    expect(await service.listReimbursements('e1')).toHaveLength(1);
   });
 
   it('supprime une dépense', async () => {
     const x = await service.addExpense({ ...base, split: { type: 'EQUAL' } });
     await service.deleteExpense(x.id);
-    expect(await service.listExpenses('g1')).toHaveLength(0);
+    expect(await service.listExpenses('e1')).toHaveLength(0);
   });
 });

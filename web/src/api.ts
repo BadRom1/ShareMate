@@ -6,27 +6,17 @@ export interface Member {
   email: string | null;
 }
 
-export interface Group {
-  id: string;
-  name: string;
-  memberIds: string[];
-}
-
-export interface GroupDetail extends Group {
-  members: Member[];
-}
-
 export type MeterUnit = 'HOURS' | 'KILOMETERS';
 
+/** Un équipement porte son cercle d'utilisateurs (`memberIds`). */
 export interface Equipment {
   id: string;
-  groupId: string;
   name: string;
   category: string;
   acquisitionDate: string;
   purchaseValueEuros: number;
   meterUnit: MeterUnit;
-  accessMemberIds: string[];
+  memberIds: string[];
   maintenanceThreshold: number | null;
 }
 
@@ -76,8 +66,7 @@ export type SplitInput =
 
 export interface Expense {
   id: string;
-  groupId: string;
-  equipmentId: string | null;
+  equipmentId: string;
   label: string;
   amountEuros: number;
   payerId: string;
@@ -89,7 +78,7 @@ export interface Expense {
 
 export interface Reimbursement {
   id: string;
-  groupId: string;
+  equipmentId: string;
   fromMemberId: string;
   toMemberId: string;
   amountEuros: number;
@@ -137,21 +126,18 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  listGroups: () => request<Group[]>('/api/groups'),
-  getGroup: (id: string) => request<GroupDetail>(`/api/groups/${id}`),
-  createGroup: (input: { name: string; members: { name: string; email?: string }[] }) =>
-    request<Group>('/api/groups', { method: 'POST', body: JSON.stringify(input) }),
-  addMember: (groupId: string, input: { name: string; email?: string }) =>
-    request<Member>(`/api/groups/${groupId}/members`, { method: 'POST', body: JSON.stringify(input) }),
+  listMembers: () => request<Member[]>('/api/members'),
+  createMember: (input: { name: string; email?: string }) =>
+    request<Member>('/api/members', { method: 'POST', body: JSON.stringify(input) }),
 
-  listEquipments: (groupId: string) => request<Equipment[]>(`/api/groups/${groupId}/equipments`),
+  listEquipments: () => request<Equipment[]>('/api/equipments'),
   createEquipment: (input: Omit<Equipment, 'id'>) =>
     request<Equipment>('/api/equipments', { method: 'POST', body: JSON.stringify(input) }),
-  updateEquipment: (id: string, input: Partial<Omit<Equipment, 'id' | 'groupId'>>) =>
+  updateEquipment: (id: string, input: Partial<Omit<Equipment, 'id'>>) =>
     request<Equipment>(`/api/equipments/${id}`, { method: 'PUT', body: JSON.stringify(input) }),
   deleteEquipment: (id: string) => request<void>(`/api/equipments/${id}`, { method: 'DELETE' }),
 
-  groupCalendar: (groupId: string) => request<Reservation[]>(`/api/groups/${groupId}/calendar`),
+  calendar: () => request<Reservation[]>('/api/calendar'),
   reserve: (input: {
     equipmentId: string;
     memberId: string;
@@ -188,12 +174,11 @@ export const api = {
   usageByMember: (memberId: string) => request<UsageRecord[]>(`/api/members/${memberId}/usage`),
   maintenanceStatus: (equipmentId: string) =>
     request<MaintenanceStatus>(`/api/equipments/${equipmentId}/maintenance`),
-  groupAlerts: (groupId: string) => request<MaintenanceStatus[]>(`/api/groups/${groupId}/alerts`),
+  alerts: () => request<MaintenanceStatus[]>('/api/alerts'),
 
-  listExpenses: (groupId: string) => request<Expense[]>(`/api/groups/${groupId}/expenses`),
+  listExpenses: (equipmentId: string) => request<Expense[]>(`/api/equipments/${equipmentId}/expenses`),
   addExpense: (input: {
-    groupId: string;
-    equipmentId?: string | null;
+    equipmentId: string;
     label: string;
     amountEuros: number;
     payerId: string;
@@ -203,11 +188,13 @@ export const api = {
     receiptPath?: string | null;
   }) => request<Expense>('/api/expenses', { method: 'POST', body: JSON.stringify(input) }),
   deleteExpense: (id: string) => request<void>(`/api/expenses/${id}`, { method: 'DELETE' }),
-  balances: (groupId: string) => request<Balance[]>(`/api/groups/${groupId}/balances`),
-  settlement: (groupId: string) => request<SettlementTransaction[]>(`/api/groups/${groupId}/settlement`),
-  listReimbursements: (groupId: string) => request<Reimbursement[]>(`/api/groups/${groupId}/reimbursements`),
+  balances: (equipmentId: string) => request<Balance[]>(`/api/equipments/${equipmentId}/balances`),
+  settlement: (equipmentId: string) =>
+    request<SettlementTransaction[]>(`/api/equipments/${equipmentId}/settlement`),
+  listReimbursements: (equipmentId: string) =>
+    request<Reimbursement[]>(`/api/equipments/${equipmentId}/reimbursements`),
   recordReimbursement: (input: {
-    groupId: string;
+    equipmentId: string;
     fromMemberId: string;
     toMemberId: string;
     amountEuros: number;

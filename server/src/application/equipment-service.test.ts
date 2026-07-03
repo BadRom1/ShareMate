@@ -7,52 +7,36 @@ let service: EquipmentService;
 
 beforeEach(async () => {
   f = await makeFixture();
-  service = new EquipmentService(f.equipments, f.groups, f.idGenerator);
+  service = new EquipmentService(f.equipments, f.members, f.idGenerator);
 });
 
 describe('EquipmentService', () => {
-  it('crée un équipement pour un groupe', async () => {
+  it('crée un équipement avec son cercle d\'utilisateurs', async () => {
     const created = await service.create({
-      groupId: 'g1',
       name: 'Remorque',
       category: 'Transport',
       acquisitionDate: '2026-01-15',
       purchaseValueEuros: 1200,
       meterUnit: 'KILOMETERS',
-      accessMemberIds: ['m1', 'm3'],
+      memberIds: ['m1', 'm3'],
       maintenanceThreshold: 5000,
     });
     expect(created.id).toBeTruthy();
     const found = await f.equipments.findById(created.id);
     expect(found?.name).toBe('Remorque');
     expect(found?.meterUnit).toBe('KILOMETERS');
+    expect(found?.memberIds).toEqual(['m1', 'm3']);
   });
 
-  it('refuse un groupe inexistant', async () => {
+  it('refuse un membre inconnu dans le cercle', async () => {
     await expect(
       service.create({
-        groupId: 'inconnu',
         name: 'X',
         category: 'C',
         acquisitionDate: '2026-01-15',
         purchaseValueEuros: 10,
         meterUnit: 'HOURS',
-        accessMemberIds: ['m1'],
-        maintenanceThreshold: null,
-      }),
-    ).rejects.toThrow(/groupe/i);
-  });
-
-  it('refuse un membre d\'accès hors du groupe', async () => {
-    await expect(
-      service.create({
-        groupId: 'g1',
-        name: 'X',
-        category: 'C',
-        acquisitionDate: '2026-01-15',
-        purchaseValueEuros: 10,
-        meterUnit: 'HOURS',
-        accessMemberIds: ['m1', 'etranger'],
+        memberIds: ['m1', 'etranger'],
         maintenanceThreshold: null,
       }),
     ).rejects.toThrow(/membre/i);
@@ -64,6 +48,15 @@ describe('EquipmentService', () => {
     expect(updated.maintenanceThreshold).toBe(100);
   });
 
+  it('met à jour le cercle d\'un équipement', async () => {
+    const updated = await service.update('e1', { memberIds: ['m1', 'm2', 'm3'] });
+    expect(updated.memberIds).toEqual(['m1', 'm2', 'm3']);
+  });
+
+  it('refuse un cercle contenant un membre inconnu à la mise à jour', async () => {
+    await expect(service.update('e1', { memberIds: ['m1', 'fantome'] })).rejects.toThrow(/membre/i);
+  });
+
   it('échoue à mettre à jour un équipement inexistant', async () => {
     await expect(service.update('nope', { name: 'X' })).rejects.toThrow(/introuvable/i);
   });
@@ -73,8 +66,8 @@ describe('EquipmentService', () => {
     expect(await f.equipments.findById('e1')).toBeNull();
   });
 
-  it('liste les équipements d\'un groupe', async () => {
-    const list = await service.listByGroup('g1');
+  it('liste tous les équipements', async () => {
+    const list = await service.list();
     expect(list.map((e) => e.id)).toEqual(['e1']);
   });
 });

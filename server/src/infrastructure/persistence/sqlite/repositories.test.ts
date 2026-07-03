@@ -4,14 +4,12 @@ import type { SqliteDb } from './database.js';
 import {
   SqliteEquipmentRepository,
   SqliteExpenseRepository,
-  SqliteGroupRepository,
   SqliteMemberRepository,
   SqliteReimbursementRepository,
   SqliteReservationRepository,
   SqliteUsageRecordRepository,
 } from './repositories.js';
-import { Member } from '../../../domain/group/member.js';
-import { Group } from '../../../domain/group/group.js';
+import { Member } from '../../../domain/member/member.js';
 import { Equipment } from '../../../domain/equipment/equipment.js';
 import { Reservation } from '../../../domain/reservation/reservation.js';
 import { UsageRecord } from '../../../domain/usage/usage-record.js';
@@ -28,28 +26,25 @@ beforeEach(() => {
 
 async function seedBase() {
   const members = new SqliteMemberRepository(db);
-  const groups = new SqliteGroupRepository(db);
   const equipments = new SqliteEquipmentRepository(db);
   await members.save(Member.create({ id: 'm1', name: 'Alice' }));
   await members.save(Member.create({ id: 'm2', name: 'Bruno', email: 'b@ex.fr' }));
-  await groups.save(Group.create({ id: 'g1', name: 'Les voisins', memberIds: ['m1', 'm2'] }));
   await equipments.save(
     Equipment.create({
       id: 'e1',
-      groupId: 'g1',
       name: 'Minipelle',
       category: 'BTP',
       acquisitionDate: new Date('2025-01-01T00:00:00Z'),
       purchaseValue: Money.fromEuros(15000),
       meterUnit: 'HOURS',
-      accessMemberIds: ['m1', 'm2'],
+      memberIds: ['m1', 'm2'],
       maintenanceThreshold: 50,
     }),
   );
-  return { members, groups, equipments };
+  return { members, equipments };
 }
 
-describe('SQLite — membres et groupes', () => {
+describe('SQLite — membres', () => {
   it('sauve et relit un membre', async () => {
     const { members } = await seedBase();
     const m = await members.findById('m2');
@@ -57,41 +52,40 @@ describe('SQLite — membres et groupes', () => {
     expect(m?.email).toBe('b@ex.fr');
   });
 
-  it('sauve et relit un groupe avec ses membres ordonnés', async () => {
-    const { groups } = await seedBase();
-    const g = await groups.findById('g1');
-    expect(g?.memberIds).toEqual(['m1', 'm2']);
-  });
-
-  it('met à jour un groupe (upsert)', async () => {
-    const { groups, members } = await seedBase();
-    await members.save(Member.create({ id: 'm3', name: 'Chloé' }));
-    const g = (await groups.findById('g1'))!;
-    await groups.save(g.addMember('m3'));
-    expect((await groups.findById('g1'))?.memberIds).toEqual(['m1', 'm2', 'm3']);
+  it('liste tous les membres triés par nom', async () => {
+    const { members } = await seedBase();
+    expect((await members.findAll()).map((m) => m.name)).toEqual(['Alice', 'Bruno']);
   });
 });
 
 describe('SQLite — équipements', () => {
-  it('roundtrip complet', async () => {
+  it('roundtrip complet avec le cercle ordonné', async () => {
     const { equipments } = await seedBase();
     const e = await equipments.findById('e1');
     expect(e?.name).toBe('Minipelle');
     expect(e?.purchaseValue.cents).toBe(1500000);
-    expect(e?.accessMemberIds).toEqual(['m1', 'm2']);
+    expect(e?.memberIds).toEqual(['m1', 'm2']);
     expect(e?.maintenanceThreshold).toBe(50);
   });
 
-  it('liste par groupe et supprime', async () => {
+  it('met à jour le cercle (upsert)', async () => {
+    const { members, equipments } = await seedBase();
+    await members.save(Member.create({ id: 'm3', name: 'Chloé' }));
+    const e = (await equipments.findById('e1'))!;
+    await equipments.save(e.update({ memberIds: ['m1', 'm2', 'm3'] }));
+    expect((await equipments.findById('e1'))?.memberIds).toEqual(['m1', 'm2', 'm3']);
+  });
+
+  it('liste tout et supprime', async () => {
     const { equipments } = await seedBase();
-    expect(await equipments.findByGroupId('g1')).toHaveLength(1);
+    expect(await equipments.findAll()).toHaveLength(1);
     await equipments.delete('e1');
-    expect(await equipments.findByGroupId('g1')).toHaveLength(0);
+    expect(await equipments.findAll()).toHaveLength(0);
   });
 });
 
 describe('SQLite — réservations', () => {
-  it('roundtrip et requêtes par équipement(s)', async () => {
+  it('roundtrip et requêtes par équipement / globales', async () => {
     await seedBase();
     const repo = new SqliteReservationRepository(db);
     await repo.save(
@@ -107,8 +101,7 @@ describe('SQLite — réservations', () => {
     expect(r?.range.start.toISOString()).toBe('2026-07-10T08:00:00.000Z');
     expect(r?.notes).toBe('tranchée');
     expect(await repo.findByEquipmentId('e1')).toHaveLength(1);
-    expect(await repo.findByEquipmentIds(['e1', 'autre'])).toHaveLength(1);
-    expect(await repo.findByEquipmentIds([])).toEqual([]);
+    expect(await repo.findAll()).toHaveLength(1);
     await repo.delete('r1');
     expect(await repo.findById('r1')).toBeNull();
   });
@@ -144,7 +137,6 @@ describe('SQLite — dépenses et remboursements', () => {
     await repo.save(
       Expense.create({
         id: 'x1',
-        groupId: 'g1',
         equipmentId: 'e1',
         label: 'Plein',
         amount: Money.fromCents(1000),
@@ -159,7 +151,7 @@ describe('SQLite — dépenses et remboursements', () => {
     expect(x?.amount.cents).toBe(1000);
     expect(x?.shares().get('m1')?.cents).toBe(700);
     expect(x?.receiptPath).toBe('/uploads/r.pdf');
-    expect(await repo.findByGroupId('g1')).toHaveLength(1);
+    expect(await repo.findByEquipmentId('e1')).toHaveLength(1);
     await repo.delete('x1');
     expect(await repo.findById('x1')).toBeNull();
   });
@@ -170,7 +162,7 @@ describe('SQLite — dépenses et remboursements', () => {
     await repo.save(
       Expense.create({
         id: 'x2',
-        groupId: 'g1',
+        equipmentId: 'e1',
         label: 'Assurance',
         amount: Money.fromCents(20000),
         payerId: 'm2',
@@ -189,7 +181,7 @@ describe('SQLite — dépenses et remboursements', () => {
     await repo.save(
       Reimbursement.create({
         id: 'rb1',
-        groupId: 'g1',
+        equipmentId: 'e1',
         fromMemberId: 'm2',
         toMemberId: 'm1',
         amount: Money.fromCents(500),
@@ -197,9 +189,38 @@ describe('SQLite — dépenses et remboursements', () => {
         notes: 'virement',
       }),
     );
-    const list = await repo.findByGroupId('g1');
+    const list = await repo.findByEquipmentId('e1');
     expect(list).toHaveLength(1);
     expect(list[0]?.amount.cents).toBe(500);
     expect(list[0]?.notes).toBe('virement');
+  });
+});
+
+describe('SQLite — migration depuis l\'ancien modèle « collectif »', () => {
+  it('détecte l\'ancien schéma et repart de zéro', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-test-'));
+    const file = path.join(dir, 'legacy.sqlite');
+    try {
+      const legacy = openDatabase(file);
+      legacy.exec(`
+        CREATE TABLE "groups" (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+        INSERT INTO "groups" VALUES ('g1', 'Les voisins');
+      `);
+      legacy.close();
+      // Réouvre la même base : la migration doit purger l'ancien schéma.
+      const migrated = openDatabase(file);
+      expect(
+        migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'groups'`).get(),
+      ).toBeUndefined();
+      expect(
+        migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'equipment_members'`).get(),
+      ).toBeTruthy();
+      migrated.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -7,7 +7,7 @@ import { computeBalances, settle } from './settlement.js';
 const expense = (id: string, amountCents: number, payerId: string, memberIds: string[]) =>
   Expense.create({
     id,
-    groupId: 'g1',
+    equipmentId: 'e1',
     label: `Dépense ${id}`,
     amount: Money.fromCents(amountCents),
     payerId,
@@ -38,7 +38,7 @@ describe('computeBalances', () => {
   it('les remboursements effectués réduisent les dettes', () => {
     const reimb = Reimbursement.create({
       id: 'r1',
-      groupId: 'g1',
+      equipmentId: 'e1',
       fromMemberId: 'm2',
       toMemberId: 'm1',
       amount: Money.fromCents(500),

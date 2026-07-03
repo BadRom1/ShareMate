@@ -9,7 +9,7 @@ import { ConflictError, DomainError, NotFoundError } from '../../domain/shared/d
 import type { ExpenseCategory } from '../../domain/expense/expense.js';
 import type { ReservationStatus } from '../../domain/reservation/reservation.js';
 import type { RecurrenceFrequency } from '../../domain/reservation/recurrence.js';
-import { GroupService } from '../../application/group-service.js';
+import { MemberService } from '../../application/member-service.js';
 import { EquipmentService } from '../../application/equipment-service.js';
 import { ReservationService } from '../../application/reservation-service.js';
 import { UsageService } from '../../application/usage-service.js';
@@ -19,7 +19,6 @@ import type {
   Clock,
   EquipmentRepository,
   ExpenseRepository,
-  GroupRepository,
   IdGenerator,
   MemberRepository,
   ReimbursementRepository,
@@ -29,7 +28,6 @@ import type {
 import {
   equipmentDto,
   expenseDto,
-  groupDto,
   memberDto,
   reimbursementDto,
   reservationDto,
@@ -38,7 +36,6 @@ import {
 } from './dto.js';
 
 export interface AppDependencies {
-  groups: GroupRepository;
   members: MemberRepository;
   equipments: EquipmentRepository;
   reservations: ReservationRepository;
@@ -56,14 +53,14 @@ export interface AppDependencies {
 export function buildApp(deps: AppDependencies): FastifyInstance {
   const app = Fastify({ logger: false });
 
-  const groupService = new GroupService(deps.groups, deps.members, deps.idGenerator);
-  const equipmentService = new EquipmentService(deps.equipments, deps.groups, deps.idGenerator);
+  const memberService = new MemberService(deps.members, deps.idGenerator);
+  const equipmentService = new EquipmentService(deps.equipments, deps.members, deps.idGenerator);
   const reservationService = new ReservationService(deps.reservations, deps.equipments, deps.idGenerator, deps.clock);
   const usageService = new UsageService(deps.usageRecords, deps.equipments, deps.idGenerator, deps.clock);
   const expenseService = new ExpenseService(
     deps.expenses,
     deps.reimbursements,
-    deps.groups,
+    deps.equipments,
     deps.reservations,
     deps.idGenerator,
   );
@@ -88,46 +85,28 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
 
   app.get('/api/health', async () => ({ status: 'ok' }));
 
-  // --- Groupes et membres ---
+  // --- Membres (utilisateurs globaux, portés par les équipements) ---
 
-  app.post<{ Body: { name: string; members: { name: string; email?: string | null }[] } }>(
-    '/api/groups',
-    async (request, reply) => {
-      const group = await groupService.createGroup(request.body);
-      return reply.status(201).send(groupDto(group));
-    },
-  );
-
-  app.get('/api/groups', async () => {
-    const groups = await groupService.listGroups();
-    return groups.map(groupDto);
+  app.post<{ Body: { name: string; email?: string | null } }>('/api/members', async (request, reply) => {
+    const member = await memberService.createMember(request.body);
+    return reply.status(201).send(memberDto(member));
   });
 
-  app.get<{ Params: { id: string } }>('/api/groups/:id', async (request) => {
-    const group = await groupService.getGroup(request.params.id);
-    const members = await groupService.listMembers(group.id);
-    return { ...groupDto(group), members: members.map(memberDto) };
+  app.get('/api/members', async () => {
+    const members = await memberService.listMembers();
+    return members.map(memberDto);
   });
-
-  app.post<{ Params: { id: string }; Body: { name: string; email?: string | null } }>(
-    '/api/groups/:id/members',
-    async (request, reply) => {
-      const member = await groupService.addMember(request.params.id, request.body);
-      return reply.status(201).send(memberDto(member));
-    },
-  );
 
   // --- Équipements ---
 
   app.post<{
     Body: {
-      groupId: string;
       name: string;
       category: string;
       acquisitionDate: string;
       purchaseValueEuros: number;
       meterUnit: 'HOURS' | 'KILOMETERS';
-      accessMemberIds: string[];
+      memberIds: string[];
       maintenanceThreshold?: number | null;
     };
   }>('/api/equipments', async (request, reply) => {
@@ -138,8 +117,8 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
     return reply.status(201).send(equipmentDto(equipment));
   });
 
-  app.get<{ Params: { id: string } }>('/api/groups/:id/equipments', async (request) => {
-    const list = await equipmentService.listByGroup(request.params.id);
+  app.get('/api/equipments', async () => {
+    const list = await equipmentService.list();
     return list.map(equipmentDto);
   });
 
@@ -155,7 +134,7 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
       acquisitionDate: string;
       purchaseValueEuros: number;
       meterUnit: 'HOURS' | 'KILOMETERS';
-      accessMemberIds: string[];
+      memberIds: string[];
       maintenanceThreshold: number | null;
     }>;
   }>('/api/equipments/:id', async (request) => {
@@ -232,8 +211,8 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
     return reservationListDto(await reservationService.listByEquipment(request.params.id));
   });
 
-  app.get<{ Params: { id: string } }>('/api/groups/:id/calendar', async (request) => {
-    return reservationListDto(await reservationService.groupCalendar(request.params.id));
+  app.get('/api/calendar', async () => {
+    return reservationListDto(await reservationService.calendar());
   });
 
   // --- Suivi d'usage et maintenance ---
@@ -266,16 +245,15 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
     return usageService.maintenanceStatus(request.params.id);
   });
 
-  app.get<{ Params: { id: string } }>('/api/groups/:id/alerts', async (request) => {
-    return usageService.groupAlerts(request.params.id);
+  app.get('/api/alerts', async () => {
+    return usageService.alerts();
   });
 
   // --- Dépenses, soldes, remboursements ---
 
   app.post<{
     Body: {
-      groupId: string;
-      equipmentId?: string | null;
+      equipmentId: string;
       label: string;
       amountEuros: number;
       payerId: string;
@@ -289,7 +267,7 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
     return reply.status(201).send(expenseDto(expense));
   });
 
-  app.get<{ Params: { id: string } }>('/api/groups/:id/expenses', async (request) => {
+  app.get<{ Params: { id: string } }>('/api/equipments/:id/expenses', async (request) => {
     const list = await expenseService.listExpenses(request.params.id);
     return list.map(expenseDto);
   });
@@ -300,23 +278,23 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
   });
 
   app.post<{
-    Body: { groupId: string; fromMemberId: string; toMemberId: string; amountEuros: number; date: string; notes?: string | null };
+    Body: { equipmentId: string; fromMemberId: string; toMemberId: string; amountEuros: number; date: string; notes?: string | null };
   }>('/api/reimbursements', async (request, reply) => {
     const reimbursement = await expenseService.recordReimbursement(request.body);
     return reply.status(201).send(reimbursementDto(reimbursement));
   });
 
-  app.get<{ Params: { id: string } }>('/api/groups/:id/reimbursements', async (request) => {
+  app.get<{ Params: { id: string } }>('/api/equipments/:id/reimbursements', async (request) => {
     const list = await expenseService.listReimbursements(request.params.id);
     return list.map(reimbursementDto);
   });
 
-  app.get<{ Params: { id: string } }>('/api/groups/:id/balances', async (request) => {
-    const balances = await expenseService.groupBalances(request.params.id);
+  app.get<{ Params: { id: string } }>('/api/equipments/:id/balances', async (request) => {
+    const balances = await expenseService.equipmentBalances(request.params.id);
     return balances.map((b) => ({ memberId: b.memberId, balanceEuros: b.balanceCents / 100 }));
   });
 
-  app.get<{ Params: { id: string } }>('/api/groups/:id/settlement', async (request) => {
+  app.get<{ Params: { id: string } }>('/api/equipments/:id/settlement', async (request) => {
     const plan = await expenseService.settlementPlan(request.params.id);
     return plan.map((t) => ({
       fromMemberId: t.fromMemberId,

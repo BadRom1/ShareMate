@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
-import type { Group, GroupDetail } from './api';
+import type { Member } from './api';
 import { EquipmentsPage } from './pages/EquipmentsPage';
 import { CalendarPage } from './pages/CalendarPage';
 import { UsagePage } from './pages/UsagePage';
@@ -16,9 +16,7 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 export function App() {
-  const [groups, setGroups] = useState<Group[] | null>(null);
-  const [groupId, setGroupId] = useState<string | null>(() => localStorage.getItem('sharemate.groupId'));
-  const [group, setGroup] = useState<GroupDetail | null>(null);
+  const [members, setMembers] = useState<Member[] | null>(null);
   const [memberId, setMemberId] = useState<string | null>(() => localStorage.getItem('sharemate.memberId'));
   const [tab, setTab] = useState<Tab>('equipments');
   const [usageEquipmentId, setUsageEquipmentId] = useState<string | null>(null);
@@ -29,70 +27,46 @@ export function App() {
     setTab('usage');
   }, []);
 
-  const loadGroups = useCallback(async () => {
+  const loadMembers = useCallback(async () => {
     try {
-      const list = await api.listGroups();
-      setGroups(list);
-      if (list.length > 0 && (!groupId || !list.some((g) => g.id === groupId))) {
-        setGroupId(list[0].id);
+      const list = await api.listMembers();
+      setMembers(list);
+      if (list.length > 0 && (!memberId || !list.some((m) => m.id === memberId))) {
+        setMemberId(list[0].id);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erreur de chargement.');
     }
-  }, [groupId]);
+  }, [memberId]);
 
   useEffect(() => {
-    void loadGroups();
-  }, [loadGroups]);
-
-  useEffect(() => {
-    if (!groupId) {
-      setGroup(null);
-      return;
-    }
-    localStorage.setItem('sharemate.groupId', groupId);
-    api
-      .getGroup(groupId)
-      .then((g) => {
-        setGroup(g);
-        if (!g.members.some((m) => m.id === localStorage.getItem('sharemate.memberId'))) {
-          setMemberId(g.members[0]?.id ?? null);
-        }
-      })
-      .catch((e: Error) => setError(e.message));
-  }, [groupId]);
+    void loadMembers();
+  }, [loadMembers]);
 
   useEffect(() => {
     if (memberId) localStorage.setItem('sharemate.memberId', memberId);
   }, [memberId]);
 
-  const refreshGroup = useCallback(() => {
-    if (groupId) {
-      api.getGroup(groupId).then(setGroup).catch(() => undefined);
-    }
-  }, [groupId]);
-
-  if (groups === null) {
+  if (members === null) {
     return <p className="empty">Chargement…</p>;
   }
 
-  if (groups.length === 0) {
-    return <Onboarding onCreated={() => void loadGroups()} />;
+  if (members.length === 0) {
+    return <Onboarding onCreated={() => void loadMembers()} />;
   }
 
-  if (!group || !memberId) {
-    return <p className="empty">Chargement du groupe…</p>;
+  if (!memberId) {
+    return <p className="empty">Chargement…</p>;
   }
 
   return (
     <>
       <header className="topbar">
         <h1>🚜 ShareMate</h1>
-        <span className="badge">{group.name}</span>
         <div className="who">
           <span>Je suis :</span>
           <select value={memberId} onChange={(e) => setMemberId(e.target.value)}>
-            {group.members.map((m) => (
+            {members.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.name}
               </option>
@@ -115,34 +89,37 @@ export function App() {
         ))}
       </nav>
 
-      {tab === 'equipments' && <EquipmentsPage group={group} onGroupChanged={refreshGroup} />}
+      {tab === 'equipments' && (
+        <EquipmentsPage members={members} currentMemberId={memberId} onMembersChanged={() => void loadMembers()} />
+      )}
       {tab === 'calendar' && (
-        <CalendarPage group={group} currentMemberId={memberId} onRecordUsage={openUsageFor} />
+        <CalendarPage members={members} currentMemberId={memberId} onRecordUsage={openUsageFor} />
       )}
       {tab === 'usage' && (
-        <UsagePage group={group} currentMemberId={memberId} initialEquipmentId={usageEquipmentId} />
+        <UsagePage members={members} currentMemberId={memberId} initialEquipmentId={usageEquipmentId} />
       )}
-      {tab === 'expenses' && <ExpensesPage group={group} currentMemberId={memberId} />}
+      {tab === 'expenses' && <ExpensesPage members={members} currentMemberId={memberId} />}
     </>
   );
 }
 
 function Onboarding({ onCreated }: { onCreated: () => void }) {
-  const [name, setName] = useState('');
   const [memberNames, setMemberNames] = useState(['', '']);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    const members = memberNames.map((n) => n.trim()).filter(Boolean);
-    if (members.length === 0) {
-      setError('Ajoutez au moins un membre.');
+    const names = memberNames.map((n) => n.trim()).filter(Boolean);
+    if (names.length === 0) {
+      setError('Ajoutez au moins une personne.');
       return;
     }
     setBusy(true);
     try {
-      await api.createGroup({ name, members: members.map((n) => ({ name: n })) });
+      for (const name of names) {
+        await api.createMember({ name });
+      }
       onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erreur.');
@@ -155,31 +132,26 @@ function Onboarding({ onCreated }: { onCreated: () => void }) {
     <div className="card" style={{ marginTop: '3rem' }}>
       <h2>🚜 Bienvenue sur ShareMate</h2>
       <p className="muted">
-        Créez votre collectif pour gérer ensemble votre matériel partagé : réservations, suivi d'usage et
-        partage des frais.
+        Ici, ce sont les objets qui portent leurs utilisateurs : chaque équipement a son propre cercle de
+        partage (réservations, suivi d'usage, frais). Commencez par créer les personnes, puis ajoutez vos
+        équipements en choisissant qui les partage.
       </p>
       {error && <div className="alert">{error}</div>}
       <form className="stack" onSubmit={submit}>
-        <label className="field">
-          Nom du groupe
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Les voisins de la Combe" required />
-        </label>
-        <span className="muted">Membres (2 à 5 personnes)</span>
+        <span className="muted">Personnes (vous et ceux avec qui vous partagez)</span>
         {memberNames.map((n, i) => (
           <input
             key={i}
             value={n}
             onChange={(e) => setMemberNames(memberNames.map((v, j) => (j === i ? e.target.value : v)))}
-            placeholder={`Membre ${i + 1}`}
+            placeholder={`Personne ${i + 1}`}
           />
         ))}
-        {memberNames.length < 5 && (
-          <button type="button" className="ghost" onClick={() => setMemberNames([...memberNames, ''])}>
-            + Ajouter un membre
-          </button>
-        )}
+        <button type="button" className="ghost" onClick={() => setMemberNames([...memberNames, ''])}>
+          + Ajouter une personne
+        </button>
         <button className="primary" disabled={busy}>
-          Créer le groupe
+          C'est parti
         </button>
       </form>
     </div>

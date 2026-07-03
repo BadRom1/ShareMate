@@ -1,12 +1,10 @@
-import { Group } from '../../domain/group/group.js';
-import { Member } from '../../domain/group/member.js';
+import { Member } from '../../domain/member/member.js';
 import { Equipment } from '../../domain/equipment/equipment.js';
 import { Money } from '../../domain/shared/money.js';
 import {
   FixedClock,
   InMemoryEquipmentRepository,
   InMemoryExpenseRepository,
-  InMemoryGroupRepository,
   InMemoryMemberRepository,
   InMemoryReimbursementRepository,
   InMemoryReservationRepository,
@@ -14,9 +12,8 @@ import {
   SequentialIdGenerator,
 } from './in-memory.js';
 
-/** Contexte de test : groupe g1 (m1, m2, m3) + minipelle e1 accessible à m1/m2. */
+/** Contexte de test : membres m1, m2, m3 + minipelle e1 dont le cercle est m1/m2. */
 export async function makeFixture() {
-  const groups = new InMemoryGroupRepository();
   const members = new InMemoryMemberRepository();
   const equipments = new InMemoryEquipmentRepository();
   const reservations = new InMemoryReservationRepository();
@@ -29,23 +26,20 @@ export async function makeFixture() {
   await members.save(Member.create({ id: 'm1', name: 'Alice' }));
   await members.save(Member.create({ id: 'm2', name: 'Bruno' }));
   await members.save(Member.create({ id: 'm3', name: 'Chloé' }));
-  await groups.save(Group.create({ id: 'g1', name: 'Les voisins', memberIds: ['m1', 'm2', 'm3'] }));
   await equipments.save(
     Equipment.create({
       id: 'e1',
-      groupId: 'g1',
       name: 'Minipelle',
       category: 'BTP',
       acquisitionDate: new Date('2025-01-01'),
       purchaseValue: Money.fromEuros(15000),
       meterUnit: 'HOURS',
-      accessMemberIds: ['m1', 'm2'],
+      memberIds: ['m1', 'm2'],
       maintenanceThreshold: 50,
     }),
   );
 
   return {
-    groups,
     members,
     equipments,
     reservations,

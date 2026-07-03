@@ -69,9 +69,9 @@ export class UsageService {
     return computeMaintenanceStatus(equipment, records);
   }
 
-  /** Statuts en alerte pour tous les équipements du groupe. */
-  async groupAlerts(groupId: string): Promise<MaintenanceStatus[]> {
-    const equipments = await this.equipments.findByGroupId(groupId);
+  /** Statuts en alerte pour tous les équipements. */
+  async alerts(): Promise<MaintenanceStatus[]> {
+    const equipments = await this.equipments.findAll();
     const statuses = await Promise.all(
       equipments.map(async (e) =>
         computeMaintenanceStatus(e, await this.usageRecords.findByEquipmentId(e.id)),

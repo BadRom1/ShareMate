@@ -7,13 +7,12 @@ import { computeMaintenanceStatus } from './maintenance-alert.js';
 const equipment = (threshold: number | null) =>
   Equipment.create({
     id: 'e1',
-    groupId: 'g1',
     name: 'Minipelle',
     category: 'BTP',
     acquisitionDate: new Date('2025-01-01'),
     purchaseValue: Money.fromEuros(15000),
     meterUnit: 'HOURS',
-    accessMemberIds: ['m1'],
+    memberIds: ['m1'],
     maintenanceThreshold: threshold,
   });
 

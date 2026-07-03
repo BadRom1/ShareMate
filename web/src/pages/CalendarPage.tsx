@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import type { Equipment, GroupDetail, RecurrenceFrequency, Reservation, ReservationStatus } from '../api';
+import type { Equipment, Member, RecurrenceFrequency, Reservation, ReservationStatus } from '../api';
 import { formatDay, formatTime, formatDateTime } from '../format';
 
 interface Props {
-  group: GroupDetail;
+  members: Member[];
   currentMemberId: string;
   /** Bascule vers l'onglet Usage avec l'équipement pré-sélectionné. */
   onRecordUsage: (equipmentId: string) => void;
@@ -86,7 +86,7 @@ const EMPTY_FORM = {
   until: '',
 };
 
-export function CalendarPage({ group, currentMemberId, onRecordUsage }: Props) {
+export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props) {
   const [equipments, setEquipments] = useState<Equipment[]>([]);
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -104,18 +104,18 @@ export function CalendarPage({ group, currentMemberId, onRecordUsage }: Props) {
   const [form, setForm] = useState(EMPTY_FORM);
 
   const load = useCallback(async () => {
-    const [eqs, cal] = await Promise.all([api.listEquipments(group.id), api.groupCalendar(group.id)]);
+    const [eqs, cal] = await Promise.all([api.listEquipments(), api.calendar()]);
     setEquipments(eqs);
     setReservations(cal);
     setForm((f) => (f.equipmentId === '' && eqs.length > 0 ? { ...f, equipmentId: eqs[0].id } : f));
-  }, [group.id]);
+  }, []);
 
   useEffect(() => {
     load().catch((e: Error) => setError(e.message));
   }, [load]);
 
   function memberName(id: string) {
-    return group.members.find((m) => m.id === id)?.name ?? id;
+    return members.find((m) => m.id === id)?.name ?? id;
   }
 
   function equipmentName(id: string) {
@@ -395,7 +395,7 @@ export function CalendarPage({ group, currentMemberId, onRecordUsage }: Props) {
     return [...map.entries()];
   }, [visible]);
 
-  const accessibleEquipments = equipments.filter((e) => e.accessMemberIds.includes(currentMemberId));
+  const accessibleEquipments = equipments.filter((e) => e.memberIds.includes(currentMemberId));
   const todayKey = dateKey(new Date());
   const monthLabel = month.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
   const weekLabel = `${weekDays[0].toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} – ${weekDays[6].toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}`;
@@ -450,7 +450,7 @@ export function CalendarPage({ group, currentMemberId, onRecordUsage }: Props) {
       <div className="card">
         <h3>{editingId ? 'Modifier la réservation' : 'Réserver un créneau'}</h3>
         {accessibleEquipments.length === 0 ? (
-          <p className="muted">Aucun équipement accessible pour vous.</p>
+          <p className="muted">Vous ne faites partie du cercle d'aucun équipement.</p>
         ) : (
           <form className="stack" onSubmit={submit}>
             <div className="row">
@@ -598,7 +598,7 @@ export function CalendarPage({ group, currentMemberId, onRecordUsage }: Props) {
 
       <div className="card">
         <div className="row" style={{ alignItems: 'center', marginBottom: '0.75rem' }}>
-          <h3 style={{ margin: 0, flex: '0 1 auto' }}>Calendrier du groupe</h3>
+          <h3 style={{ margin: 0, flex: '0 1 auto' }}>Calendrier partagé</h3>
           <div className="view-toggle" style={{ flex: '0 0 auto' }}>
             <button type="button" className={view === 'month' ? 'active' : ''} onClick={() => setView('month')}>
               Mois

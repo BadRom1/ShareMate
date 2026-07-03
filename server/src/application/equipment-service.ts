@@ -2,16 +2,15 @@ import { Equipment } from '../domain/equipment/equipment.js';
 import type { MeterUnit } from '../domain/equipment/equipment.js';
 import { Money } from '../domain/shared/money.js';
 import { DomainError, NotFoundError } from '../domain/shared/domain-error.js';
-import type { EquipmentRepository, GroupRepository, IdGenerator } from './ports.js';
+import type { EquipmentRepository, IdGenerator, MemberRepository } from './ports.js';
 
 export interface CreateEquipmentInput {
-  groupId: string;
   name: string;
   category: string;
   acquisitionDate: string;
   purchaseValueEuros: number;
   meterUnit: MeterUnit;
-  accessMemberIds: string[];
+  memberIds: string[];
   maintenanceThreshold: number | null;
 }
 
@@ -21,35 +20,39 @@ export interface UpdateEquipmentInput {
   acquisitionDate?: string;
   purchaseValueEuros?: number;
   meterUnit?: MeterUnit;
-  accessMemberIds?: string[];
+  memberIds?: string[];
   maintenanceThreshold?: number | null;
 }
 
 export class EquipmentService {
   constructor(
     private readonly equipments: EquipmentRepository,
-    private readonly groups: GroupRepository,
+    private readonly members: MemberRepository,
     private readonly idGenerator: IdGenerator,
   ) {}
 
+  private async assertMembersExist(memberIds: string[]): Promise<void> {
+    const unknown: string[] = [];
+    for (const memberId of memberIds) {
+      if (!(await this.members.findById(memberId))) {
+        unknown.push(memberId);
+      }
+    }
+    if (unknown.length > 0) {
+      throw new DomainError(`Membres inconnus : ${unknown.join(', ')}`);
+    }
+  }
+
   async create(input: CreateEquipmentInput): Promise<Equipment> {
-    const group = await this.groups.findById(input.groupId);
-    if (!group) {
-      throw new NotFoundError(`Groupe introuvable : ${input.groupId}`);
-    }
-    const outsiders = input.accessMemberIds.filter((m) => !group.hasMember(m));
-    if (outsiders.length > 0) {
-      throw new DomainError(`Membres hors du groupe : ${outsiders.join(', ')}`);
-    }
+    await this.assertMembersExist(input.memberIds);
     const equipment = Equipment.create({
       id: this.idGenerator.next(),
-      groupId: input.groupId,
       name: input.name,
       category: input.category,
       acquisitionDate: new Date(input.acquisitionDate),
       purchaseValue: Money.fromEuros(input.purchaseValueEuros),
       meterUnit: input.meterUnit,
-      accessMemberIds: input.accessMemberIds,
+      memberIds: input.memberIds,
       maintenanceThreshold: input.maintenanceThreshold,
     });
     await this.equipments.save(equipment);
@@ -61,12 +64,8 @@ export class EquipmentService {
     if (!existing) {
       throw new NotFoundError(`Équipement introuvable : ${id}`);
     }
-    if (input.accessMemberIds) {
-      const group = await this.groups.findById(existing.groupId);
-      const outsiders = input.accessMemberIds.filter((m) => !group?.hasMember(m));
-      if (outsiders.length > 0) {
-        throw new DomainError(`Membres hors du groupe : ${outsiders.join(', ')}`);
-      }
+    if (input.memberIds) {
+      await this.assertMembersExist(input.memberIds);
     }
     const updated = existing.update({
       ...(input.name !== undefined && { name: input.name }),
@@ -74,7 +73,7 @@ export class EquipmentService {
       ...(input.acquisitionDate !== undefined && { acquisitionDate: new Date(input.acquisitionDate) }),
       ...(input.purchaseValueEuros !== undefined && { purchaseValue: Money.fromEuros(input.purchaseValueEuros) }),
       ...(input.meterUnit !== undefined && { meterUnit: input.meterUnit }),
-      ...(input.accessMemberIds !== undefined && { accessMemberIds: input.accessMemberIds }),
+      ...(input.memberIds !== undefined && { memberIds: input.memberIds }),
       ...(input.maintenanceThreshold !== undefined && { maintenanceThreshold: input.maintenanceThreshold }),
     });
     await this.equipments.save(updated);
@@ -97,7 +96,7 @@ export class EquipmentService {
     return equipment;
   }
 
-  async listByGroup(groupId: string): Promise<Equipment[]> {
-    return this.equipments.findByGroupId(groupId);
+  async list(): Promise<Equipment[]> {
+    return this.equipments.findAll();
   }
 }

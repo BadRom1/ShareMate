@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
-import type { Equipment, GroupDetail, MaintenanceStatus, UsageRecord } from '../api';
+import type { Equipment, MaintenanceStatus, Member, UsageRecord } from '../api';
 import { formatDateTime, meterLabel } from '../format';
 
 interface Props {
-  group: GroupDetail;
+  members: Member[];
   currentMemberId: string;
   /** Équipement à pré-sélectionner (arrivée depuis le calendrier). */
   initialEquipmentId?: string | null;
 }
 
-export function UsagePage({ group, currentMemberId, initialEquipmentId }: Props) {
+export function UsagePage({ members, currentMemberId, initialEquipmentId }: Props) {
   const [equipments, setEquipments] = useState<Equipment[]>([]);
   const [selectedId, setSelectedId] = useState(initialEquipmentId ?? '');
   const [history, setHistory] = useState<UsageRecord[]>([]);
@@ -24,11 +24,11 @@ export function UsagePage({ group, currentMemberId, initialEquipmentId }: Props)
   const selected = equipments.find((e) => e.id === selectedId) ?? null;
 
   const loadEquipments = useCallback(async () => {
-    const list = await api.listEquipments(group.id);
+    const list = await api.listEquipments();
     setEquipments(list);
     setSelectedId((id) => id || list[0]?.id || '');
-    setAlerts(await api.groupAlerts(group.id));
-  }, [group.id]);
+    setAlerts(await api.alerts());
+  }, []);
 
   const loadHistory = useCallback(async () => {
     if (!selectedId) return;
@@ -71,7 +71,7 @@ export function UsagePage({ group, currentMemberId, initialEquipmentId }: Props)
   }
 
   function memberName(id: string) {
-    return group.members.find((m) => m.id === id)?.name ?? id;
+    return members.find((m) => m.id === id)?.name ?? id;
   }
 
   function equipmentName(id: string) {

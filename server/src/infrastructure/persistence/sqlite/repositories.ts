@@ -1,6 +1,5 @@
 import type { SqliteDb } from './database.js';
-import { Group } from '../../../domain/group/group.js';
-import { Member } from '../../../domain/group/member.js';
+import { Member } from '../../../domain/member/member.js';
 import { Equipment } from '../../../domain/equipment/equipment.js';
 import type { MeterUnit } from '../../../domain/equipment/equipment.js';
 import { Reservation } from '../../../domain/reservation/reservation.js';
@@ -13,7 +12,6 @@ import { TimeRange } from '../../../domain/shared/time-range.js';
 import type {
   EquipmentRepository,
   ExpenseRepository,
-  GroupRepository,
   MemberRepository,
   ReimbursementRepository,
   ReservationRepository,
@@ -46,45 +44,8 @@ export class SqliteMemberRepository implements MemberRepository {
   }
 }
 
-export class SqliteGroupRepository implements GroupRepository {
-  constructor(private readonly db: SqliteDb) {}
-
-  private memberIdsOf(groupId: string): string[] {
-    const rows = this.db
-      .prepare('SELECT member_id FROM group_members WHERE group_id = ? ORDER BY position')
-      .all(groupId) as { member_id: string }[];
-    return rows.map((r) => r.member_id);
-  }
-
-  async findById(id: string): Promise<Group | null> {
-    const row = this.db.prepare('SELECT * FROM "groups" WHERE id = ?').get(id) as
-      | { id: string; name: string }
-      | undefined;
-    if (!row) return null;
-    return Group.create({ id: row.id, name: row.name, memberIds: this.memberIdsOf(row.id) });
-  }
-
-  async findAll(): Promise<Group[]> {
-    const rows = this.db.prepare('SELECT * FROM "groups" ORDER BY name').all() as { id: string; name: string }[];
-    return rows.map((row) => Group.create({ id: row.id, name: row.name, memberIds: this.memberIdsOf(row.id) }));
-  }
-
-  async save(group: Group): Promise<void> {
-    const tx = this.db.transaction(() => {
-      this.db
-        .prepare('INSERT INTO "groups" (id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name')
-        .run(group.id, group.name);
-      this.db.prepare('DELETE FROM group_members WHERE group_id = ?').run(group.id);
-      const insert = this.db.prepare('INSERT INTO group_members (group_id, member_id, position) VALUES (?, ?, ?)');
-      group.memberIds.forEach((memberId, i) => insert.run(group.id, memberId, i));
-    });
-    tx();
-  }
-}
-
 interface EquipmentRow {
   id: string;
-  group_id: string;
   name: string;
   category: string;
   acquisition_date: string;
@@ -97,18 +58,17 @@ export class SqliteEquipmentRepository implements EquipmentRepository {
   constructor(private readonly db: SqliteDb) {}
 
   private toEntity(row: EquipmentRow): Equipment {
-    const access = this.db
-      .prepare('SELECT member_id FROM equipment_access WHERE equipment_id = ? ORDER BY position')
+    const circle = this.db
+      .prepare('SELECT member_id FROM equipment_members WHERE equipment_id = ? ORDER BY position')
       .all(row.id) as { member_id: string }[];
     return Equipment.create({
       id: row.id,
-      groupId: row.group_id,
       name: row.name,
       category: row.category,
       acquisitionDate: new Date(row.acquisition_date),
       purchaseValue: Money.fromCents(row.purchase_value_cents),
       meterUnit: row.meter_unit as MeterUnit,
-      accessMemberIds: access.map((a) => a.member_id),
+      memberIds: circle.map((a) => a.member_id),
       maintenanceThreshold: row.maintenance_threshold,
     });
   }
@@ -118,8 +78,8 @@ export class SqliteEquipmentRepository implements EquipmentRepository {
     return row ? this.toEntity(row) : null;
   }
 
-  async findByGroupId(groupId: string): Promise<Equipment[]> {
-    const rows = this.db.prepare('SELECT * FROM equipments WHERE group_id = ? ORDER BY name').all(groupId) as EquipmentRow[];
+  async findAll(): Promise<Equipment[]> {
+    const rows = this.db.prepare('SELECT * FROM equipments ORDER BY name').all() as EquipmentRow[];
     return rows.map((r) => this.toEntity(r));
   }
 
@@ -127,8 +87,8 @@ export class SqliteEquipmentRepository implements EquipmentRepository {
     const tx = this.db.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO equipments (id, group_id, name, category, acquisition_date, purchase_value_cents, meter_unit, maintenance_threshold)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO equipments (id, name, category, acquisition_date, purchase_value_cents, meter_unit, maintenance_threshold)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              name = excluded.name, category = excluded.category, acquisition_date = excluded.acquisition_date,
              purchase_value_cents = excluded.purchase_value_cents, meter_unit = excluded.meter_unit,
@@ -136,7 +96,6 @@ export class SqliteEquipmentRepository implements EquipmentRepository {
         )
         .run(
           equipment.id,
-          equipment.groupId,
           equipment.name,
           equipment.category,
           equipment.acquisitionDate.toISOString(),
@@ -144,9 +103,9 @@ export class SqliteEquipmentRepository implements EquipmentRepository {
           equipment.meterUnit,
           equipment.maintenanceThreshold,
         );
-      this.db.prepare('DELETE FROM equipment_access WHERE equipment_id = ?').run(equipment.id);
-      const insert = this.db.prepare('INSERT INTO equipment_access (equipment_id, member_id, position) VALUES (?, ?, ?)');
-      equipment.accessMemberIds.forEach((memberId, i) => insert.run(equipment.id, memberId, i));
+      this.db.prepare('DELETE FROM equipment_members WHERE equipment_id = ?').run(equipment.id);
+      const insert = this.db.prepare('INSERT INTO equipment_members (equipment_id, member_id, position) VALUES (?, ?, ?)');
+      equipment.memberIds.forEach((memberId, i) => insert.run(equipment.id, memberId, i));
     });
     tx();
   }
@@ -194,12 +153,8 @@ export class SqliteReservationRepository implements ReservationRepository {
     return rows.map((r) => this.toEntity(r));
   }
 
-  async findByEquipmentIds(equipmentIds: string[]): Promise<Reservation[]> {
-    if (equipmentIds.length === 0) return [];
-    const placeholders = equipmentIds.map(() => '?').join(', ');
-    const rows = this.db
-      .prepare(`SELECT * FROM reservations WHERE equipment_id IN (${placeholders}) ORDER BY start_at`)
-      .all(...equipmentIds) as ReservationRow[];
+  async findAll(): Promise<Reservation[]> {
+    const rows = this.db.prepare('SELECT * FROM reservations ORDER BY start_at').all() as ReservationRow[];
     return rows.map((r) => this.toEntity(r));
   }
 
@@ -290,8 +245,7 @@ export class SqliteUsageRecordRepository implements UsageRecordRepository {
 
 interface ExpenseRow {
   id: string;
-  group_id: string;
-  equipment_id: string | null;
+  equipment_id: string;
   label: string;
   amount_cents: number;
   payer_id: string;
@@ -333,7 +287,6 @@ export class SqliteExpenseRepository implements ExpenseRepository {
   private toEntity(row: ExpenseRow): Expense {
     return Expense.create({
       id: row.id,
-      groupId: row.group_id,
       equipmentId: row.equipment_id,
       label: row.label,
       amount: Money.fromCents(row.amount_cents),
@@ -350,20 +303,21 @@ export class SqliteExpenseRepository implements ExpenseRepository {
     return row ? this.toEntity(row) : null;
   }
 
-  async findByGroupId(groupId: string): Promise<Expense[]> {
-    const rows = this.db.prepare('SELECT * FROM expenses WHERE group_id = ? ORDER BY date DESC').all(groupId) as ExpenseRow[];
+  async findByEquipmentId(equipmentId: string): Promise<Expense[]> {
+    const rows = this.db
+      .prepare('SELECT * FROM expenses WHERE equipment_id = ? ORDER BY date DESC')
+      .all(equipmentId) as ExpenseRow[];
     return rows.map((r) => this.toEntity(r));
   }
 
   async save(expense: Expense): Promise<void> {
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO expenses (id, group_id, equipment_id, label, amount_cents, payer_id, date, category, split_json, receipt_path)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO expenses (id, equipment_id, label, amount_cents, payer_id, date, category, split_json, receipt_path)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         expense.id,
-        expense.groupId,
         expense.equipmentId,
         expense.label,
         expense.amount.cents,
@@ -382,7 +336,7 @@ export class SqliteExpenseRepository implements ExpenseRepository {
 
 interface ReimbursementRow {
   id: string;
-  group_id: string;
+  equipment_id: string;
   from_member_id: string;
   to_member_id: string;
   amount_cents: number;
@@ -393,14 +347,14 @@ interface ReimbursementRow {
 export class SqliteReimbursementRepository implements ReimbursementRepository {
   constructor(private readonly db: SqliteDb) {}
 
-  async findByGroupId(groupId: string): Promise<Reimbursement[]> {
+  async findByEquipmentId(equipmentId: string): Promise<Reimbursement[]> {
     const rows = this.db
-      .prepare('SELECT * FROM reimbursements WHERE group_id = ? ORDER BY date DESC')
-      .all(groupId) as ReimbursementRow[];
+      .prepare('SELECT * FROM reimbursements WHERE equipment_id = ? ORDER BY date DESC')
+      .all(equipmentId) as ReimbursementRow[];
     return rows.map((row) =>
       Reimbursement.create({
         id: row.id,
-        groupId: row.group_id,
+        equipmentId: row.equipment_id,
         fromMemberId: row.from_member_id,
         toMemberId: row.to_member_id,
         amount: Money.fromCents(row.amount_cents),
@@ -413,12 +367,12 @@ export class SqliteReimbursementRepository implements ReimbursementRepository {
   async save(reimbursement: Reimbursement): Promise<void> {
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO reimbursements (id, group_id, from_member_id, to_member_id, amount_cents, date, notes)
+        `INSERT OR REPLACE INTO reimbursements (id, equipment_id, from_member_id, to_member_id, amount_cents, date, notes)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         reimbursement.id,
-        reimbursement.groupId,
+        reimbursement.equipmentId,
         reimbursement.fromMemberId,
         reimbursement.toMemberId,
         reimbursement.amount.cents,

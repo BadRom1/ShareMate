@@ -6,7 +6,7 @@ export interface MemberProps {
   email?: string | null;
 }
 
-/** Membre d'un collectif. */
+/** Personne susceptible de partager des équipements. */
 export class Member {
   private constructor(
     readonly id: string,
