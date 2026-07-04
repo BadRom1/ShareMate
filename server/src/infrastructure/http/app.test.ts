@@ -258,10 +258,20 @@ describe('API — parcours complet du MVP', () => {
       alice.cookies,
     );
     expect(usage.statusCode).toBe(201);
-    expect((usage.json() as { memberId: string }).memberId).toBe(m1);
+    expect(usage.json()).toMatchObject({ memberId: m1, duration: 60 });
+
+    // Bruno saisit une durée : le compteur est déduit du dernier relevé (160 + 2 → 162)
+    const byDuration = await post('/api/usage', { equipmentId: equipment.id, duration: 2 }, bruno.cookies);
+    expect(byDuration.statusCode).toBe(201);
+    expect(byDuration.json()).toMatchObject({ memberId: m2, meterReading: 162, duration: 2 });
+
+    const usageHistory = await get(`/api/equipments/${equipment.id}/usage`, alice.cookies);
+    expect((usageHistory.json() as { meterReading: number; duration: number | null }[]).map((u) => u.duration)).toEqual(
+      expect.arrayContaining([null, 60, 2]),
+    );
 
     const maintenance = await get(`/api/equipments/${equipment.id}/maintenance`, alice.cookies);
-    expect(maintenance.json()).toMatchObject({ alert: true, unitsSinceMaintenance: 60 });
+    expect(maintenance.json()).toMatchObject({ alert: true, unitsSinceMaintenance: 62 });
 
     const alerts = await get('/api/alerts', alice.cookies);
     expect(alerts.json()).toHaveLength(1);

@@ -20,9 +20,43 @@ const input = {
 
 describe('UsageService', () => {
   it("enregistre un relevé de fin d'utilisation", async () => {
-    const u = await service.recordUsage(input);
-    expect(u.meterReading).toBe(120);
-    expect(u.recordedAt.toISOString()).toBe('2026-07-02T10:00:00.000Z');
+    const { record, duration } = await service.recordUsage(input);
+    expect(record.meterReading).toBe(120);
+    expect(record.recordedAt.toISOString()).toBe('2026-07-02T10:00:00.000Z');
+    expect(duration).toBeNull();
+  });
+
+  it('attribue au membre la durée écoulée depuis le dernier relevé', async () => {
+    await service.recordUsage({ ...input, meterReading: 100 });
+    const { record, duration } = await service.recordUsage({ ...input, memberId: 'm2', meterReading: 112.5 });
+    expect(record.memberId).toBe('m2');
+    expect(duration).toBe(12.5);
+  });
+
+  it('enregistre par durée : le compteur est calculé depuis le dernier relevé connu', async () => {
+    await service.recordUsage({ ...input, meterReading: 100 });
+    const { record, duration } = await service.recordUsage({
+      equipmentId: 'e1',
+      memberId: 'm2',
+      duration: 3.5,
+    });
+    expect(record.meterReading).toBe(103.5);
+    expect(duration).toBe(3.5);
+  });
+
+  it('refuse une durée sans relevé précédent (compteur de départ inconnu)', async () => {
+    await expect(service.recordUsage({ equipmentId: 'e1', memberId: 'm1', duration: 3 })).rejects.toThrow(
+      /relevé précédent/i,
+    );
+  });
+
+  it('refuse une durée négative', async () => {
+    await service.recordUsage(input);
+    await expect(service.recordUsage({ equipmentId: 'e1', memberId: 'm1', duration: -2 })).rejects.toThrow(/durée/i);
+  });
+
+  it('refuse un enregistrement sans compteur ni durée', async () => {
+    await expect(service.recordUsage({ equipmentId: 'e1', memberId: 'm1' })).rejects.toThrow(/compteur ou la durée/i);
   });
 
   it('refuse un membre sans accès', async () => {
@@ -34,19 +68,23 @@ describe('UsageService', () => {
     await expect(service.recordUsage({ ...input, meterReading: 100 })).rejects.toThrow(/compteur/i);
   });
 
-  it('historique par équipement, trié du plus récent au plus ancien', async () => {
+  it('historique par équipement, trié du plus récent au plus ancien, avec durées', async () => {
     await service.recordUsage({ ...input, meterReading: 100 });
     f.clock.set(new Date('2026-07-03T10:00:00Z'));
     await service.recordUsage({ ...input, memberId: 'm2', meterReading: 110 });
     const history = await service.historyByEquipment('e1');
-    expect(history.map((u) => u.meterReading)).toEqual([110, 100]);
+    expect(history.map((e) => e.record.meterReading)).toEqual([110, 100]);
+    expect(history.map((e) => e.duration)).toEqual([10, null]);
   });
 
-  it('historique par membre', async () => {
-    await service.recordUsage(input);
-    const history = await service.historyByMember('m1');
+  it("historique par membre : durée calculée sur l'historique complet de l'équipement", async () => {
+    await service.recordUsage({ ...input, memberId: 'm1', meterReading: 100 });
+    f.clock.set(new Date('2026-07-03T10:00:00Z'));
+    await service.recordUsage({ ...input, memberId: 'm2', meterReading: 108 });
+    const history = await service.historyByMember('m2');
     expect(history).toHaveLength(1);
-    expect(history[0]!.memberId).toBe('m1');
+    expect(history[0]!.record.memberId).toBe('m2');
+    expect(history[0]!.duration).toBe(8);
   });
 
   it('statut de maintenance : alerte au-delà du seuil (50 h)', async () => {

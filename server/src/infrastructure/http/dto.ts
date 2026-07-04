@@ -45,13 +45,14 @@ export function reservationListDto(list: Reservation[]) {
   return list.map((r) => reservationDto(r, conflicts.get(r.id)));
 }
 
-export function usageRecordDto(u: UsageRecord) {
+export function usageRecordDto(u: UsageRecord, duration: number | null = null) {
   return {
     id: u.id,
     equipmentId: u.equipmentId,
     memberId: u.memberId,
     recordedAt: u.recordedAt.toISOString(),
     meterReading: u.meterReading,
+    duration,
     fuelAddedLiters: u.fuelAddedLiters,
     notes: u.notes,
     isMaintenance: u.isMaintenance,

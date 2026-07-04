@@ -43,6 +43,8 @@ export interface UsageRecord {
   memberId: string;
   recordedAt: string;
   meterReading: number;
+  /** Durée (heures/km) attribuée au membre : delta avec le relevé précédent, null pour le premier relevé. */
+  duration: number | null;
   fuelAddedLiters: number | null;
   notes: string | null;
   isMaintenance: boolean;
@@ -189,7 +191,9 @@ export const api = {
 
   recordUsage: (input: {
     equipmentId: string;
-    meterReading: number;
+    /** Relevé de compteur, ou `duration` pour laisser le serveur le calculer depuis le dernier relevé. */
+    meterReading?: number;
+    duration?: number;
     fuelAddedLiters?: number | null;
     notes?: string | null;
     isMaintenance?: boolean;

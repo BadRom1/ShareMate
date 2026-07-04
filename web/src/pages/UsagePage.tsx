@@ -19,9 +19,19 @@ export function UsagePage({ members, currentMemberId, initialEquipmentId }: Prop
   const [error, setError] = useState<string | null>(null);
   const [viewByMember, setViewByMember] = useState(false);
 
-  const [form, setForm] = useState({ meterReading: '', fuelAddedLiters: '', notes: '', isMaintenance: false });
+  const [form, setForm] = useState({
+    duration: '',
+    meterReading: '',
+    fuelAddedLiters: '',
+    notes: '',
+    isMaintenance: false,
+  });
+  /** Champ piloté par l'utilisateur : la durée (le serveur calcule le compteur) ou le compteur total. */
+  const [entryMode, setEntryMode] = useState<'duration' | 'total'>('duration');
 
   const selected = equipments.find((e) => e.id === selectedId) ?? null;
+  /** Dernier compteur connu : sert à préremplir le total et à convertir durée ↔ total. */
+  const lastReading = status?.currentReading ?? null;
 
   const loadEquipments = useCallback(async () => {
     const list = await api.listEquipments();
@@ -32,15 +42,13 @@ export function UsagePage({ members, currentMemberId, initialEquipmentId }: Prop
 
   const loadHistory = useCallback(async () => {
     if (!selectedId) return;
-    if (viewByMember) {
-      const records = await api.usageByMember(currentMemberId);
-      setHistory(records);
-      setStatus(null);
-    } else {
-      const [records, s] = await Promise.all([api.usageByEquipment(selectedId), api.maintenanceStatus(selectedId)]);
-      setHistory(records);
-      setStatus(s);
-    }
+    // Le statut est toujours chargé : le formulaire préremplit le total avec le dernier relevé.
+    const [records, s] = await Promise.all([
+      viewByMember ? api.usageByMember(currentMemberId) : api.usageByEquipment(selectedId),
+      api.maintenanceStatus(selectedId),
+    ]);
+    setHistory(records);
+    setStatus(s);
   }, [selectedId, viewByMember, currentMemberId]);
 
   useEffect(() => {
@@ -51,18 +59,54 @@ export function UsagePage({ members, currentMemberId, initialEquipmentId }: Prop
     loadHistory().catch((e: Error) => setError(e.message));
   }, [loadHistory]);
 
+  // Préremplit le total avec le dernier relevé connu (pour la personne suivante).
+  useEffect(() => {
+    setForm((f) => ({ ...f, duration: '', meterReading: lastReading !== null ? String(lastReading) : '' }));
+  }, [selectedId, lastReading]);
+
+  /** Évite les artefacts de virgule flottante lors des conversions durée ↔ total. */
+  const round = (n: number) => Math.round(n * 100) / 100;
+
+  function onDurationChange(value: string) {
+    setEntryMode('duration');
+    const d = Number(value);
+    setForm((f) => ({
+      ...f,
+      duration: value,
+      meterReading:
+        value !== '' && Number.isFinite(d) && lastReading !== null ? String(round(lastReading + d)) : f.meterReading,
+    }));
+  }
+
+  function onMeterChange(value: string) {
+    setEntryMode('total');
+    const m = Number(value);
+    setForm((f) => ({
+      ...f,
+      meterReading: value,
+      duration: value !== '' && Number.isFinite(m) && lastReading !== null ? String(round(m - lastReading)) : '',
+    }));
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
     try {
+      // En mode durée, on envoie la durée : le serveur l'ajoute au dernier relevé connu,
+      // même si quelqu'un d'autre a enregistré un usage entre-temps.
+      const reading =
+        entryMode === 'duration' && form.duration !== '' && lastReading !== null
+          ? { duration: Number(form.duration) }
+          : { meterReading: Number(form.meterReading) };
       await api.recordUsage({
         equipmentId: selectedId,
-        meterReading: Number(form.meterReading),
+        ...reading,
         fuelAddedLiters: form.fuelAddedLiters === '' ? null : Number(form.fuelAddedLiters),
         notes: form.notes || null,
         isMaintenance: form.isMaintenance,
       });
-      setForm({ meterReading: '', fuelAddedLiters: '', notes: '', isMaintenance: false });
+      setForm({ duration: '', meterReading: '', fuelAddedLiters: '', notes: '', isMaintenance: false });
+      setEntryMode('duration');
       await Promise.all([loadHistory(), loadEquipments()]);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erreur.');
@@ -75,6 +119,11 @@ export function UsagePage({ members, currentMemberId, initialEquipmentId }: Prop
 
   function equipmentName(id: string) {
     return equipments.find((e) => e.id === id)?.name ?? id;
+  }
+
+  /** Unité du compteur de l'équipement d'une ligne (l'historique par membre mélange les équipements). */
+  function unitFor(id: string) {
+    return equipments.find((e) => e.id === id)?.meterUnit ?? 'HOURS';
   }
 
   return (
@@ -108,15 +157,37 @@ export function UsagePage({ members, currentMemberId, initialEquipmentId }: Prop
                   </select>
                 </label>
                 <label className="field">
-                  Compteur ({selected ? meterLabel(selected.meterUnit) : ''})
+                  Durée d'utilisation ({selected ? meterLabel(selected.meterUnit) : ''})
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value={form.duration}
+                    onChange={(e) => onDurationChange(e.target.value)}
+                    disabled={lastReading === null}
+                    title={
+                      lastReading === null
+                        ? 'Premier relevé : saisissez le compteur total, la durée sera calculée ensuite.'
+                        : undefined
+                    }
+                    placeholder={lastReading === null ? 'Premier relevé : saisir le compteur' : ''}
+                  />
+                </label>
+                <label className="field">
+                  Compteur total ({selected ? meterLabel(selected.meterUnit) : ''})
                   <input
                     type="number"
                     min="0"
                     step="0.1"
                     value={form.meterReading}
-                    onChange={(e) => setForm({ ...form, meterReading: e.target.value })}
+                    onChange={(e) => onMeterChange(e.target.value)}
                     required
                   />
+                  {lastReading !== null && (
+                    <span className="muted">
+                      Dernier relevé : {lastReading} {selected ? meterLabel(selected.meterUnit) : ''}
+                    </span>
+                  )}
                 </label>
                 <label className="field">
                   Carburant ajouté (L, optionnel)
@@ -186,6 +257,7 @@ export function UsagePage({ members, currentMemberId, initialEquipmentId }: Prop
                     <tr>
                       <th>Date</th>
                       {viewByMember ? <th>Équipement</th> : <th>Membre</th>}
+                      <th>Durée</th>
                       <th>Compteur</th>
                       <th>Carburant</th>
                       <th>Remarques</th>
@@ -196,6 +268,7 @@ export function UsagePage({ members, currentMemberId, initialEquipmentId }: Prop
                       <tr key={u.id}>
                         <td>{formatDateTime(u.recordedAt)}</td>
                         <td>{viewByMember ? equipmentName(u.equipmentId) : memberName(u.memberId)}</td>
+                        <td>{u.duration !== null ? `${u.duration} ${meterLabel(unitFor(u.equipmentId))}` : '—'}</td>
                         <td>
                           {u.meterReading}
                           {u.isMaintenance && (

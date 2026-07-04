@@ -390,24 +390,25 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   app.post<{
     Body: {
       equipmentId: string;
-      meterReading: number;
+      meterReading?: number | null;
+      duration?: number | null;
       fuelAddedLiters?: number | null;
       notes?: string | null;
       isMaintenance?: boolean;
     };
   }>('/api/usage', async (request, reply) => {
-    const record = await usageService.recordUsage({ ...request.body, memberId: request.authMember.id });
-    return reply.status(201).send(usageRecordDto(record));
+    const entry = await usageService.recordUsage({ ...request.body, memberId: request.authMember.id });
+    return reply.status(201).send(usageRecordDto(entry.record, entry.duration));
   });
 
   app.get<{ Params: { id: string } }>('/api/equipments/:id/usage', async (request) => {
     const list = await usageService.historyByEquipment(request.params.id);
-    return list.map(usageRecordDto);
+    return list.map((e) => usageRecordDto(e.record, e.duration));
   });
 
   app.get<{ Params: { id: string } }>('/api/members/:id/usage', async (request) => {
     const list = await usageService.historyByMember(request.params.id);
-    return list.map(usageRecordDto);
+    return list.map((e) => usageRecordDto(e.record, e.duration));
   });
 
   app.get<{ Params: { id: string } }>('/api/equipments/:id/maintenance', async (request) => {
