@@ -119,8 +119,10 @@ GitHub Actions :
 
 ## Feuille de route
 
-1. **PWA** : manifest + service worker (Vite PWA), installable sur mobile — le front est déjà
-   responsive et l'API stateless s'y prête.
+1. ~~**PWA** : manifest + service worker (Vite PWA), installable sur mobile.~~ ✅ Fait —
+   `vite-plugin-pwa` (autoUpdate), manifest + icônes générées depuis `web/public/logo.svg`
+   (`npm run generate-pwa-assets`), shell préchargé (offline), API en `NetworkFirst`.
 2. **Android puis iOS** : encapsulation Capacitor du front existant ; le domaine et l'API restent
-   inchangés (c'est l'intérêt de l'hexagone).
+   inchangés (c'est l'intérêt de l'hexagone). Chantier principal : découpler `web/src/api.ts` du
+   même-origine et adapter l'auth cookies → CORS `SameSite=None` ou token Bearer.
 3. Authentification légère (magic link), notifications de rappel d'entretien, multi-groupes.
