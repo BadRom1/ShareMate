@@ -8,6 +8,11 @@ export default defineConfig({
     VitePWA({
       // Le service worker se met à jour tout seul dès qu'une nouvelle version est déployée.
       registerType: 'autoUpdate',
+      // Active le service worker en dev (`vite dev`) pour tester le Web Push sur localhost.
+      devOptions: {
+        enabled: true,
+        type: 'module',
+      },
       includeAssets: ['favicon.ico', 'apple-touch-icon-180x180.png', 'logo.svg'],
       manifest: {
         name: 'ShareMate — matériel partagé',
