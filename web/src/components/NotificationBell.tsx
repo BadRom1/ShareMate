@@ -3,6 +3,7 @@ import { api } from '../api';
 import type { AppNotification, NotificationPreference } from '../api';
 import { NOTIFICATION_LABELS, formatRelative } from '../format';
 import { enableWebPush, webPushPermission } from '../notifications';
+import { IconBell } from './icons';
 
 interface Props {
   /** Navigation demandée au clic sur une notification (lien `/?tab=...`). */
@@ -105,8 +106,12 @@ export function NotificationBell({ onNavigate }: Props) {
 
   return (
     <div className="bell" ref={panelRef}>
-      <button className="bell-button" onClick={() => void toggleOpen()} aria-label="Notifications">
-        🔔
+      <button
+        className={`bell-button ${count > 0 ? 'bell-active' : ''}`}
+        onClick={() => void toggleOpen()}
+        aria-label="Notifications"
+      >
+        <IconBell size={22} />
         {count > 0 && <span className="bell-badge">{count > 99 ? '99+' : count}</span>}
       </button>
 
