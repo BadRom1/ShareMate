@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import type { Equipment, MaintenanceStatus, Member, MeterUnit } from '../api';
 import { formatDate, formatEuros, meterLabel } from '../format';
+import { IconEdit, IconTrash } from '../components/icons';
 
 interface Props {
   members: Member[];
@@ -311,12 +312,22 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
                 {!mine && <span className="badge warn">Je n'en fais pas partie</span>}
               </p>
               <p className="muted">Cercle : {e.memberIds.map(memberName).join(', ')}</p>
-              <div className="row">
-                <button className="ghost" onClick={() => startEdit(e)}>
-                  Modifier
+              <div className="icon-group" style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  className="icon-btn icon-edit"
+                  onClick={() => startEdit(e)}
+                  title="Modifier"
+                  aria-label="Modifier"
+                >
+                  <IconEdit size={20} />
                 </button>
-                <button className="danger" onClick={() => void remove(e)}>
-                  Supprimer
+                <button
+                  className="icon-btn icon-danger"
+                  onClick={() => void remove(e)}
+                  title="Supprimer"
+                  aria-label="Supprimer"
+                >
+                  <IconTrash size={20} />
                 </button>
               </div>
             </div>

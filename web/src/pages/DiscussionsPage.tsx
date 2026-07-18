@@ -250,12 +250,12 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
               </h3>
               {inCircle && (
                 <button
-                  className="btn-primary btn-icon"
+                  className="icon-btn icon-primary"
                   onClick={() => setShowNewThread(true)}
                   title="Nouveau fil"
                   aria-label="Nouveau fil"
                 >
-                  <IconPlus size={18} />
+                  <IconPlus size={20} />
                 </button>
               )}
             </div>
@@ -475,11 +475,12 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
             />
             <button
               type="submit"
-              className="btn-primary btn-icon"
+              className="icon-btn icon-primary"
               disabled={busy || draft.trim().length === 0}
               title="Envoyer"
+              aria-label="Envoyer"
             >
-              <IconSend size={18} />
+              <IconSend size={20} />
             </button>
           </form>
         ) : (

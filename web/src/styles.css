@@ -838,16 +838,6 @@ th {
   cursor: not-allowed;
 }
 
-/* Bouton primaire réduit à une icône (ex. Envoyer). */
-.btn-icon {
-  padding: 0.55rem;
-  border-radius: 999px;
-}
-
-.btn-icon-text {
-  padding: 0.45rem 0.85rem;
-}
-
 /* Bouton compact (édition en ligne). */
 .btn-sm {
   padding: 0.35rem 0.6rem;
@@ -902,12 +892,14 @@ th {
 
 /* Icônes colorées par défaut, plus foncées au survol. */
 .icon-edit,
-.icon-confirm {
+.icon-confirm,
+.icon-primary {
   color: var(--green);
 }
 
 .icon-edit:hover,
-.icon-confirm:hover {
+.icon-confirm:hover,
+.icon-primary:hover {
   color: var(--green-dark);
 }
 
