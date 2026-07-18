@@ -28,7 +28,7 @@ jobs:
     name: Build APK / AAB
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Vérifier l'URL d'API
         run: |
@@ -38,7 +38,7 @@ jobs:
           fi
           echo "Backend ciblé : ${API_BASE_URL}"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -81,7 +81,7 @@ jobs:
           chmod +x ./gradlew
           ./gradlew --no-daemon assembleDebug
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sharemate-debug-apk
           path: web/android/app/build/outputs/apk/debug/app-debug.apk
@@ -99,7 +99,7 @@ jobs:
           ANDROID_VERSION_CODE: ${{ github.run_number }}
         run: ./gradlew --no-daemon bundleRelease
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: steps.keystore.outputs.present == 'true'
         with:
           name: sharemate-release-aab
