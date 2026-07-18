@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import type { Equipment, MaintenanceStatus, Member, UsageRecord } from '../api';
 import { formatDateTime, meterLabel } from '../format';
+import { pickInitialEquipmentId, setLastEquipmentId } from '../lastEquipment';
 
 interface Props {
   members: Member[];
@@ -36,9 +37,9 @@ export function UsagePage({ members, currentMemberId, initialEquipmentId }: Prop
   const loadEquipments = useCallback(async () => {
     const list = await api.listEquipments();
     setEquipments(list);
-    setSelectedId((id) => id || list[0]?.id || '');
+    setSelectedId((id) => pickInitialEquipmentId(list, currentMemberId, { current: id, deepLink: initialEquipmentId }));
     setAlerts(await api.alerts());
-  }, []);
+  }, [currentMemberId, initialEquipmentId]);
 
   const loadHistory = useCallback(async () => {
     if (!selectedId) return;
@@ -58,6 +59,11 @@ export function UsagePage({ members, currentMemberId, initialEquipmentId }: Prop
   useEffect(() => {
     loadHistory().catch((e: Error) => setError(e.message));
   }, [loadHistory]);
+
+  // Mémorise l'équipement consulté (partagé avec l'onglet Discussions).
+  useEffect(() => {
+    if (selectedId) setLastEquipmentId(selectedId);
+  }, [selectedId]);
 
   // Préremplit le total avec le dernier relevé connu (pour la personne suivante).
   useEffect(() => {

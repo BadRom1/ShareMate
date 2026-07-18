@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import type { Equipment, Member, Message, ThreadSummary } from '../api';
 import { formatDateTime, formatRelative } from '../format';
+import { pickInitialEquipmentId, setLastEquipmentId } from '../lastEquipment';
 import { IconBack, IconChat, IconCheck, IconClose, IconEdit, IconPlus, IconSend, IconTrash } from '../components/icons';
 
 interface Props {
@@ -48,10 +49,7 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
   const loadEquipments = useCallback(async () => {
     const list = await api.listEquipments();
     setEquipments(list);
-    setSelectedId(
-      (id) =>
-        id || initialEquipmentId || list.find((e) => e.memberIds.includes(currentMemberId))?.id || list[0]?.id || '',
-    );
+    setSelectedId((id) => pickInitialEquipmentId(list, currentMemberId, { current: id, deepLink: initialEquipmentId }));
   }, [currentMemberId, initialEquipmentId]);
 
   const loadThreads = useCallback(async () => {
@@ -80,9 +78,10 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     listEndRef.current?.scrollIntoView({ block: 'nearest' });
   }, [messages]);
 
-  // Changement d'équipement : on referme le fil ouvert.
+  // Changement d'équipement : on referme le fil ouvert et on mémorise la consultation.
   useEffect(() => {
     setOpenThreadId(null);
+    if (selectedId) setLastEquipmentId(selectedId);
   }, [selectedId]);
 
   // Échap ferme la modale de création.
@@ -236,10 +235,27 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
         <aside className="discussion-aside">
           <div className="card">
             <div className="bell-head">
-              <h3 style={{ margin: 0 }}>Fils{selected ? ` — ${selected.name}` : ''}</h3>
+              <h3
+                style={{
+                  margin: 0,
+                  flex: 1,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                title={selected?.name}
+              >
+                {selected ? selected.name : 'Fils'}
+              </h3>
               {inCircle && (
-                <button className="btn-primary btn-icon-text" onClick={() => setShowNewThread(true)}>
-                  <IconPlus size={18} /> Nouveau
+                <button
+                  className="btn-primary btn-icon"
+                  onClick={() => setShowNewThread(true)}
+                  title="Nouveau fil"
+                  aria-label="Nouveau fil"
+                >
+                  <IconPlus size={18} />
                 </button>
               )}
             </div>

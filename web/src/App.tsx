@@ -14,11 +14,11 @@ import { setupNativePush } from './notifications';
 type Tab = 'equipments' | 'calendar' | 'usage' | 'expenses' | 'discussions';
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: 'equipments', label: 'Équipements' },
+  { id: 'discussions', label: 'Discussions' },
   { id: 'calendar', label: 'Calendrier' },
   { id: 'usage', label: 'Usage & entretien' },
   { id: 'expenses', label: 'Dépenses & soldes' },
-  { id: 'discussions', label: 'Discussions' },
+  { id: 'equipments', label: 'Équipements' },
 ];
 
 type Auth =
@@ -84,7 +84,7 @@ export function App() {
 
 function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut: () => void }) {
   const [members, setMembers] = useState<Member[] | null>(null);
-  const [tab, setTab] = useState<Tab>('equipments');
+  const [tab, setTab] = useState<Tab>('discussions');
   const [usageEquipmentId, setUsageEquipmentId] = useState<string | null>(null);
   const [discussionEquipmentId, setDiscussionEquipmentId] = useState<string | null>(null);
   const [discussionThreadId, setDiscussionThreadId] = useState<string | null>(null);
