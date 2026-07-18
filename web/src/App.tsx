@@ -86,6 +86,7 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
   const [tab, setTab] = useState<Tab>('equipments');
   const [usageEquipmentId, setUsageEquipmentId] = useState<string | null>(null);
   const [discussionEquipmentId, setDiscussionEquipmentId] = useState<string | null>(null);
+  const [discussionThreadId, setDiscussionThreadId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const openUsageFor = useCallback((equipmentId: string) => {
@@ -101,7 +102,10 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
       const equipment = url.searchParams.get('equipment');
       if (!target || !TABS.some((t) => t.id === target)) return;
       if (target === 'usage' && equipment) setUsageEquipmentId(equipment);
-      if (target === 'discussions' && equipment) setDiscussionEquipmentId(equipment);
+      if (target === 'discussions') {
+        if (equipment) setDiscussionEquipmentId(equipment);
+        setDiscussionThreadId(url.searchParams.get('thread'));
+      }
       setTab(target);
     } catch {
       /* lien invalide */
@@ -189,7 +193,12 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
       )}
       {tab === 'expenses' && <ExpensesPage members={members} currentMemberId={member.id} />}
       {tab === 'discussions' && (
-        <DiscussionsPage members={members} currentMemberId={member.id} initialEquipmentId={discussionEquipmentId} />
+        <DiscussionsPage
+          members={members}
+          currentMemberId={member.id}
+          initialEquipmentId={discussionEquipmentId}
+          initialThreadId={discussionThreadId}
+        />
       )}
     </>
   );

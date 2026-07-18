@@ -12,6 +12,7 @@ import { TimeRange } from '../../../domain/shared/time-range.js';
 import { MemberCredential } from '../../../domain/auth/credential.js';
 import type { Session } from '../../../domain/auth/session.js';
 import { Message } from '../../../domain/discussion/message.js';
+import { Thread } from '../../../domain/discussion/thread.js';
 import { Notification } from '../../../domain/notification/notification.js';
 import { NotificationPreference } from '../../../domain/notification/preference.js';
 import type { NotificationType } from '../../../domain/notification/notification-type.js';
@@ -23,6 +24,7 @@ import type {
   ExpenseRepository,
   MemberRepository,
   MessageRepository,
+  ThreadRepository,
   NotificationPreferenceRepository,
   NotificationRepository,
   PushSubscriptionRepository,
@@ -471,9 +473,68 @@ export class SqliteReimbursementRepository implements ReimbursementRepository {
   }
 }
 
-interface MessageRow {
+interface ThreadRow {
   id: string;
   equipment_id: string;
+  author_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export class SqliteThreadRepository implements ThreadRepository {
+  constructor(private readonly db: SqliteDb) {}
+
+  private toEntity(row: ThreadRow): Thread {
+    return Thread.create({
+      id: row.id,
+      equipmentId: row.equipment_id,
+      authorId: row.author_id,
+      title: row.title,
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+    });
+  }
+
+  async findById(id: string): Promise<Thread | null> {
+    const row = this.db.prepare('SELECT * FROM threads WHERE id = ?').get(id) as ThreadRow | undefined;
+    return row ? this.toEntity(row) : null;
+  }
+
+  async findByEquipmentId(equipmentId: string): Promise<Thread[]> {
+    const rows = this.db
+      .prepare('SELECT * FROM threads WHERE equipment_id = ? ORDER BY updated_at DESC')
+      .all(equipmentId) as ThreadRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
+  async save(thread: Thread): Promise<void> {
+    // ON CONFLICT DO UPDATE (et non INSERT OR REPLACE) : un REPLACE supprimerait puis réinsérerait
+    // la ligne, déclenchant le ON DELETE CASCADE qui effacerait tous les messages du fil.
+    this.db
+      .prepare(
+        `INSERT INTO threads (id, equipment_id, author_id, title, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at`,
+      )
+      .run(
+        thread.id,
+        thread.equipmentId,
+        thread.authorId,
+        thread.title,
+        thread.createdAt.toISOString(),
+        thread.updatedAt.toISOString(),
+      );
+  }
+
+  async delete(id: string): Promise<void> {
+    this.db.prepare('DELETE FROM threads WHERE id = ?').run(id);
+  }
+}
+
+interface MessageRow {
+  id: string;
+  thread_id: string;
   author_id: string;
   body: string;
   created_at: string;
@@ -486,7 +547,7 @@ export class SqliteMessageRepository implements MessageRepository {
   private toEntity(row: MessageRow): Message {
     return Message.create({
       id: row.id,
-      equipmentId: row.equipment_id,
+      threadId: row.thread_id,
       authorId: row.author_id,
       body: row.body,
       createdAt: new Date(row.created_at),
@@ -499,22 +560,30 @@ export class SqliteMessageRepository implements MessageRepository {
     return row ? this.toEntity(row) : null;
   }
 
-  async findByEquipmentId(equipmentId: string): Promise<Message[]> {
+  async findByThreadId(threadId: string): Promise<Message[]> {
     const rows = this.db
-      .prepare('SELECT * FROM messages WHERE equipment_id = ? ORDER BY created_at')
-      .all(equipmentId) as MessageRow[];
+      .prepare('SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at')
+      .all(threadId) as MessageRow[];
     return rows.map((r) => this.toEntity(r));
+  }
+
+  async countByThreadId(threadId: string): Promise<number> {
+    const row = this.db.prepare('SELECT COUNT(*) AS count FROM messages WHERE thread_id = ?').get(threadId) as {
+      count: number;
+    };
+    return row.count;
   }
 
   async save(message: Message): Promise<void> {
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO messages (id, equipment_id, author_id, body, created_at, edited_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages (id, thread_id, author_id, body, created_at, edited_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET body = excluded.body, edited_at = excluded.edited_at`,
       )
       .run(
         message.id,
-        message.equipmentId,
+        message.threadId,
         message.authorId,
         message.body,
         message.createdAt.toISOString(),

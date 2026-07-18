@@ -6,6 +6,8 @@ import type { UsageRecord } from '../../domain/usage/usage-record.js';
 import type { Expense, SplitRule } from '../../domain/expense/expense.js';
 import type { Reimbursement } from '../../domain/expense/reimbursement.js';
 import type { Message } from '../../domain/discussion/message.js';
+import type { Thread } from '../../domain/discussion/thread.js';
+import type { ThreadSummary } from '../../application/discussion-service.js';
 import type { Notification } from '../../domain/notification/notification.js';
 import type { NotificationPreference } from '../../domain/notification/preference.js';
 
@@ -99,10 +101,25 @@ export function reimbursementDto(r: Reimbursement) {
   };
 }
 
+export function threadDto(t: Thread) {
+  return {
+    id: t.id,
+    equipmentId: t.equipmentId,
+    authorId: t.authorId,
+    title: t.title,
+    createdAt: t.createdAt.toISOString(),
+    updatedAt: t.updatedAt.toISOString(),
+  };
+}
+
+export function threadSummaryDto(s: ThreadSummary) {
+  return { ...threadDto(s.thread), messageCount: s.messageCount };
+}
+
 export function messageDto(m: Message) {
   return {
     id: m.id,
-    equipmentId: m.equipmentId,
+    threadId: m.threadId,
     authorId: m.authorId,
     body: m.body,
     createdAt: m.createdAt.toISOString(),

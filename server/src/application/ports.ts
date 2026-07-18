@@ -7,6 +7,7 @@ import type { UsageRecord } from '../domain/usage/usage-record.js';
 import type { Expense } from '../domain/expense/expense.js';
 import type { Reimbursement } from '../domain/expense/reimbursement.js';
 import type { Message } from '../domain/discussion/message.js';
+import type { Thread } from '../domain/discussion/thread.js';
 import type { Notification } from '../domain/notification/notification.js';
 import type { NotificationPreference } from '../domain/notification/preference.js';
 import type { NotificationType } from '../domain/notification/notification-type.js';
@@ -52,10 +53,19 @@ export interface ReimbursementRepository {
   save(reimbursement: Reimbursement): Promise<void>;
 }
 
+export interface ThreadRepository {
+  findById(id: string): Promise<Thread | null>;
+  /** Fils de l'équipement, triés par activité décroissante (plus récent d'abord). */
+  findByEquipmentId(equipmentId: string): Promise<Thread[]>;
+  save(thread: Thread): Promise<void>;
+  delete(id: string): Promise<void>;
+}
+
 export interface MessageRepository {
   findById(id: string): Promise<Message | null>;
-  /** Messages du fil de l'équipement, triés du plus ancien au plus récent. */
-  findByEquipmentId(equipmentId: string): Promise<Message[]>;
+  /** Messages d'un fil, triés du plus ancien au plus récent. */
+  findByThreadId(threadId: string): Promise<Message[]>;
+  countByThreadId(threadId: string): Promise<number>;
   save(message: Message): Promise<void>;
   delete(id: string): Promise<void>;
 }

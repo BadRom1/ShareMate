@@ -112,9 +112,23 @@ export interface SettlementTransaction {
   amountEuros: number;
 }
 
-export interface Message {
+export interface Thread {
   id: string;
   equipmentId: string;
+  authorId: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Fil enrichi du nombre de messages, pour la liste des fils. */
+export interface ThreadSummary extends Thread {
+  messageCount: number;
+}
+
+export interface Message {
+  id: string;
+  threadId: string;
   authorId: string;
   body: string;
   createdAt: string;
@@ -291,9 +305,18 @@ export const api = {
     notes?: string;
   }) => request<Reimbursement>('/api/reimbursements', { method: 'POST', body: JSON.stringify(input) }),
 
-  listMessages: (equipmentId: string) => request<Message[]>(`/api/equipments/${equipmentId}/messages`),
-  postMessage: (equipmentId: string, body: string) =>
-    request<Message>('/api/messages', { method: 'POST', body: JSON.stringify({ equipmentId, body }) }),
+  listThreads: (equipmentId: string) => request<ThreadSummary[]>(`/api/equipments/${equipmentId}/threads`),
+  createThread: (equipmentId: string, title: string, body?: string) =>
+    request<Thread>('/api/threads', { method: 'POST', body: JSON.stringify({ equipmentId, title, body }) }),
+  renameThread: (id: string, title: string) =>
+    request<Thread>(`/api/threads/${id}`, { method: 'PUT', body: JSON.stringify({ title }) }),
+  deleteThread: (id: string) => request<void>(`/api/threads/${id}`, { method: 'DELETE' }),
+
+  listMessages: (threadId: string) => request<Message[]>(`/api/threads/${threadId}/messages`),
+  postMessage: (threadId: string, body: string) =>
+    request<Message>('/api/messages', { method: 'POST', body: JSON.stringify({ threadId, body }) }),
+  editMessage: (id: string, body: string) =>
+    request<Message>(`/api/messages/${id}`, { method: 'PUT', body: JSON.stringify({ body }) }),
   deleteMessage: (id: string) => request<void>(`/api/messages/${id}`, { method: 'DELETE' }),
 
   listNotifications: (unreadOnly = false) =>

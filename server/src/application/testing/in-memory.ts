@@ -8,6 +8,7 @@ import type {
   IdGenerator,
   MemberRepository,
   MessageRepository,
+  ThreadRepository,
   NotificationPreferenceRepository,
   NotificationRepository,
   PasswordHasher,
@@ -29,6 +30,7 @@ import type { UsageRecord } from '../../domain/usage/usage-record.js';
 import type { Expense } from '../../domain/expense/expense.js';
 import type { Reimbursement } from '../../domain/expense/reimbursement.js';
 import type { Message } from '../../domain/discussion/message.js';
+import type { Thread } from '../../domain/discussion/thread.js';
 import type { Notification } from '../../domain/notification/notification.js';
 import type { NotificationPreference } from '../../domain/notification/preference.js';
 
@@ -121,15 +123,36 @@ export class InMemoryReimbursementRepository implements ReimbursementRepository 
   }
 }
 
-export class InMemoryMessageRepository implements MessageRepository {
-  private items = new Map<string, Message>();
+export class InMemoryThreadRepository implements ThreadRepository {
+  private items = new Map<string, Thread>();
   async findById(id: string) {
     return this.items.get(id) ?? null;
   }
   async findByEquipmentId(equipmentId: string) {
     return [...this.items.values()]
-      .filter((m) => m.equipmentId === equipmentId)
+      .filter((t) => t.equipmentId === equipmentId)
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  }
+  async save(thread: Thread) {
+    this.items.set(thread.id, thread);
+  }
+  async delete(id: string) {
+    this.items.delete(id);
+  }
+}
+
+export class InMemoryMessageRepository implements MessageRepository {
+  private items = new Map<string, Message>();
+  async findById(id: string) {
+    return this.items.get(id) ?? null;
+  }
+  async findByThreadId(threadId: string) {
+    return [...this.items.values()]
+      .filter((m) => m.threadId === threadId)
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  }
+  async countByThreadId(threadId: string) {
+    return [...this.items.values()].filter((m) => m.threadId === threadId).length;
   }
   async save(message: Message) {
     this.items.set(message.id, message);

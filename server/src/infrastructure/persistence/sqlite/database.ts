@@ -35,6 +35,13 @@ function migrate(db: SqliteDb): void {
     db.pragma('foreign_keys = ON');
   }
 
+  // Le forum est passé d'un mur de messages plat (messages.equipment_id) à des fils
+  // (threads + messages.thread_id). L'ancien schéma est incompatible : on repart de zéro.
+  const messageColumns = db.prepare(`PRAGMA table_info(messages)`).all() as { name: string }[];
+  if (messageColumns.length > 0 && !messageColumns.some((c) => c.name === 'thread_id')) {
+    db.exec('DROP TABLE IF EXISTS messages;');
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS members (
       id TEXT PRIMARY KEY,
@@ -120,15 +127,25 @@ function migrate(db: SqliteDb): void {
       expires_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS messages (
+    CREATE TABLE IF NOT EXISTS threads (
       id TEXT PRIMARY KEY,
       equipment_id TEXT NOT NULL REFERENCES equipments(id) ON DELETE CASCADE,
+      author_id TEXT NOT NULL REFERENCES members(id),
+      title TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_threads_equipment ON threads(equipment_id);
+
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
       author_id TEXT NOT NULL REFERENCES members(id),
       body TEXT NOT NULL,
       created_at TEXT NOT NULL,
       edited_at TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_messages_equipment ON messages(equipment_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
 
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,

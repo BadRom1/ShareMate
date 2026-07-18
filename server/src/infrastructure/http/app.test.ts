@@ -8,6 +8,7 @@ import {
   SqliteExpenseRepository,
   SqliteMemberRepository,
   SqliteMessageRepository,
+  SqliteThreadRepository,
   SqliteNotificationPreferenceRepository,
   SqliteNotificationRepository,
   SqlitePushSubscriptionRepository,
@@ -33,6 +34,7 @@ beforeEach(async () => {
     usageRecords: new SqliteUsageRecordRepository(db),
     expenses: new SqliteExpenseRepository(db),
     reimbursements: new SqliteReimbursementRepository(db),
+    threads: new SqliteThreadRepository(db),
     messages: new SqliteMessageRepository(db),
     notifications: new SqliteNotificationRepository(db),
     notificationPreferences: new SqliteNotificationPreferenceRepository(db),
@@ -478,6 +480,7 @@ describe('API — CORS (origines de l’app native)', () => {
       usageRecords: new SqliteUsageRecordRepository(db),
       expenses: new SqliteExpenseRepository(db),
       reimbursements: new SqliteReimbursementRepository(db),
+      threads: new SqliteThreadRepository(db),
       messages: new SqliteMessageRepository(db),
       notifications: new SqliteNotificationRepository(db),
       notificationPreferences: new SqliteNotificationPreferenceRepository(db),
@@ -519,42 +522,85 @@ describe('API — CORS (origines de l’app native)', () => {
   });
 });
 
-describe('API — discussions par équipement', () => {
-  it('poste, liste et supprime un message ; le hors-cercle est refusé', async () => {
+describe('API — discussions (fils + messages)', () => {
+  it('crée un fil avec 1er message, poste/édite/supprime des messages ; le hors-cercle est refusé', async () => {
     const { equipment, alice, bruno, chloe } = await setupMembersAndEquipment();
 
-    const posted = await post('/api/messages', { equipmentId: equipment.id, body: 'Bonjour' }, alice.cookies);
-    expect(posted.statusCode).toBe(201);
-    const message = posted.json() as { id: string; authorId: string; body: string };
-    expect(message.authorId).toBe(alice.id);
+    // Fil avec premier message.
+    const created = await post(
+      '/api/threads',
+      { equipmentId: equipment.id, title: 'Panne moteur', body: 'Ça démarre plus' },
+      alice.cookies,
+    );
+    expect(created.statusCode).toBe(201);
+    const thread = created.json() as { id: string; title: string; authorId: string };
+    expect(thread.authorId).toBe(alice.id);
 
-    const list = await get(`/api/equipments/${equipment.id}/messages`, bruno.cookies);
-    expect(list.statusCode).toBe(200);
-    expect((list.json() as unknown[]).length).toBe(1);
-
-    // Chloé n'est pas dans le cercle : elle ne peut pas participer.
-    const refused = await post('/api/messages', { equipmentId: equipment.id, body: 'Coucou' }, chloe.cookies);
+    // Chloé (hors cercle) ne peut pas ouvrir de fil.
+    const refused = await post('/api/threads', { equipmentId: equipment.id, title: 'X' }, chloe.cookies);
     expect(refused.statusCode).toBe(400);
 
-    // Seul l'auteur supprime.
-    const byOther = await app.inject({
-      method: 'DELETE',
+    // Liste des fils avec compteur de messages.
+    const threads = await get(`/api/equipments/${equipment.id}/threads`, bruno.cookies);
+    const summaries = threads.json() as { id: string; messageCount: number }[];
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]!.messageCount).toBe(1);
+
+    // Bruno répond.
+    const reply = await post('/api/messages', { threadId: thread.id, body: 'Vérifie la batterie' }, bruno.cookies);
+    expect(reply.statusCode).toBe(201);
+    const message = reply.json() as { id: string };
+
+    // Bruno édite son message.
+    const edited = await app.inject({
+      method: 'PUT',
       url: `/api/messages/${message.id}`,
+      payload: { body: 'Vérifie la batterie et le fusible' },
       cookies: bruno.cookies,
     });
-    expect(byOther.statusCode).toBe(401);
-    const byAuthor = await app.inject({ method: 'DELETE', url: `/api/messages/${message.id}`, cookies: alice.cookies });
-    expect(byAuthor.statusCode).toBe(204);
+    expect(edited.statusCode).toBe(200);
+    expect((edited.json() as { body: string; editedAt: string | null }).editedAt).not.toBeNull();
+
+    // Alice ne peut pas éditer le message de Bruno.
+    const editOther = await app.inject({
+      method: 'PUT',
+      url: `/api/messages/${message.id}`,
+      payload: { body: 'pirate' },
+      cookies: alice.cookies,
+    });
+    expect(editOther.statusCode).toBe(401);
+
+    // Les messages du fil (1er message + réponse).
+    const msgs = await get(`/api/threads/${thread.id}/messages`, alice.cookies);
+    expect((msgs.json() as unknown[]).length).toBe(2);
+
+    // Seul l'auteur supprime le fil : Bruno ne peut pas, Alice oui (cascade sur les messages).
+    const delByOther = await app.inject({ method: 'DELETE', url: `/api/threads/${thread.id}`, cookies: bruno.cookies });
+    expect(delByOther.statusCode).toBe(401);
+    const delByAuthor = await app.inject({
+      method: 'DELETE',
+      url: `/api/threads/${thread.id}`,
+      cookies: alice.cookies,
+    });
+    expect(delByAuthor.statusCode).toBe(204);
+    expect(((await get(`/api/equipments/${equipment.id}/threads`, alice.cookies)).json() as unknown[]).length).toBe(0);
   });
 });
 
 describe('API — notifications', () => {
+  async function openThread(equipmentId: string, cookies: Cookies) {
+    const res = await post('/api/threads', { equipmentId, title: 'Sujet' }, cookies);
+    return (res.json() as { id: string }).id;
+  }
+
   it('un message notifie le reste du cercle et se marque lu', async () => {
     const { equipment, alice, bruno } = await setupMembersAndEquipment();
-    await post('/api/messages', { equipmentId: equipment.id, body: 'Salut' }, alice.cookies);
+    const threadId = await openThread(equipment.id, alice.cookies);
+    await post('/api/messages', { threadId, body: 'Salut' }, alice.cookies);
 
+    // Ouverture du fil + message = 2 notifications pour Bruno.
     const count = await get('/api/notifications/unread-count', bruno.cookies);
-    expect((count.json() as { count: number }).count).toBe(1);
+    expect((count.json() as { count: number }).count).toBe(2);
     // L'auteur ne se notifie pas lui-même.
     expect(((await get('/api/notifications/unread-count', alice.cookies)).json() as { count: number }).count).toBe(0);
 
@@ -564,7 +610,7 @@ describe('API — notifications', () => {
 
     const read = await post(`/api/notifications/${notif.id}/read`, {}, bruno.cookies);
     expect(read.statusCode).toBe(204);
-    expect(((await get('/api/notifications/unread-count', bruno.cookies)).json() as { count: number }).count).toBe(0);
+    expect(((await get('/api/notifications/unread-count', bruno.cookies)).json() as { count: number }).count).toBe(1);
   });
 
   it('respecte les préférences (in-app désactivé ⇒ pas de notification)', async () => {
@@ -578,7 +624,8 @@ describe('API — notifications', () => {
     });
     expect(prefs.statusCode).toBe(200);
 
-    await post('/api/messages', { equipmentId: equipment.id, body: 'Silencieux' }, alice.cookies);
+    const threadId = await openThread(equipment.id, alice.cookies);
+    await post('/api/messages', { threadId, body: 'Silencieux' }, alice.cookies);
     expect(((await get('/api/notifications/unread-count', bruno.cookies)).json() as { count: number }).count).toBe(0);
   });
 
