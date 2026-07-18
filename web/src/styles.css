@@ -67,6 +67,9 @@ nav.tabs {
   border-bottom: 2px solid var(--border);
   margin-bottom: 1.25rem;
   overflow-x: auto;
+  /* Sans ceci, overflow-y prend la valeur « auto » (règle CSS) et le léger dépassement
+     vertical des onglets fait apparaître une barre de défilement verticale parasite. */
+  overflow-y: hidden;
 }
 
 nav.tabs button {
