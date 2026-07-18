@@ -8,6 +8,7 @@ import { ExpensesPage } from './pages/ExpensesPage';
 import { DiscussionsPage } from './pages/DiscussionsPage';
 import { BootstrapPage, InvitePage, LoginPage } from './pages/AuthPages';
 import { NotificationBell } from './components/NotificationBell';
+import { UserMenu } from './components/UserMenu';
 import { setupNativePush } from './notifications';
 
 type Tab = 'equipments' | 'calendar' | 'usage' | 'expenses' | 'discussions';
@@ -159,12 +160,7 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
         <h1>🚜 ShareMate</h1>
         <div className="who">
           <NotificationBell onNavigate={navigateTo} />
-          <span>
-            Connecté : <strong>{member.name}</strong>
-          </span>
-          <button className="ghost" onClick={() => void logout()}>
-            Déconnexion
-          </button>
+          <UserMenu member={member} onLogout={() => void logout()} />
         </div>
       </header>
 

@@ -740,6 +740,78 @@ th {
   width: 3rem;
 }
 
+/* --- Menu utilisateur (hamburger) --- */
+
+.usermenu {
+  position: relative;
+}
+
+.usermenu-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  background: none;
+  cursor: pointer;
+  padding: 0.3rem 0.6rem;
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.usermenu-button:hover {
+  border-color: var(--green);
+  color: var(--green-dark);
+}
+
+.usermenu-name {
+  font-weight: 600;
+}
+
+.usermenu-panel {
+  width: min(20rem, 90vw);
+}
+
+.usermenu-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.25rem 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.5rem;
+}
+
+.usermenu-head .muted {
+  font-size: 0.75rem;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0.6rem 0.5rem;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.menu-item:hover {
+  background: var(--green-light);
+  color: var(--green-dark);
+}
+
+.menu-item-danger:hover {
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
 /* --- Boutons (primaire + icônes) --- */
 
 .btn-primary {

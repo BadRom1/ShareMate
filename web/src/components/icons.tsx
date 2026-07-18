@@ -96,3 +96,33 @@ export function IconCheck(props: IconProps) {
     </svg>
   );
 }
+
+/** Menu hamburger (trois traits). */
+export function IconMenu(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M3 12h18M3 6h18M3 18h18" />
+    </svg>
+  );
+}
+
+/** Cadenas (changement de mot de passe). */
+export function IconLock(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3" y="11" width="18" height="11" rx="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  );
+}
+
+/** Déconnexion (porte + flèche sortante). */
+export function IconLogout(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <path d="m16 17 5-5-5-5" />
+      <path d="M21 12H9" />
+    </svg>
+  );
+}
