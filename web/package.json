@@ -8,13 +8,21 @@
     "generate-pwa-assets": "pwa-assets-generator",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "cap": "cap",
+    "cap:sync": "vite build && cap sync",
+    "cap:android": "vite build && cap sync android && cap open android"
   },
   "dependencies": {
+    "@capacitor/android": "^8.4.2",
+    "@capacitor/core": "^8.4.2",
+    "@capacitor/preferences": "^8.0.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.4.2",
     "@types/react": "^19.1.5",
     "@types/react-dom": "^19.1.5",
     "@vite-pwa/assets-generator": "^1.0.2",

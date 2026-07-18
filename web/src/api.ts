@@ -1,5 +1,18 @@
 /** Client HTTP de l'API ShareMate (adapter de présentation). */
 
+import { getToken, isNative, setToken } from './native';
+
+/**
+ * Base de l'API. Vide en web (même-origine, chemins relatifs `/api/...`) ; l'URL du backend
+ * distant en natif, injectée au build via `VITE_API_BASE_URL`.
+ */
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
+
+/** Résout un chemin servi par le backend (ex. `/uploads/x.jpg`) en URL affichable (absolue en natif). */
+export function assetUrl(path: string): string {
+  return `${API_BASE}${path}`;
+}
+
 export interface Member {
   id: string;
   name: string;
@@ -120,10 +133,22 @@ export function setUnauthorizedHandler(handler: (() => void) | null) {
   onUnauthorized = handler;
 }
 
+/** En-têtes communs : JSON si corps, et sur natif l'auth par Bearer + l'annonce du client. */
+function buildHeaders(hasBody: boolean): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (hasBody) headers['Content-Type'] = 'application/json';
+  if (isNative) {
+    headers['X-ShareMate-Client'] = 'native';
+    const token = getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    headers: options?.body ? { 'Content-Type': 'application/json' } : undefined,
+  const response = await fetch(`${API_BASE}${url}`, {
     ...options,
+    headers: { ...buildHeaders(Boolean(options?.body)), ...options?.headers },
   });
   if (response.status === 401 && !url.startsWith('/api/auth/')) {
     onUnauthorized?.();
@@ -142,16 +167,26 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+/** Requête d'auth : sur natif, capture le token renvoyé pour authentifier les appels suivants. */
+async function authRequest(url: string, options: RequestInit): Promise<{ member: Member }> {
+  const res = await request<{ member: Member; token?: string }>(url, options);
+  if (isNative && res.token) await setToken(res.token);
+  return { member: res.member };
+}
+
 export const api = {
   me: () => request<AuthState>('/api/auth/me'),
   bootstrap: (input: { name: string; email?: string; password: string }) =>
-    request<{ member: Member }>('/api/auth/bootstrap', { method: 'POST', body: JSON.stringify(input) }),
+    authRequest('/api/auth/bootstrap', { method: 'POST', body: JSON.stringify(input) }),
   login: (identifier: string, password: string) =>
-    request<{ member: Member }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ identifier, password }) }),
-  logout: () => request<void>('/api/auth/logout', { method: 'POST', body: JSON.stringify({}) }),
+    authRequest('/api/auth/login', { method: 'POST', body: JSON.stringify({ identifier, password }) }),
+  logout: async () => {
+    await request<void>('/api/auth/logout', { method: 'POST', body: JSON.stringify({}) });
+    await setToken(null);
+  },
   inviteInfo: (code: string) => request<{ memberName: string }>(`/api/auth/invites/${encodeURIComponent(code)}`),
   redeemInvite: (code: string, password: string) =>
-    request<{ member: Member }>(`/api/auth/invites/${encodeURIComponent(code)}/redeem`, {
+    authRequest(`/api/auth/invites/${encodeURIComponent(code)}/redeem`, {
       method: 'POST',
       body: JSON.stringify({ password }),
     }),
@@ -231,7 +266,12 @@ export const api = {
   uploadReceipt: async (file: File): Promise<string> => {
     const form = new FormData();
     form.append('file', file);
-    const response = await fetch('/api/uploads/receipts', { method: 'POST', body: form });
+    // Pas de Content-Type manuel : le navigateur pose la frontière multipart. On garde l'auth native.
+    const response = await fetch(`${API_BASE}/api/uploads/receipts`, {
+      method: 'POST',
+      body: form,
+      headers: buildHeaders(false),
+    });
     if (!response.ok) {
       const body = (await response.json().catch(() => ({}))) as { error?: string };
       throw new ApiError(body.error ?? "Échec de l'upload.", response.status);

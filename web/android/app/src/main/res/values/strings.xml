@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ShareMate</string>
+    <string name="title_activity_main">ShareMate</string>
+    <string name="package_name">app.sharemate.mobile</string>
+    <string name="custom_url_scheme">app.sharemate.mobile</string>
+</resources>

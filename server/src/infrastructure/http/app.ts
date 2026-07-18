@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
-import type { FastifyInstance, FastifyReply, FastifyServerOptions } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest, FastifyServerOptions } from 'fastify';
 import cookie from '@fastify/cookie';
+import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
@@ -68,6 +69,11 @@ export interface AppDependencies {
   uploadsDir?: string | null;
   /** Répertoire des fichiers statiques du front (null = API seule). */
   webDistDir?: string | null;
+  /**
+   * Origines autorisées en cross-origin (app native Capacitor). Vide = pas de CORS
+   * (le front web est servi en même-origine et n'en a pas besoin).
+   */
+  corsOrigins?: string[];
 }
 
 declare module 'fastify' {
@@ -83,13 +89,42 @@ declare module 'fastify' {
 
 const SESSION_COOKIE = 'sharemate_session';
 
+/** En-tête posé par l'app native pour recevoir le token de session dans le corps. */
+const CLIENT_HEADER = 'x-sharemate-client';
+
 /** Limite anti force-brute des routes d'authentification publiques. */
 const AUTH_RATE_LIMIT = { max: 10, timeWindow: '1 minute' };
+
+/**
+ * Token de session, depuis le cookie (web) ou l'en-tête `Authorization: Bearer` (app native,
+ * où les cookies cross-origin ne sont pas fiables en WebView).
+ */
+function sessionToken(request: FastifyRequest): string | undefined {
+  const cookieToken = request.cookies[SESSION_COOKIE];
+  if (cookieToken) return cookieToken;
+  const header = request.headers.authorization;
+  if (header?.startsWith('Bearer ')) {
+    const token = header.slice('Bearer '.length).trim();
+    if (token) return token;
+  }
+  return undefined;
+}
+
+/** L'app native s'annonce pour recevoir le token de session (le web reste sur cookie httpOnly). */
+function isNativeClient(request: FastifyRequest): boolean {
+  return request.headers[CLIENT_HEADER] === 'native';
+}
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
   const app = Fastify({ logger: deps.logger ?? false, trustProxy: deps.trustProxy ?? false });
 
+  const corsOrigins = deps.corsOrigins ?? [];
+  const corsEnabled = corsOrigins.length > 0;
+
   await app.register(helmet, {
+    // L'app native lit l'API en cross-origin : la politique par défaut (same-origin)
+    // bloquerait ces lectures. Relâché uniquement quand des origines CORS sont configurées.
+    crossOriginResourcePolicy: corsEnabled ? { policy: 'cross-origin' } : undefined,
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
@@ -107,6 +142,14 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     },
   });
   await app.register(cookie);
+  if (corsEnabled) {
+    // Auth par token Bearer côté natif : pas de cookie cross-origin, donc pas de `credentials`.
+    await app.register(cors, {
+      origin: corsOrigins,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', CLIENT_HEADER],
+    });
+  }
   // Chargé avant la déclaration des routes, sinon son hook onRoute ne s'applique pas.
   await app.register(rateLimit, { global: false });
 
@@ -141,6 +184,19 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     });
   }
 
+  /**
+   * Établit la session : cookie (web) et, pour l'app native, le token dans le corps pour
+   * qu'elle le stocke et le renvoie ensuite en `Authorization: Bearer`.
+   */
+  function authenticated(request: FastifyRequest, reply: FastifyReply, member: Member, session: AuthSession) {
+    setSessionCookie(reply, session);
+    const body: { member: ReturnType<typeof memberDto>; token?: string } = { member: memberDto(member) };
+    if (isNativeClient(request)) {
+      body.token = session.token;
+    }
+    return body;
+  }
+
   // Toute route /api/* ou /uploads/* exige une session, sauf celles marquées `config.public`.
   app.decorateRequest('authMember', null as unknown as Member);
   app.addHook('onRequest', async (request, reply) => {
@@ -151,7 +207,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     if (request.routeOptions?.config?.public) {
       return;
     }
-    const token = request.cookies[SESSION_COOKIE];
+    const token = sessionToken(request);
     const member = token ? await authService.authenticate(token) : null;
     if (!member) {
       return reply.status(401).send({ error: 'Authentification requise.' });
@@ -185,7 +241,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   // --- Authentification ---
 
   app.get('/api/auth/me', { config: { public: true } }, async (request) => {
-    const token = request.cookies[SESSION_COOKIE];
+    const token = sessionToken(request);
     const member = token ? await authService.authenticate(token) : null;
     return {
       member: member ? memberDto(member) : null,
@@ -198,8 +254,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     { config: { public: true, rateLimit: AUTH_RATE_LIMIT } },
     async (request, reply) => {
       const { member, session } = await authService.bootstrap(request.body);
-      setSessionCookie(reply, session);
-      return reply.status(201).send({ member: memberDto(member) });
+      return reply.status(201).send(authenticated(request, reply, member, session));
     },
   );
 
@@ -208,13 +263,12 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     { config: { public: true, rateLimit: AUTH_RATE_LIMIT } },
     async (request, reply) => {
       const { member, session } = await authService.login(request.body.identifier, request.body.password);
-      setSessionCookie(reply, session);
-      return reply.send({ member: memberDto(member) });
+      return reply.send(authenticated(request, reply, member, session));
     },
   );
 
   app.post('/api/auth/logout', async (request, reply) => {
-    const token = request.cookies[SESSION_COOKIE];
+    const token = sessionToken(request);
     if (token) {
       await authService.logout(token);
     }
@@ -236,8 +290,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     { config: { public: true, rateLimit: AUTH_RATE_LIMIT } },
     async (request, reply) => {
       const { member, session } = await authService.redeemInvite(request.params.code, request.body.password);
-      setSessionCookie(reply, session);
-      return reply.send({ member: memberDto(member) });
+      return reply.send(authenticated(request, reply, member, session));
     },
   );
 

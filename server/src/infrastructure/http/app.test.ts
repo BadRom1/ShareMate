@@ -414,3 +414,92 @@ describe('API — parcours complet du MVP', () => {
     expect(notFound.statusCode).toBe(404);
   });
 });
+
+describe('API — app native (token Bearer)', () => {
+  const NATIVE = { 'x-sharemate-client': 'native' };
+
+  it('login natif : le token est renvoyé dans le corps et authentifie via Authorization: Bearer', async () => {
+    await bootstrapAlice();
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { identifier: 'alice', password: PASSWORD },
+      headers: NATIVE,
+    });
+    expect(login.statusCode).toBe(200);
+    const token = (login.json() as { token?: string }).token;
+    expect(typeof token).toBe('string');
+
+    // Le token seul (sans cookie) suffit à authentifier une route protégée.
+    const protectedRes = await app.inject({
+      method: 'GET',
+      url: '/api/equipments',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(protectedRes.statusCode).toBe(200);
+  });
+
+  it('sans en-tête natif, le token n’est jamais exposé dans le corps (sécurité httpOnly du web)', async () => {
+    const res = await post('/api/auth/bootstrap', { name: 'Alice', password: PASSWORD });
+    expect(res.statusCode).toBe(201);
+    expect((res.json() as { token?: string }).token).toBeUndefined();
+  });
+
+  it('un Bearer invalide est rejeté en 401', async () => {
+    await bootstrapAlice();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/equipments',
+      headers: { authorization: 'Bearer jeton-bidon' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
+describe('API — CORS (origines de l’app native)', () => {
+  let corsApp: FastifyInstance;
+
+  beforeEach(async () => {
+    const db = openDatabase(':memory:');
+    corsApp = await buildApp({
+      members: new SqliteMemberRepository(db),
+      equipments: new SqliteEquipmentRepository(db),
+      reservations: new SqliteReservationRepository(db),
+      usageRecords: new SqliteUsageRecordRepository(db),
+      expenses: new SqliteExpenseRepository(db),
+      reimbursements: new SqliteReimbursementRepository(db),
+      credentials: new SqliteCredentialRepository(db),
+      sessions: new SqliteSessionRepository(db),
+      passwordHasher: new ScryptPasswordHasher(),
+      tokenGenerator: new CryptoTokenGenerator(),
+      idGenerator: new UuidGenerator(),
+      clock: new SystemClock(),
+      corsOrigins: ['https://localhost'],
+    });
+  });
+
+  afterEach(async () => {
+    await corsApp.close();
+  });
+
+  it('autorise une origine configurée (preflight + réponse)', async () => {
+    const preflight = await corsApp.inject({
+      method: 'OPTIONS',
+      url: '/api/health',
+      headers: { origin: 'https://localhost', 'access-control-request-method': 'GET' },
+    });
+    expect(preflight.headers['access-control-allow-origin']).toBe('https://localhost');
+
+    const res = await corsApp.inject({ method: 'GET', url: '/api/health', headers: { origin: 'https://localhost' } });
+    expect(res.headers['access-control-allow-origin']).toBe('https://localhost');
+  });
+
+  it('n’autorise pas une origine non configurée', async () => {
+    const res = await corsApp.inject({
+      method: 'GET',
+      url: '/api/health',
+      headers: { origin: 'https://pirate.example' },
+    });
+    expect(res.headers['access-control-allow-origin']).toBeUndefined();
+  });
+});

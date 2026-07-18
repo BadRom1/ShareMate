@@ -1,0 +1,107 @@
+name: Android
+
+# Build de l'app Android (APK debug toujours ; AAB release signé si un keystore est configuré).
+# Déclenchement manuel, ou automatique sur tag `v*`.
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: 'URL du backend (sinon la variable de dépôt VITE_API_BASE_URL est utilisée)'
+        required: false
+        type: string
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Entrée manuelle prioritaire, sinon variable de dépôt (Settings → Secrets and variables → Variables).
+  API_BASE_URL: ${{ github.event.inputs.api_base_url || vars.VITE_API_BASE_URL }}
+
+jobs:
+  build:
+    name: Build APK / AAB
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Vérifier l'URL d'API
+        run: |
+          if [ -z "${API_BASE_URL}" ]; then
+            echo "::error::VITE_API_BASE_URL manquant : définir la variable de dépôt VITE_API_BASE_URL ou passer api_base_url en entrée."
+            exit 1
+          fi
+          echo "Backend ciblé : ${API_BASE_URL}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - uses: android-actions/setup-android@v4
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Build front (web) vers le backend distant
+        env:
+          VITE_API_BASE_URL: ${{ env.API_BASE_URL }}
+        run: npm run build --workspace web
+
+      - name: Synchroniser le projet Capacitor
+        run: npm run cap --workspace web -- sync android
+
+      - name: Préparer le keystore de signature (si configuré)
+        id: keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "${KEYSTORE_B64}" ]; then
+            echo "${KEYSTORE_B64}" | base64 -d > "${RUNNER_TEMP}/release.keystore"
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Aucun keystore configuré : seul l'APK debug sera produit."
+          fi
+
+      - name: Build APK debug
+        working-directory: web/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sharemate-debug-apk
+          path: web/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Build AAB release signé
+        if: steps.keystore.outputs.present == 'true'
+        working-directory: web/android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # Numéro de build monotone exigé par le Play Store.
+          ANDROID_VERSION_CODE: ${{ github.run_number }}
+        run: ./gradlew --no-daemon bundleRelease
+
+      - uses: actions/upload-artifact@v4
+        if: steps.keystore.outputs.present == 'true'
+        with:
+          name: sharemate-release-aab
+          path: web/android/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error

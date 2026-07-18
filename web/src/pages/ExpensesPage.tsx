@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api } from '../api';
+import { api, assetUrl } from '../api';
 import type {
   Balance,
   Equipment,
@@ -412,7 +412,7 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
                       {x.receiptPath && (
                         <>
                           {' '}
-                          <a href={x.receiptPath} target="_blank" rel="noreferrer">
+                          <a href={assetUrl(x.receiptPath)} target="_blank" rel="noreferrer">
                             📎
                           </a>
                         </>

@@ -28,6 +28,11 @@ const uploadsDir = process.env.UPLOADS_DIR ?? path.join(dataDir, 'uploads');
 const webDistDir = process.env.WEB_DIST_DIR ?? path.resolve(here, '../../web/dist');
 const port = Number(process.env.PORT ?? 3000);
 const isProduction = process.env.NODE_ENV === 'production';
+// Origines cross-origin de l'app native (ex. "https://localhost,capacitor://localhost").
+const corsOrigins = (process.env.CORS_ORIGINS ?? '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 const db = openDatabase(databasePath);
 
@@ -50,6 +55,7 @@ const app = await buildApp({
   trustProxy: isProduction,
   uploadsDir,
   webDistDir,
+  corsOrigins,
 });
 
 // Arrêt propre (Railway envoie SIGTERM à chaque redéploiement).

@@ -53,7 +53,7 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 
 ```bash
 npm install
-npm test              # 157 tests (domaine, application, intégration SQLite + HTTP)
+npm test              # 171 tests (domaine, application, intégration SQLite + HTTP)
 npm run test:coverage # Tests + seuils de couverture (90 % lignes/fonctions, 85 % branches)
 npm run lint          # ESLint (frontières hexagonales + règles React hooks)
 npm run format        # Prettier (format:check en CI)
@@ -122,7 +122,56 @@ GitHub Actions :
 1. ~~**PWA** : manifest + service worker (Vite PWA), installable sur mobile.~~ ✅ Fait —
    `vite-plugin-pwa` (autoUpdate), manifest + icônes générées depuis `web/public/logo.svg`
    (`npm run generate-pwa-assets`), shell préchargé (offline), API en `NetworkFirst`.
-2. **Android puis iOS** : encapsulation Capacitor du front existant ; le domaine et l'API restent
-   inchangés (c'est l'intérêt de l'hexagone). Chantier principal : découpler `web/src/api.ts` du
-   même-origine et adapter l'auth cookies → CORS `SameSite=None` ou token Bearer.
+2. ~~**Android** : encapsulation Capacitor du front existant.~~ ✅ Fait — voir
+   [Application mobile](#application-mobile-android). **iOS** reste à ajouter (`cap add ios`,
+   buildable via un Mac ou un build cloud type Codemagic).
 3. Authentification légère (magic link), notifications de rappel d'entretien, multi-groupes.
+
+## Application mobile (Android)
+
+Le front web est empaqueté tel quel dans une app native via [Capacitor](https://capacitorjs.com)
+(projet dans `web/android`, `appId` `app.sharemate.mobile`). L'hexagone est intact : le serveur et
+l'API ne changent pas, l'app native tape simplement le backend distant.
+
+**Deux adaptations** rendent le web compatible du natif :
+
+- **Base d'API configurable** : en web les appels sont relatifs (`/api/...`, même-origine) ; en
+  natif ils visent `VITE_API_BASE_URL` (l'URL Railway), injectée au build.
+- **Auth par token** : les cookies cross-origin ne sont pas fiables en WebView. Le serveur accepte
+  donc le token de session aussi via `Authorization: Bearer` (le web reste sur cookie httpOnly), et
+  l'app le stocke dans le stockage natif (`@capacitor/preferences`). Activé par l'en-tête
+  `X-ShareMate-Client: native` que seul le client natif envoie.
+
+### Variables
+
+| Variable                 | Où          | Rôle                                                                       |
+| ------------------------ | ----------- | -------------------------------------------------------------------------- |
+| `VITE_API_BASE_URL`      | build web   | URL du backend pour l'app native (ex. `https://sharemate.up.railway.app`). |
+| `CORS_ORIGINS` (serveur) | env Railway | Origines autorisées, séparées par des virgules (ex. `https://localhost`).  |
+
+Côté Railway, ajouter la variable de service :
+
+```
+CORS_ORIGINS=https://localhost
+```
+
+(`https://localhost` est l'origine de la WebView Android ; ajouter `capacitor://localhost` le jour
+où iOS est ajouté.)
+
+### Construire l'APK / AAB
+
+**En CI (recommandé, aucun outil local)** : le workflow
+[`.github/workflows/android.yml`](.github/workflows/android.yml) build l'APK debug (et l'AAB release
+signé si un keystore est configuré) sur un runner Linux. Guide complet — clé de signature, secrets
+GitHub, publication Play Store — dans [docs/deploiement-android.md](docs/deploiement-android.md).
+
+**En local (alternative)** avec **Android Studio** (SDK + JDK), depuis `web/` :
+
+```bash
+VITE_API_BASE_URL=https://<ton-domaine-railway> npm run build --workspace web
+npm run cap --workspace web -- sync android
+npm run cap --workspace web -- open android   # puis Run / Build APK depuis l'IDE
+```
+
+Les icônes et le splash sont générés depuis `web/assets/` (sources vectorielles rasterisées) via
+`capacitor-assets generate --android`.
