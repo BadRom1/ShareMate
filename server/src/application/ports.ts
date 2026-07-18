@@ -6,6 +6,10 @@ import type { Reservation } from '../domain/reservation/reservation.js';
 import type { UsageRecord } from '../domain/usage/usage-record.js';
 import type { Expense } from '../domain/expense/expense.js';
 import type { Reimbursement } from '../domain/expense/reimbursement.js';
+import type { Message } from '../domain/discussion/message.js';
+import type { Notification } from '../domain/notification/notification.js';
+import type { NotificationPreference } from '../domain/notification/preference.js';
+import type { NotificationType } from '../domain/notification/notification-type.js';
 
 /** Ports de persistance — implémentés par la couche infrastructure. */
 
@@ -48,6 +52,55 @@ export interface ReimbursementRepository {
   save(reimbursement: Reimbursement): Promise<void>;
 }
 
+export interface MessageRepository {
+  findById(id: string): Promise<Message | null>;
+  /** Messages du fil de l'équipement, triés du plus ancien au plus récent. */
+  findByEquipmentId(equipmentId: string): Promise<Message[]>;
+  save(message: Message): Promise<void>;
+  delete(id: string): Promise<void>;
+}
+
+export interface NotificationRepository {
+  findById(id: string): Promise<Notification | null>;
+  findByRecipient(recipientId: string, options?: { unreadOnly?: boolean; limit?: number }): Promise<Notification[]>;
+  countUnread(recipientId: string): Promise<number>;
+  save(notification: Notification): Promise<void>;
+  markRead(id: string): Promise<void>;
+  markAllRead(recipientId: string): Promise<void>;
+}
+
+export interface NotificationPreferenceRepository {
+  findByMember(memberId: string): Promise<NotificationPreference[]>;
+  upsert(preference: NotificationPreference): Promise<void>;
+}
+
+/** Abonnement Web Push (PWA) : endpoint navigateur + clés de chiffrement. */
+export interface WebPushSubscription {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  memberId: string;
+}
+
+export interface PushSubscriptionRepository {
+  findByMember(memberId: string): Promise<WebPushSubscription[]>;
+  save(subscription: WebPushSubscription): Promise<void>;
+  deleteByEndpoint(endpoint: string): Promise<void>;
+}
+
+/** Jeton d'appareil FCM (app native). */
+export interface DeviceToken {
+  token: string;
+  memberId: string;
+  platform: string;
+}
+
+export interface DeviceTokenRepository {
+  findByMember(memberId: string): Promise<DeviceToken[]>;
+  save(token: DeviceToken): Promise<void>;
+  deleteByToken(token: string): Promise<void>;
+}
+
 export interface CredentialRepository {
   findByMemberId(memberId: string): Promise<MemberCredential | null>;
   findByInviteCode(code: string): Promise<MemberCredential | null>;
@@ -84,4 +137,44 @@ export interface TokenGenerator {
   inviteCode(): string;
   /** Empreinte non réversible d'un jeton, seule valeur persistée. */
   hash(token: string): string;
+}
+
+/** Charge utile poussée vers un appareil (Web Push ou FCM). */
+export interface PushPayload {
+  title: string;
+  body: string;
+  /** Chemin/route à ouvrir au clic (ex. `/?tab=discussions&equipment=e1`). */
+  link: string | null;
+}
+
+/** Endpoint dont l'envoi a échoué de façon définitive (abonnement à purger). */
+export interface FailedTarget {
+  /** `endpoint` pour Web Push, `token` pour FCM. */
+  id: string;
+}
+
+/**
+ * Port technique d'envoi de push. Abstrait `web-push` (Web Push VAPID) et `firebase-admin` (FCM).
+ * Retourne les cibles définitivement invalides pour que le service purge les abonnements morts.
+ */
+export interface PushSender {
+  sendWebPush(subscriptions: WebPushSubscription[], payload: PushPayload): Promise<FailedTarget[]>;
+  sendFcm(tokens: DeviceToken[], payload: PushPayload): Promise<FailedTarget[]>;
+}
+
+/** Événement à notifier, émis par les services producteurs. */
+export interface NotifyEvent {
+  type: NotificationType;
+  recipientIds: string[];
+  title: string;
+  body: string;
+  link?: string | null;
+}
+
+/**
+ * Port de notification : dépendance découplée des services producteurs (forum, dépenses…).
+ * Implémenté par `NotificationService`.
+ */
+export interface Notifier {
+  notify(event: NotifyEvent): Promise<void>;
 }

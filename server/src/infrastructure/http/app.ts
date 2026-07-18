@@ -22,14 +22,24 @@ import { ReservationService } from '../../application/reservation-service.js';
 import { UsageService } from '../../application/usage-service.js';
 import { ExpenseService } from '../../application/expense-service.js';
 import type { SplitInput } from '../../application/expense-service.js';
+import { DiscussionService } from '../../application/discussion-service.js';
+import { NotificationService } from '../../application/notification-service.js';
+import type { PreferenceUpdate } from '../../application/notification-service.js';
+import type { NotificationType } from '../../domain/notification/notification-type.js';
 import type {
   Clock,
   CredentialRepository,
+  DeviceTokenRepository,
   EquipmentRepository,
   ExpenseRepository,
   IdGenerator,
   MemberRepository,
+  MessageRepository,
+  NotificationPreferenceRepository,
+  NotificationRepository,
   PasswordHasher,
+  PushSender,
+  PushSubscriptionRepository,
   ReimbursementRepository,
   ReservationRepository,
   SessionRepository,
@@ -40,6 +50,9 @@ import {
   equipmentDto,
   expenseDto,
   memberDto,
+  messageDto,
+  notificationDto,
+  preferenceDto,
   reimbursementDto,
   reservationDto,
   reservationListDto,
@@ -53,6 +66,11 @@ export interface AppDependencies {
   usageRecords: UsageRecordRepository;
   expenses: ExpenseRepository;
   reimbursements: ReimbursementRepository;
+  messages: MessageRepository;
+  notifications: NotificationRepository;
+  notificationPreferences: NotificationPreferenceRepository;
+  pushSubscriptions: PushSubscriptionRepository;
+  deviceTokens: DeviceTokenRepository;
   credentials: CredentialRepository;
   sessions: SessionRepository;
   passwordHasher: PasswordHasher;
@@ -74,6 +92,10 @@ export interface AppDependencies {
    * (le front web est servi en même-origine et n'en a pas besoin).
    */
   corsOrigins?: string[];
+  /** Envoi de push (Web Push + FCM). Absent = push désactivé, seul le centre in-app fonctionne. */
+  pushSender?: PushSender;
+  /** Clé publique VAPID exposée au client pour l'abonnement Web Push (null si non configurée). */
+  vapidPublicKey?: string | null;
 }
 
 declare module 'fastify' {
@@ -153,6 +175,24 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   // Chargé avant la déclaration des routes, sinon son hook onRoute ne s'applique pas.
   await app.register(rateLimit, { global: false });
 
+  const noopPushSender: PushSender = {
+    async sendWebPush() {
+      return [];
+    },
+    async sendFcm() {
+      return [];
+    },
+  };
+  const notificationService = new NotificationService(
+    deps.notifications,
+    deps.notificationPreferences,
+    deps.pushSubscriptions,
+    deps.deviceTokens,
+    deps.pushSender ?? noopPushSender,
+    deps.idGenerator,
+    deps.clock,
+  );
+
   const authService = new AuthService(
     deps.members,
     deps.credentials,
@@ -164,14 +204,37 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   );
   const memberService = new MemberService(deps.members, deps.idGenerator);
   const equipmentService = new EquipmentService(deps.equipments, deps.members, deps.idGenerator);
-  const reservationService = new ReservationService(deps.reservations, deps.equipments, deps.idGenerator, deps.clock);
-  const usageService = new UsageService(deps.usageRecords, deps.equipments, deps.idGenerator, deps.clock);
+  const reservationService = new ReservationService(
+    deps.reservations,
+    deps.equipments,
+    deps.idGenerator,
+    deps.clock,
+    deps.members,
+    notificationService,
+  );
+  const usageService = new UsageService(
+    deps.usageRecords,
+    deps.equipments,
+    deps.idGenerator,
+    deps.clock,
+    notificationService,
+  );
   const expenseService = new ExpenseService(
     deps.expenses,
     deps.reimbursements,
     deps.equipments,
     deps.reservations,
     deps.idGenerator,
+    deps.members,
+    notificationService,
+  );
+  const discussionService = new DiscussionService(
+    deps.messages,
+    deps.equipments,
+    deps.members,
+    deps.idGenerator,
+    deps.clock,
+    notificationService,
   );
 
   function setSessionCookie(reply: FastifyReply, session: AuthSession): void {
@@ -531,6 +594,110 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       toMemberId: t.toMemberId,
       amountEuros: t.amountCents / 100,
     }));
+  });
+
+  // --- Discussions par équipement ---
+
+  app.get<{ Params: { id: string } }>('/api/equipments/:id/messages', async (request) => {
+    const list = await discussionService.listByEquipment(request.params.id);
+    return list.map(messageDto);
+  });
+
+  app.post<{ Body: { equipmentId: string; body: string } }>('/api/messages', async (request, reply) => {
+    const message = await discussionService.post({
+      equipmentId: request.body.equipmentId,
+      authorId: request.authMember.id,
+      body: request.body.body,
+    });
+    return reply.status(201).send(messageDto(message));
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/messages/:id', async (request, reply) => {
+    await discussionService.delete(request.params.id, request.authMember.id);
+    return reply.status(204).send();
+  });
+
+  // --- Notifications ---
+
+  app.get<{ Querystring: { unread?: string } }>('/api/notifications', async (request) => {
+    const list = await notificationService.list(request.authMember.id, {
+      unreadOnly: request.query.unread === '1',
+    });
+    return list.map(notificationDto);
+  });
+
+  app.get('/api/notifications/unread-count', async (request) => {
+    return { count: await notificationService.unreadCount(request.authMember.id) };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/notifications/:id/read', async (request, reply) => {
+    await notificationService.markRead(request.params.id, request.authMember.id);
+    return reply.status(204).send();
+  });
+
+  app.post('/api/notifications/read-all', async (request, reply) => {
+    await notificationService.markAllRead(request.authMember.id);
+    return reply.status(204).send();
+  });
+
+  app.get('/api/notifications/preferences', async (request) => {
+    const prefs = await notificationService.getPreferences(request.authMember.id);
+    return prefs.map(preferenceDto);
+  });
+
+  app.put<{ Body: { preferences: { type: NotificationType; inApp: boolean; push: boolean }[] } }>(
+    '/api/notifications/preferences',
+    async (request, reply) => {
+      const updates: PreferenceUpdate[] = request.body.preferences ?? [];
+      await notificationService.updatePreferences(request.authMember.id, updates);
+      const prefs = await notificationService.getPreferences(request.authMember.id);
+      return reply.send(prefs.map(preferenceDto));
+    },
+  );
+
+  app.get('/api/notifications/vapid-public-key', async () => {
+    return { publicKey: deps.vapidPublicKey ?? null };
+  });
+
+  app.post<{ Body: { endpoint: string; keys: { p256dh: string; auth: string } } }>(
+    '/api/notifications/subscriptions',
+    async (request, reply) => {
+      const { endpoint, keys } = request.body;
+      if (!endpoint || !keys?.p256dh || !keys?.auth) {
+        return reply.status(400).send({ error: 'Abonnement Web Push incomplet.' });
+      }
+      await notificationService.subscribeWebPush(request.authMember.id, {
+        endpoint,
+        p256dh: keys.p256dh,
+        auth: keys.auth,
+      });
+      return reply.status(201).send({ status: 'ok' });
+    },
+  );
+
+  app.delete<{ Body: { endpoint: string } }>('/api/notifications/subscriptions', async (request, reply) => {
+    await notificationService.unsubscribeWebPush(request.body.endpoint);
+    return reply.status(204).send();
+  });
+
+  app.post<{ Body: { token: string; platform?: string } }>(
+    '/api/notifications/device-tokens',
+    async (request, reply) => {
+      if (!request.body.token) {
+        return reply.status(400).send({ error: 'Jeton d’appareil manquant.' });
+      }
+      await notificationService.registerDeviceToken(
+        request.authMember.id,
+        request.body.token,
+        request.body.platform ?? 'android',
+      );
+      return reply.status(201).send({ status: 'ok' });
+    },
+  );
+
+  app.delete<{ Body: { token: string } }>('/api/notifications/device-tokens', async (request, reply) => {
+    await notificationService.unregisterDeviceToken(request.body.token);
+    return reply.status(204).send();
   });
 
   // --- Upload de justificatifs ---

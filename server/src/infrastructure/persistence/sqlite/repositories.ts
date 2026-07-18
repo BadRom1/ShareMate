@@ -11,15 +11,26 @@ import { Money } from '../../../domain/shared/money.js';
 import { TimeRange } from '../../../domain/shared/time-range.js';
 import { MemberCredential } from '../../../domain/auth/credential.js';
 import type { Session } from '../../../domain/auth/session.js';
+import { Message } from '../../../domain/discussion/message.js';
+import { Notification } from '../../../domain/notification/notification.js';
+import { NotificationPreference } from '../../../domain/notification/preference.js';
+import type { NotificationType } from '../../../domain/notification/notification-type.js';
 import type {
   CredentialRepository,
+  DeviceToken,
+  DeviceTokenRepository,
   EquipmentRepository,
   ExpenseRepository,
   MemberRepository,
+  MessageRepository,
+  NotificationPreferenceRepository,
+  NotificationRepository,
+  PushSubscriptionRepository,
   ReimbursementRepository,
   ReservationRepository,
   SessionRepository,
   UsageRecordRepository,
+  WebPushSubscription,
 } from '../../../application/ports.js';
 
 export class SqliteMemberRepository implements MemberRepository {
@@ -457,5 +468,230 @@ export class SqliteReimbursementRepository implements ReimbursementRepository {
         reimbursement.date.toISOString(),
         reimbursement.notes,
       );
+  }
+}
+
+interface MessageRow {
+  id: string;
+  equipment_id: string;
+  author_id: string;
+  body: string;
+  created_at: string;
+  edited_at: string | null;
+}
+
+export class SqliteMessageRepository implements MessageRepository {
+  constructor(private readonly db: SqliteDb) {}
+
+  private toEntity(row: MessageRow): Message {
+    return Message.create({
+      id: row.id,
+      equipmentId: row.equipment_id,
+      authorId: row.author_id,
+      body: row.body,
+      createdAt: new Date(row.created_at),
+      editedAt: row.edited_at ? new Date(row.edited_at) : null,
+    });
+  }
+
+  async findById(id: string): Promise<Message | null> {
+    const row = this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id) as MessageRow | undefined;
+    return row ? this.toEntity(row) : null;
+  }
+
+  async findByEquipmentId(equipmentId: string): Promise<Message[]> {
+    const rows = this.db
+      .prepare('SELECT * FROM messages WHERE equipment_id = ? ORDER BY created_at')
+      .all(equipmentId) as MessageRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
+  async save(message: Message): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO messages (id, equipment_id, author_id, body, created_at, edited_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        message.id,
+        message.equipmentId,
+        message.authorId,
+        message.body,
+        message.createdAt.toISOString(),
+        message.editedAt ? message.editedAt.toISOString() : null,
+      );
+  }
+
+  async delete(id: string): Promise<void> {
+    this.db.prepare('DELETE FROM messages WHERE id = ?').run(id);
+  }
+}
+
+interface NotificationRow {
+  id: string;
+  recipient_id: string;
+  type: string;
+  title: string;
+  body: string;
+  link: string | null;
+  created_at: string;
+  read_at: string | null;
+}
+
+export class SqliteNotificationRepository implements NotificationRepository {
+  constructor(private readonly db: SqliteDb) {}
+
+  private toEntity(row: NotificationRow): Notification {
+    return Notification.create({
+      id: row.id,
+      recipientId: row.recipient_id,
+      type: row.type as NotificationType,
+      title: row.title,
+      body: row.body,
+      link: row.link,
+      createdAt: new Date(row.created_at),
+      readAt: row.read_at ? new Date(row.read_at) : null,
+    });
+  }
+
+  async findById(id: string): Promise<Notification | null> {
+    const row = this.db.prepare('SELECT * FROM notifications WHERE id = ?').get(id) as NotificationRow | undefined;
+    return row ? this.toEntity(row) : null;
+  }
+
+  async findByRecipient(
+    recipientId: string,
+    options?: { unreadOnly?: boolean; limit?: number },
+  ): Promise<Notification[]> {
+    const clause = options?.unreadOnly ? 'AND read_at IS NULL' : '';
+    const limit = options?.limit ?? 100;
+    const rows = this.db
+      .prepare(`SELECT * FROM notifications WHERE recipient_id = ? ${clause} ORDER BY created_at DESC LIMIT ?`)
+      .all(recipientId, limit) as NotificationRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
+  async countUnread(recipientId: string): Promise<number> {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS count FROM notifications WHERE recipient_id = ? AND read_at IS NULL')
+      .get(recipientId) as { count: number };
+    return row.count;
+  }
+
+  async save(notification: Notification): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO notifications (id, recipient_id, type, title, body, link, created_at, read_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        notification.id,
+        notification.recipientId,
+        notification.type,
+        notification.title,
+        notification.body,
+        notification.link,
+        notification.createdAt.toISOString(),
+        notification.readAt ? notification.readAt.toISOString() : null,
+      );
+  }
+
+  async markRead(id: string): Promise<void> {
+    this.db
+      .prepare('UPDATE notifications SET read_at = ? WHERE id = ? AND read_at IS NULL')
+      .run(new Date().toISOString(), id);
+  }
+
+  async markAllRead(recipientId: string): Promise<void> {
+    this.db
+      .prepare('UPDATE notifications SET read_at = ? WHERE recipient_id = ? AND read_at IS NULL')
+      .run(new Date().toISOString(), recipientId);
+  }
+}
+
+interface PreferenceRow {
+  member_id: string;
+  type: string;
+  in_app: number;
+  push: number;
+}
+
+export class SqliteNotificationPreferenceRepository implements NotificationPreferenceRepository {
+  constructor(private readonly db: SqliteDb) {}
+
+  async findByMember(memberId: string): Promise<NotificationPreference[]> {
+    const rows = this.db
+      .prepare('SELECT * FROM notification_preferences WHERE member_id = ?')
+      .all(memberId) as PreferenceRow[];
+    return rows.map((r) =>
+      NotificationPreference.create({
+        memberId: r.member_id,
+        type: r.type as NotificationType,
+        inApp: r.in_app === 1,
+        push: r.push === 1,
+      }),
+    );
+  }
+
+  async upsert(preference: NotificationPreference): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO notification_preferences (member_id, type, in_app, push) VALUES (?, ?, ?, ?)
+         ON CONFLICT(member_id, type) DO UPDATE SET in_app = excluded.in_app, push = excluded.push`,
+      )
+      .run(preference.memberId, preference.type, preference.inApp ? 1 : 0, preference.push ? 1 : 0);
+  }
+}
+
+export class SqlitePushSubscriptionRepository implements PushSubscriptionRepository {
+  constructor(private readonly db: SqliteDb) {}
+
+  async findByMember(memberId: string): Promise<WebPushSubscription[]> {
+    const rows = this.db.prepare('SELECT * FROM push_subscriptions WHERE member_id = ?').all(memberId) as {
+      endpoint: string;
+      member_id: string;
+      p256dh: string;
+      auth: string;
+    }[];
+    return rows.map((r) => ({ endpoint: r.endpoint, memberId: r.member_id, p256dh: r.p256dh, auth: r.auth }));
+  }
+
+  async save(subscription: WebPushSubscription): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO push_subscriptions (endpoint, member_id, p256dh, auth) VALUES (?, ?, ?, ?)
+         ON CONFLICT(endpoint) DO UPDATE SET member_id = excluded.member_id, p256dh = excluded.p256dh, auth = excluded.auth`,
+      )
+      .run(subscription.endpoint, subscription.memberId, subscription.p256dh, subscription.auth);
+  }
+
+  async deleteByEndpoint(endpoint: string): Promise<void> {
+    this.db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint);
+  }
+}
+
+export class SqliteDeviceTokenRepository implements DeviceTokenRepository {
+  constructor(private readonly db: SqliteDb) {}
+
+  async findByMember(memberId: string): Promise<DeviceToken[]> {
+    const rows = this.db.prepare('SELECT * FROM device_tokens WHERE member_id = ?').all(memberId) as {
+      token: string;
+      member_id: string;
+      platform: string;
+    }[];
+    return rows.map((r) => ({ token: r.token, memberId: r.member_id, platform: r.platform }));
+  }
+
+  async save(token: DeviceToken): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO device_tokens (token, member_id, platform) VALUES (?, ?, ?)
+         ON CONFLICT(token) DO UPDATE SET member_id = excluded.member_id, platform = excluded.platform`,
+      )
+      .run(token.token, token.memberId, token.platform);
+  }
+
+  async deleteByToken(token: string): Promise<void> {
+    this.db.prepare('DELETE FROM device_tokens WHERE token = ?').run(token);
   }
 }

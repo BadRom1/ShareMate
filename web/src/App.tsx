@@ -5,15 +5,19 @@ import { EquipmentsPage } from './pages/EquipmentsPage';
 import { CalendarPage } from './pages/CalendarPage';
 import { UsagePage } from './pages/UsagePage';
 import { ExpensesPage } from './pages/ExpensesPage';
+import { DiscussionsPage } from './pages/DiscussionsPage';
 import { BootstrapPage, InvitePage, LoginPage } from './pages/AuthPages';
+import { NotificationBell } from './components/NotificationBell';
+import { setupNativePush } from './notifications';
 
-type Tab = 'equipments' | 'calendar' | 'usage' | 'expenses';
+type Tab = 'equipments' | 'calendar' | 'usage' | 'expenses' | 'discussions';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'equipments', label: 'Équipements' },
   { id: 'calendar', label: 'Calendrier' },
   { id: 'usage', label: 'Usage & entretien' },
   { id: 'expenses', label: 'Dépenses & soldes' },
+  { id: 'discussions', label: 'Discussions' },
 ];
 
 type Auth =
@@ -81,11 +85,27 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
   const [members, setMembers] = useState<Member[] | null>(null);
   const [tab, setTab] = useState<Tab>('equipments');
   const [usageEquipmentId, setUsageEquipmentId] = useState<string | null>(null);
+  const [discussionEquipmentId, setDiscussionEquipmentId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const openUsageFor = useCallback((equipmentId: string) => {
     setUsageEquipmentId(equipmentId);
     setTab('usage');
+  }, []);
+
+  /** Navigue depuis un lien de notification (`/?tab=discussions&equipment=e1`). */
+  const navigateTo = useCallback((link: string) => {
+    try {
+      const url = new URL(link, window.location.origin);
+      const target = url.searchParams.get('tab') as Tab | null;
+      const equipment = url.searchParams.get('equipment');
+      if (!target || !TABS.some((t) => t.id === target)) return;
+      if (target === 'usage' && equipment) setUsageEquipmentId(equipment);
+      if (target === 'discussions' && equipment) setDiscussionEquipmentId(equipment);
+      setTab(target);
+    } catch {
+      /* lien invalide */
+    }
   }, []);
 
   const loadMembers = useCallback(async () => {
@@ -99,6 +119,23 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
   useEffect(() => {
     void loadMembers();
   }, [loadMembers]);
+
+  // Deep link initial (ouverture via un lien de notification).
+  useEffect(() => {
+    if (window.location.search.includes('tab=')) navigateTo(window.location.href);
+  }, [navigateTo]);
+
+  // Push natif (FCM) + clics de notification Web Push relayés par le service worker.
+  useEffect(() => {
+    void setupNativePush(navigateTo);
+    const sw = navigator.serviceWorker;
+    if (!sw) return;
+    const onMessage = (e: MessageEvent) => {
+      if (e.data?.type === 'notification-click' && typeof e.data.link === 'string') navigateTo(e.data.link);
+    };
+    sw.addEventListener('message', onMessage);
+    return () => sw.removeEventListener('message', onMessage);
+  }, [navigateTo]);
 
   async function logout() {
     try {
@@ -117,6 +154,7 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
       <header className="topbar">
         <h1>🚜 ShareMate</h1>
         <div className="who">
+          <NotificationBell onNavigate={navigateTo} />
           <span>
             Connecté : <strong>{member.name}</strong>
           </span>
@@ -150,6 +188,9 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
         <UsagePage members={members} currentMemberId={member.id} initialEquipmentId={usageEquipmentId} />
       )}
       {tab === 'expenses' && <ExpensesPage members={members} currentMemberId={member.id} />}
+      {tab === 'discussions' && (
+        <DiscussionsPage members={members} currentMemberId={member.id} initialEquipmentId={discussionEquipmentId} />
+      )}
     </>
   );
 }

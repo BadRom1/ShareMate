@@ -5,6 +5,9 @@ import { conflictMap } from '../../domain/reservation/reservation-conflict.js';
 import type { UsageRecord } from '../../domain/usage/usage-record.js';
 import type { Expense, SplitRule } from '../../domain/expense/expense.js';
 import type { Reimbursement } from '../../domain/expense/reimbursement.js';
+import type { Message } from '../../domain/discussion/message.js';
+import type { Notification } from '../../domain/notification/notification.js';
+import type { NotificationPreference } from '../../domain/notification/preference.js';
 
 /** Mappers entité → JSON de l'API. */
 
@@ -94,4 +97,31 @@ export function reimbursementDto(r: Reimbursement) {
     date: r.date.toISOString(),
     notes: r.notes,
   };
+}
+
+export function messageDto(m: Message) {
+  return {
+    id: m.id,
+    equipmentId: m.equipmentId,
+    authorId: m.authorId,
+    body: m.body,
+    createdAt: m.createdAt.toISOString(),
+    editedAt: m.editedAt ? m.editedAt.toISOString() : null,
+  };
+}
+
+export function notificationDto(n: Notification) {
+  return {
+    id: n.id,
+    type: n.type,
+    title: n.title,
+    body: n.body,
+    link: n.link,
+    createdAt: n.createdAt.toISOString(),
+    readAt: n.readAt ? n.readAt.toISOString() : null,
+  };
+}
+
+export function preferenceDto(p: NotificationPreference) {
+  return { type: p.type, inApp: p.inApp, push: p.push };
 }

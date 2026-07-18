@@ -34,6 +34,8 @@ export default defineConfig({
       workbox: {
         // Le shell applicatif est préchargé ; l'app démarre donc hors-ligne.
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
+        // Handlers Web Push (push + notificationclick) ajoutés au service worker généré.
+        importScripts: ['push-sw.js'],
         // Les routes non-API retombent sur index.html (SPA).
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//, /^\/uploads\//],

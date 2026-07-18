@@ -3,7 +3,7 @@ import { computeMaintenanceStatus } from '../domain/usage/maintenance-alert.js';
 import type { MaintenanceStatus } from '../domain/usage/maintenance-alert.js';
 import { computeDurations } from '../domain/usage/usage-duration.js';
 import { DomainError, NotFoundError } from '../domain/shared/domain-error.js';
-import type { Clock, EquipmentRepository, IdGenerator, UsageRecordRepository } from './ports.js';
+import type { Clock, EquipmentRepository, IdGenerator, Notifier, UsageRecordRepository } from './ports.js';
 
 export interface RecordUsageInput {
   equipmentId: string;
@@ -29,6 +29,7 @@ export class UsageService {
     private readonly equipments: EquipmentRepository,
     private readonly idGenerator: IdGenerator,
     private readonly clock: Clock,
+    private readonly notifier?: Notifier,
   ) {}
 
   async recordUsage(input: RecordUsageInput): Promise<UsageEntry> {
@@ -57,7 +58,22 @@ export class UsageService {
       notes: input.notes ?? null,
       isMaintenance: input.isMaintenance ?? false,
     });
+    const statusBefore = computeMaintenanceStatus(equipment, existing);
     await this.usageRecords.save(record);
+
+    if (this.notifier) {
+      const statusAfter = computeMaintenanceStatus(equipment, [...existing, record]);
+      // Notifier uniquement au passage en alerte, pas à chaque relevé au-dessus du seuil.
+      if (!statusBefore.alert && statusAfter.alert) {
+        await this.notifier.notify({
+          type: 'MAINTENANCE_ALERT',
+          recipientIds: [...equipment.memberIds],
+          title: `🔧 Entretien : ${equipment.name}`,
+          body: `Le seuil d'entretien est atteint (${statusAfter.unitsSinceMaintenance ?? '?'} ${equipment.meterUnit === 'HOURS' ? 'h' : 'km'} depuis le dernier entretien).`,
+          link: `/?tab=usage&equipment=${equipment.id}`,
+        });
+      }
+    }
     return { record, duration: lastReading === null ? null : record.meterReading - lastReading };
   }
 

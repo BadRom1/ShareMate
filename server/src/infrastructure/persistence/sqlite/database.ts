@@ -119,5 +119,50 @@ function migrate(db: SqliteDb): void {
       member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
       expires_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      equipment_id TEXT NOT NULL REFERENCES equipments(id) ON DELETE CASCADE,
+      author_id TEXT NOT NULL REFERENCES members(id),
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      edited_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_messages_equipment ON messages(equipment_id);
+
+    CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY,
+      recipient_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      link TEXT,
+      created_at TEXT NOT NULL,
+      read_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications(recipient_id);
+
+    CREATE TABLE IF NOT EXISTS notification_preferences (
+      member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      in_app INTEGER NOT NULL DEFAULT 1,
+      push INTEGER NOT NULL DEFAULT 1,
+      PRIMARY KEY (member_id, type)
+    );
+
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      endpoint TEXT PRIMARY KEY,
+      member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_push_subscriptions_member ON push_subscriptions(member_id);
+
+    CREATE TABLE IF NOT EXISTS device_tokens (
+      token TEXT PRIMARY KEY,
+      member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+      platform TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_device_tokens_member ON device_tokens(member_id);
   `);
 }

@@ -3,9 +3,14 @@ import type { FastifyInstance } from 'fastify';
 import { openDatabase } from '../persistence/sqlite/database.js';
 import {
   SqliteCredentialRepository,
+  SqliteDeviceTokenRepository,
   SqliteEquipmentRepository,
   SqliteExpenseRepository,
   SqliteMemberRepository,
+  SqliteMessageRepository,
+  SqliteNotificationPreferenceRepository,
+  SqliteNotificationRepository,
+  SqlitePushSubscriptionRepository,
   SqliteReimbursementRepository,
   SqliteReservationRepository,
   SqliteSessionRepository,
@@ -28,6 +33,11 @@ beforeEach(async () => {
     usageRecords: new SqliteUsageRecordRepository(db),
     expenses: new SqliteExpenseRepository(db),
     reimbursements: new SqliteReimbursementRepository(db),
+    messages: new SqliteMessageRepository(db),
+    notifications: new SqliteNotificationRepository(db),
+    notificationPreferences: new SqliteNotificationPreferenceRepository(db),
+    pushSubscriptions: new SqlitePushSubscriptionRepository(db),
+    deviceTokens: new SqliteDeviceTokenRepository(db),
     credentials: new SqliteCredentialRepository(db),
     sessions: new SqliteSessionRepository(db),
     passwordHasher: new ScryptPasswordHasher(),
@@ -468,6 +478,11 @@ describe('API — CORS (origines de l’app native)', () => {
       usageRecords: new SqliteUsageRecordRepository(db),
       expenses: new SqliteExpenseRepository(db),
       reimbursements: new SqliteReimbursementRepository(db),
+      messages: new SqliteMessageRepository(db),
+      notifications: new SqliteNotificationRepository(db),
+      notificationPreferences: new SqliteNotificationPreferenceRepository(db),
+      pushSubscriptions: new SqlitePushSubscriptionRepository(db),
+      deviceTokens: new SqliteDeviceTokenRepository(db),
       credentials: new SqliteCredentialRepository(db),
       sessions: new SqliteSessionRepository(db),
       passwordHasher: new ScryptPasswordHasher(),
@@ -501,5 +516,76 @@ describe('API — CORS (origines de l’app native)', () => {
       headers: { origin: 'https://pirate.example' },
     });
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
+  });
+});
+
+describe('API — discussions par équipement', () => {
+  it('poste, liste et supprime un message ; le hors-cercle est refusé', async () => {
+    const { equipment, alice, bruno, chloe } = await setupMembersAndEquipment();
+
+    const posted = await post('/api/messages', { equipmentId: equipment.id, body: 'Bonjour' }, alice.cookies);
+    expect(posted.statusCode).toBe(201);
+    const message = posted.json() as { id: string; authorId: string; body: string };
+    expect(message.authorId).toBe(alice.id);
+
+    const list = await get(`/api/equipments/${equipment.id}/messages`, bruno.cookies);
+    expect(list.statusCode).toBe(200);
+    expect((list.json() as unknown[]).length).toBe(1);
+
+    // Chloé n'est pas dans le cercle : elle ne peut pas participer.
+    const refused = await post('/api/messages', { equipmentId: equipment.id, body: 'Coucou' }, chloe.cookies);
+    expect(refused.statusCode).toBe(400);
+
+    // Seul l'auteur supprime.
+    const byOther = await app.inject({
+      method: 'DELETE',
+      url: `/api/messages/${message.id}`,
+      cookies: bruno.cookies,
+    });
+    expect(byOther.statusCode).toBe(401);
+    const byAuthor = await app.inject({ method: 'DELETE', url: `/api/messages/${message.id}`, cookies: alice.cookies });
+    expect(byAuthor.statusCode).toBe(204);
+  });
+});
+
+describe('API — notifications', () => {
+  it('un message notifie le reste du cercle et se marque lu', async () => {
+    const { equipment, alice, bruno } = await setupMembersAndEquipment();
+    await post('/api/messages', { equipmentId: equipment.id, body: 'Salut' }, alice.cookies);
+
+    const count = await get('/api/notifications/unread-count', bruno.cookies);
+    expect((count.json() as { count: number }).count).toBe(1);
+    // L'auteur ne se notifie pas lui-même.
+    expect(((await get('/api/notifications/unread-count', alice.cookies)).json() as { count: number }).count).toBe(0);
+
+    const list = await get('/api/notifications', bruno.cookies);
+    const notif = (list.json() as { id: string; type: string }[])[0]!;
+    expect(notif.type).toBe('MESSAGE_POSTED');
+
+    const read = await post(`/api/notifications/${notif.id}/read`, {}, bruno.cookies);
+    expect(read.statusCode).toBe(204);
+    expect(((await get('/api/notifications/unread-count', bruno.cookies)).json() as { count: number }).count).toBe(0);
+  });
+
+  it('respecte les préférences (in-app désactivé ⇒ pas de notification)', async () => {
+    const { equipment, alice, bruno } = await setupMembersAndEquipment();
+
+    const prefs = await app.inject({
+      method: 'PUT',
+      url: '/api/notifications/preferences',
+      payload: { preferences: [{ type: 'MESSAGE_POSTED', inApp: false, push: false }] },
+      cookies: bruno.cookies,
+    });
+    expect(prefs.statusCode).toBe(200);
+
+    await post('/api/messages', { equipmentId: equipment.id, body: 'Silencieux' }, alice.cookies);
+    expect(((await get('/api/notifications/unread-count', bruno.cookies)).json() as { count: number }).count).toBe(0);
+  });
+
+  it('expose la clé publique VAPID (null si non configurée)', async () => {
+    const alice = await bootstrapAlice();
+    const res = await get('/api/notifications/vapid-public-key', alice.cookies);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ publicKey: null });
   });
 });

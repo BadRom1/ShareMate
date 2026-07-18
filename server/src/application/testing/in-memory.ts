@@ -1,16 +1,24 @@
 import type {
   Clock,
   CredentialRepository,
+  DeviceToken,
+  DeviceTokenRepository,
   EquipmentRepository,
   ExpenseRepository,
   IdGenerator,
   MemberRepository,
+  MessageRepository,
+  NotificationPreferenceRepository,
+  NotificationRepository,
   PasswordHasher,
+  PushSender,
+  PushSubscriptionRepository,
   ReimbursementRepository,
   ReservationRepository,
   SessionRepository,
   TokenGenerator,
   UsageRecordRepository,
+  WebPushSubscription,
 } from '../ports.js';
 import type { Member } from '../../domain/member/member.js';
 import type { MemberCredential } from '../../domain/auth/credential.js';
@@ -20,6 +28,9 @@ import type { Reservation } from '../../domain/reservation/reservation.js';
 import type { UsageRecord } from '../../domain/usage/usage-record.js';
 import type { Expense } from '../../domain/expense/expense.js';
 import type { Reimbursement } from '../../domain/expense/reimbursement.js';
+import type { Message } from '../../domain/discussion/message.js';
+import type { Notification } from '../../domain/notification/notification.js';
+import type { NotificationPreference } from '../../domain/notification/preference.js';
 
 /** Adapters in-memory pour les tests (doubles des ports de persistance). */
 
@@ -107,6 +118,102 @@ export class InMemoryReimbursementRepository implements ReimbursementRepository 
   }
   async save(reimbursement: Reimbursement) {
     this.items.set(reimbursement.id, reimbursement);
+  }
+}
+
+export class InMemoryMessageRepository implements MessageRepository {
+  private items = new Map<string, Message>();
+  async findById(id: string) {
+    return this.items.get(id) ?? null;
+  }
+  async findByEquipmentId(equipmentId: string) {
+    return [...this.items.values()]
+      .filter((m) => m.equipmentId === equipmentId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  }
+  async save(message: Message) {
+    this.items.set(message.id, message);
+  }
+  async delete(id: string) {
+    this.items.delete(id);
+  }
+}
+
+export class InMemoryNotificationRepository implements NotificationRepository {
+  private items = new Map<string, Notification>();
+  async findById(id: string) {
+    return this.items.get(id) ?? null;
+  }
+  async findByRecipient(recipientId: string, options?: { unreadOnly?: boolean; limit?: number }) {
+    let list = [...this.items.values()]
+      .filter((n) => n.recipientId === recipientId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    if (options?.unreadOnly) list = list.filter((n) => !n.isRead);
+    return options?.limit ? list.slice(0, options.limit) : list;
+  }
+  async countUnread(recipientId: string) {
+    return [...this.items.values()].filter((n) => n.recipientId === recipientId && !n.isRead).length;
+  }
+  async save(notification: Notification) {
+    this.items.set(notification.id, notification);
+  }
+  async markRead(id: string) {
+    const existing = this.items.get(id);
+    if (existing) this.items.set(id, existing.markRead(new Date()));
+  }
+  async markAllRead(recipientId: string) {
+    for (const [id, n] of this.items) {
+      if (n.recipientId === recipientId && !n.isRead) this.items.set(id, n.markRead(new Date()));
+    }
+  }
+}
+
+export class InMemoryNotificationPreferenceRepository implements NotificationPreferenceRepository {
+  private items = new Map<string, NotificationPreference>();
+  private key(memberId: string, type: string) {
+    return `${memberId}:${type}`;
+  }
+  async findByMember(memberId: string) {
+    return [...this.items.values()].filter((p) => p.memberId === memberId);
+  }
+  async upsert(preference: NotificationPreference) {
+    this.items.set(this.key(preference.memberId, preference.type), preference);
+  }
+}
+
+export class InMemoryPushSubscriptionRepository implements PushSubscriptionRepository {
+  private items = new Map<string, WebPushSubscription>();
+  async findByMember(memberId: string) {
+    return [...this.items.values()].filter((s) => s.memberId === memberId);
+  }
+  async save(subscription: WebPushSubscription) {
+    this.items.set(subscription.endpoint, subscription);
+  }
+  async deleteByEndpoint(endpoint: string) {
+    this.items.delete(endpoint);
+  }
+}
+
+export class InMemoryDeviceTokenRepository implements DeviceTokenRepository {
+  private items = new Map<string, DeviceToken>();
+  async findByMember(memberId: string) {
+    return [...this.items.values()].filter((t) => t.memberId === memberId);
+  }
+  async save(token: DeviceToken) {
+    this.items.set(token.token, token);
+  }
+  async deleteByToken(token: string) {
+    this.items.delete(token);
+  }
+}
+
+/** N'envoie aucun push (tests et déploiement sans clés VAPID/FCM). */
+export class NoopPushSender implements PushSender {
+  async sendWebPush() {
+    return [];
+  }
+  async sendFcm() {
+    return [];
   }
 }
 

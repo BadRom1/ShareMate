@@ -5,7 +5,14 @@ import { generateOccurrences } from '../domain/reservation/recurrence.js';
 import type { RecurrenceFrequency } from '../domain/reservation/recurrence.js';
 import { TimeRange } from '../domain/shared/time-range.js';
 import { DomainError, NotFoundError } from '../domain/shared/domain-error.js';
-import type { Clock, EquipmentRepository, IdGenerator, ReservationRepository } from './ports.js';
+import type {
+  Clock,
+  EquipmentRepository,
+  IdGenerator,
+  MemberRepository,
+  Notifier,
+  ReservationRepository,
+} from './ports.js';
 
 export interface ReserveInput {
   equipmentId: string;
@@ -34,6 +41,8 @@ export class ReservationService {
     private readonly equipments: EquipmentRepository,
     private readonly idGenerator: IdGenerator,
     private readonly clock: Clock,
+    private readonly members?: MemberRepository,
+    private readonly notifier?: Notifier,
   ) {}
 
   async reserve(input: ReserveInput): Promise<ReserveResult> {
@@ -56,6 +65,24 @@ export class ReservationService {
     const existing = await this.reservations.findByEquipmentId(input.equipmentId);
     const conflicts = findConflicts(reservation, existing);
     await this.reservations.save(reservation);
+
+    if (this.notifier) {
+      const author = await this.members?.findById(input.memberId);
+      const recipientIds = equipment.memberIds.filter((id) => id !== input.memberId);
+      if (recipientIds.length > 0) {
+        const when = reservation.range.start.toLocaleDateString('fr-FR', {
+          day: 'numeric',
+          month: 'long',
+        });
+        await this.notifier.notify({
+          type: 'RESERVATION_CREATED',
+          recipientIds,
+          title: `📅 ${equipment.name}`,
+          body: `${author?.name ?? 'Un membre'} a réservé pour le ${when}.`,
+          link: `/?tab=calendar`,
+        });
+      }
+    }
     return { reservation, conflicts };
   }
 

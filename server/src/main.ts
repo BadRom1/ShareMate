@@ -3,9 +3,14 @@ import { fileURLToPath } from 'node:url';
 import { openDatabase } from './infrastructure/persistence/sqlite/database.js';
 import {
   SqliteCredentialRepository,
+  SqliteDeviceTokenRepository,
   SqliteEquipmentRepository,
   SqliteExpenseRepository,
   SqliteMemberRepository,
+  SqliteMessageRepository,
+  SqliteNotificationPreferenceRepository,
+  SqliteNotificationRepository,
+  SqlitePushSubscriptionRepository,
   SqliteReimbursementRepository,
   SqliteReservationRepository,
   SqliteSessionRepository,
@@ -17,6 +22,7 @@ import {
   SystemClock,
   UuidGenerator,
 } from './infrastructure/tech/adapters.js';
+import { createPushSenderFromEnv } from './infrastructure/tech/push-sender.js';
 import { buildApp } from './infrastructure/http/app.js';
 
 /** Composition root : câblage des adapters sur les ports. */
@@ -36,6 +42,9 @@ const corsOrigins = (process.env.CORS_ORIGINS ?? '')
 
 const db = openDatabase(databasePath);
 
+// Push (Web Push + FCM) : activé si les clés VAPID et/ou le compte de service FCM sont fournis.
+const pushSender = createPushSenderFromEnv(process.env);
+
 const app = await buildApp({
   members: new SqliteMemberRepository(db),
   equipments: new SqliteEquipmentRepository(db),
@@ -43,6 +52,11 @@ const app = await buildApp({
   usageRecords: new SqliteUsageRecordRepository(db),
   expenses: new SqliteExpenseRepository(db),
   reimbursements: new SqliteReimbursementRepository(db),
+  messages: new SqliteMessageRepository(db),
+  notifications: new SqliteNotificationRepository(db),
+  notificationPreferences: new SqliteNotificationPreferenceRepository(db),
+  pushSubscriptions: new SqlitePushSubscriptionRepository(db),
+  deviceTokens: new SqliteDeviceTokenRepository(db),
   credentials: new SqliteCredentialRepository(db),
   sessions: new SqliteSessionRepository(db),
   passwordHasher: new ScryptPasswordHasher(),
@@ -56,7 +70,13 @@ const app = await buildApp({
   uploadsDir,
   webDistDir,
   corsOrigins,
+  pushSender: pushSender ?? undefined,
+  vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? null,
 });
+
+if (!pushSender) {
+  app.log.info('Push désactivé (VAPID_* / FCM_SERVICE_ACCOUNT absents) : seul le centre in-app est actif.');
+}
 
 // Arrêt propre (Railway envoie SIGTERM à chaque redéploiement).
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {

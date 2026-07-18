@@ -112,6 +112,34 @@ export interface SettlementTransaction {
   amountEuros: number;
 }
 
+export interface Message {
+  id: string;
+  equipmentId: string;
+  authorId: string;
+  body: string;
+  createdAt: string;
+  editedAt: string | null;
+}
+
+export type NotificationType =
+  'MESSAGE_POSTED' | 'EXPENSE_ADDED' | 'RESERVATION_CREATED' | 'REIMBURSEMENT_RECORDED' | 'MAINTENANCE_ALERT';
+
+export interface AppNotification {
+  id: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  link: string | null;
+  createdAt: string;
+  readAt: string | null;
+}
+
+export interface NotificationPreference {
+  type: NotificationType;
+  inApp: boolean;
+  push: boolean;
+}
+
 export interface AuthState {
   member: Member | null;
   needsBootstrap: boolean;
@@ -262,6 +290,38 @@ export const api = {
     date: string;
     notes?: string;
   }) => request<Reimbursement>('/api/reimbursements', { method: 'POST', body: JSON.stringify(input) }),
+
+  listMessages: (equipmentId: string) => request<Message[]>(`/api/equipments/${equipmentId}/messages`),
+  postMessage: (equipmentId: string, body: string) =>
+    request<Message>('/api/messages', { method: 'POST', body: JSON.stringify({ equipmentId, body }) }),
+  deleteMessage: (id: string) => request<void>(`/api/messages/${id}`, { method: 'DELETE' }),
+
+  listNotifications: (unreadOnly = false) =>
+    request<AppNotification[]>(`/api/notifications${unreadOnly ? '?unread=1' : ''}`),
+  unreadCount: () => request<{ count: number }>('/api/notifications/unread-count'),
+  markNotificationRead: (id: string) =>
+    request<void>(`/api/notifications/${id}/read`, { method: 'POST', body: JSON.stringify({}) }),
+  markAllNotificationsRead: () =>
+    request<void>('/api/notifications/read-all', { method: 'POST', body: JSON.stringify({}) }),
+  notificationPreferences: () => request<NotificationPreference[]>('/api/notifications/preferences'),
+  updateNotificationPreferences: (preferences: NotificationPreference[]) =>
+    request<NotificationPreference[]>('/api/notifications/preferences', {
+      method: 'PUT',
+      body: JSON.stringify({ preferences }),
+    }),
+  vapidPublicKey: () => request<{ publicKey: string | null }>('/api/notifications/vapid-public-key'),
+  subscribeWebPush: (subscription: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
+    request<{ status: string }>('/api/notifications/subscriptions', {
+      method: 'POST',
+      body: JSON.stringify(subscription),
+    }),
+  unsubscribeWebPush: (endpoint: string) =>
+    request<void>('/api/notifications/subscriptions', { method: 'DELETE', body: JSON.stringify({ endpoint }) }),
+  registerDeviceToken: (token: string, platform: string) =>
+    request<{ status: string }>('/api/notifications/device-tokens', {
+      method: 'POST',
+      body: JSON.stringify({ token, platform }),
+    }),
 
   uploadReceipt: async (file: File): Promise<string> => {
     const form = new FormData();

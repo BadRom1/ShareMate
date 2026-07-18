@@ -8,6 +8,8 @@ import type {
   EquipmentRepository,
   ExpenseRepository,
   IdGenerator,
+  MemberRepository,
+  Notifier,
   ReimbursementRepository,
   ReservationRepository,
 } from './ports.js';
@@ -57,7 +59,13 @@ export class ExpenseService {
     private readonly equipments: EquipmentRepository,
     private readonly reservations: ReservationRepository,
     private readonly idGenerator: IdGenerator,
+    private readonly members?: MemberRepository,
+    private readonly notifier?: Notifier,
   ) {}
+
+  private formatEuros(euros: number): string {
+    return euros.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' });
+  }
 
   private async getEquipment(equipmentId: string) {
     const equipment = await this.equipments.findById(equipmentId);
@@ -85,6 +93,20 @@ export class ExpenseService {
       receiptPath: input.receiptPath ?? null,
     });
     await this.expenses.save(expense);
+
+    if (this.notifier) {
+      const payer = await this.members?.findById(input.payerId);
+      const recipientIds = equipment.memberIds.filter((id) => id !== input.payerId);
+      if (recipientIds.length > 0) {
+        await this.notifier.notify({
+          type: 'EXPENSE_ADDED',
+          recipientIds,
+          title: `💶 ${equipment.name}`,
+          body: `${payer?.name ?? 'Un membre'} a ajouté « ${expense.label} » (${this.formatEuros(input.amountEuros)}).`,
+          link: `/?tab=expenses&equipment=${equipment.id}`,
+        });
+      }
+    }
     return expense;
   }
 
@@ -153,6 +175,17 @@ export class ExpenseService {
       notes: input.notes ?? null,
     });
     await this.reimbursements.save(reimbursement);
+
+    if (this.notifier) {
+      const from = await this.members?.findById(input.fromMemberId);
+      await this.notifier.notify({
+        type: 'REIMBURSEMENT_RECORDED',
+        recipientIds: [input.toMemberId],
+        title: `✅ Remboursement — ${equipment.name}`,
+        body: `${from?.name ?? 'Un membre'} vous a remboursé ${this.formatEuros(input.amountEuros)}.`,
+        link: `/?tab=expenses&equipment=${equipment.id}`,
+      });
+    }
     return reimbursement;
   }
 
