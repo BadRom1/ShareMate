@@ -133,9 +133,7 @@ export class DiscussionService {
     const author = await this.authorName(input.authorId);
     await this.notifyCircle(equipment, input.authorId, {
       title: `💬 ${equipment.name} — ${thread.title}`,
-      body: parentId
-        ? `${author} a répondu : ${excerpt(message.body)}`
-        : `${author} : ${excerpt(message.body)}`,
+      body: parentId ? `${author} a répondu : ${excerpt(message.body)}` : `${author} : ${excerpt(message.body)}`,
       thread: thread.id,
     });
     return message;
