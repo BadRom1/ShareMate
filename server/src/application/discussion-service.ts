@@ -24,6 +24,8 @@ export interface PostMessageInput {
   threadId: string;
   authorId: string;
   body: string;
+  /** Message auquel on répond (crée un sous-fil). Absent = message racine du fil. */
+  parentId?: string | null;
 }
 
 /** Fil + nombre de messages, pour l'affichage de la liste des fils. */
@@ -109,6 +111,13 @@ export class DiscussionService {
   async postMessage(input: PostMessageInput): Promise<Message> {
     const thread = await this.getThread(input.threadId);
     const equipment = await this.getEquipmentForMember(thread.equipmentId, input.authorId);
+    const parentId = input.parentId ?? null;
+    if (parentId) {
+      const parent = await this.getMessage(parentId);
+      if (parent.threadId !== thread.id) {
+        throw new DomainError('Le message parent appartient à un autre fil.');
+      }
+    }
     const now = this.clock.now();
     const message = Message.create({
       id: this.idGenerator.next(),
@@ -116,13 +125,17 @@ export class DiscussionService {
       authorId: input.authorId,
       body: input.body,
       createdAt: now,
+      parentId,
     });
     await this.messages.save(message);
     await this.threads.save(thread.touch(now));
 
+    const author = await this.authorName(input.authorId);
     await this.notifyCircle(equipment, input.authorId, {
       title: `💬 ${equipment.name} — ${thread.title}`,
-      body: `${await this.authorName(input.authorId)} : ${excerpt(message.body)}`,
+      body: parentId
+        ? `${author} a répondu : ${excerpt(message.body)}`
+        : `${author} : ${excerpt(message.body)}`,
       thread: thread.id,
     });
     return message;
@@ -143,7 +156,32 @@ export class DiscussionService {
   async deleteMessage(id: string, requesterId: string): Promise<void> {
     const message = await this.getMessage(id);
     this.assertAuthor(message.authorId, requesterId, 'Seul l’auteur peut supprimer ce message.');
-    await this.messages.delete(id);
+    // Supprime aussi les réponses (et leurs propres réponses) pour ne pas laisser de sous-fils orphelins.
+    await this.deleteWithReplies(message.threadId, id);
+  }
+
+  /** Supprime un message et, récursivement, tous les messages qui lui répondent. */
+  private async deleteWithReplies(threadId: string, id: string): Promise<void> {
+    const all = await this.messages.findByThreadId(threadId);
+    const childrenOf = new Map<string, string[]>();
+    for (const m of all) {
+      if (m.parentId) {
+        const siblings = childrenOf.get(m.parentId) ?? [];
+        siblings.push(m.id);
+        childrenOf.set(m.parentId, siblings);
+      }
+    }
+    const toDelete: string[] = [];
+    const stack = [id];
+    while (stack.length > 0) {
+      const current = stack.pop() as string;
+      toDelete.push(current);
+      stack.push(...(childrenOf.get(current) ?? []));
+    }
+    // Supprime les descendants avant le parent pour rester cohérent.
+    for (const messageId of toDelete.reverse()) {
+      await this.messages.delete(messageId);
+    }
   }
 
   // --- Helpers ---

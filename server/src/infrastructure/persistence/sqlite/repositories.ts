@@ -539,6 +539,7 @@ interface MessageRow {
   body: string;
   created_at: string;
   edited_at: string | null;
+  parent_id: string | null;
 }
 
 export class SqliteMessageRepository implements MessageRepository {
@@ -552,6 +553,7 @@ export class SqliteMessageRepository implements MessageRepository {
       body: row.body,
       createdAt: new Date(row.created_at),
       editedAt: row.edited_at ? new Date(row.edited_at) : null,
+      parentId: row.parent_id,
     });
   }
 
@@ -577,8 +579,8 @@ export class SqliteMessageRepository implements MessageRepository {
   async save(message: Message): Promise<void> {
     this.db
       .prepare(
-        `INSERT INTO messages (id, thread_id, author_id, body, created_at, edited_at)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO messages (id, thread_id, author_id, body, created_at, edited_at, parent_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET body = excluded.body, edited_at = excluded.edited_at`,
       )
       .run(
@@ -588,6 +590,7 @@ export class SqliteMessageRepository implements MessageRepository {
         message.body,
         message.createdAt.toISOString(),
         message.editedAt ? message.editedAt.toISOString() : null,
+        message.parentId,
       );
   }
 

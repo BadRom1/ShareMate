@@ -66,6 +66,43 @@ describe('DiscussionService', () => {
     expect(edited.editedAt).not.toBeNull();
   });
 
+  it('répond à un message précis (parentId) en créant un sous-fil', async () => {
+    const thread = await ctx.service.createThread({ equipmentId: 'e1', authorId: 'm1', title: 'Sujet' });
+    const parent = await ctx.service.postMessage({ threadId: thread.id, authorId: 'm1', body: 'Question ?' });
+    const reply = await ctx.service.postMessage({
+      threadId: thread.id,
+      authorId: 'm2',
+      body: 'Réponse',
+      parentId: parent.id,
+    });
+    expect(reply.parentId).toBe(parent.id);
+    const all = await ctx.service.listMessages(thread.id);
+    expect(all).toHaveLength(2);
+  });
+
+  it('refuse une réponse dont le parent est dans un autre fil', async () => {
+    const t1 = await ctx.service.createThread({ equipmentId: 'e1', authorId: 'm1', title: 'A' });
+    const t2 = await ctx.service.createThread({ equipmentId: 'e1', authorId: 'm1', title: 'B' });
+    const parent = await ctx.service.postMessage({ threadId: t1.id, authorId: 'm1', body: 'ici' });
+    await expect(
+      ctx.service.postMessage({ threadId: t2.id, authorId: 'm1', body: 'ailleurs', parentId: parent.id }),
+    ).rejects.toThrow(DomainError);
+  });
+
+  it('supprime un message et ses réponses imbriquées en cascade', async () => {
+    const thread = await ctx.service.createThread({ equipmentId: 'e1', authorId: 'm1', title: 'Sujet' });
+    const parent = await ctx.service.postMessage({ threadId: thread.id, authorId: 'm1', body: 'racine' });
+    const reply = await ctx.service.postMessage({
+      threadId: thread.id,
+      authorId: 'm2',
+      body: 'réponse',
+      parentId: parent.id,
+    });
+    await ctx.service.postMessage({ threadId: thread.id, authorId: 'm1', body: 'sous-réponse', parentId: reply.id });
+    await ctx.service.deleteMessage(parent.id, 'm1');
+    expect(await ctx.service.listMessages(thread.id)).toHaveLength(0);
+  });
+
   it('supprime un fil (auteur uniquement) et ses messages en cascade', async () => {
     const thread = await ctx.service.createThread({ equipmentId: 'e1', authorId: 'm1', title: 'Sujet', body: 'x' });
     await ctx.service.postMessage({ threadId: thread.id, authorId: 'm2', body: 'y' });
