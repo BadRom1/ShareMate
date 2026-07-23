@@ -636,14 +636,18 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     return list.map(messageDto);
   });
 
-  app.post<{ Body: { threadId: string; body: string } }>('/api/messages', async (request, reply) => {
-    const message = await discussionService.postMessage({
-      threadId: request.body.threadId,
-      authorId: request.authMember.id,
-      body: request.body.body,
-    });
-    return reply.status(201).send(messageDto(message));
-  });
+  app.post<{ Body: { threadId: string; body: string; parentId?: string | null } }>(
+    '/api/messages',
+    async (request, reply) => {
+      const message = await discussionService.postMessage({
+        threadId: request.body.threadId,
+        authorId: request.authMember.id,
+        body: request.body.body,
+        parentId: request.body.parentId ?? null,
+      });
+      return reply.status(201).send(messageDto(message));
+    },
+  );
 
   app.put<{ Params: { id: string }; Body: { body: string } }>('/api/messages/:id', async (request) => {
     const message = await discussionService.editMessage(request.params.id, request.authMember.id, request.body.body);

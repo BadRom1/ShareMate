@@ -124,6 +124,7 @@ export function messageDto(m: Message) {
     body: m.body,
     createdAt: m.createdAt.toISOString(),
     editedAt: m.editedAt ? m.editedAt.toISOString() : null,
+    parentId: m.parentId,
   };
 }
 

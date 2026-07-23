@@ -603,6 +603,52 @@ th {
   border-radius: var(--radius);
 }
 
+/* --- Arborescence des messages (réponses en sous-fils, façon Slack/Reddit) --- */
+.message-tree {
+  margin: 0 0 1rem;
+  max-height: 55vh;
+  overflow-y: auto;
+}
+
+.message-branch {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.msg-node {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* En arborescence, les bulles occupent toute la largeur de leur branche. */
+.message-tree .message {
+  max-width: 100%;
+  align-self: stretch;
+}
+
+/* Réponses imbriquées : décalage + trait vertical qui matérialise le sous-fil. */
+.msg-node > .message-branch {
+  margin-left: 0.5rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--border);
+}
+
+.msg-node > .reply-composer {
+  margin-left: 0.5rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--green);
+}
+
+.reply-toggle {
+  margin-top: 0.4rem;
+  font-weight: 600;
+}
+
 .link,
 .link-danger {
   border: none;

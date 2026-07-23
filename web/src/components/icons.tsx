@@ -81,6 +81,16 @@ export function IconChat(props: IconProps) {
   );
 }
 
+/** Flèche de réponse (répondre à un message). */
+export function IconReply(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M9 17l-5-5 5-5" />
+      <path d="M4 12h11a5 5 0 0 1 5 5v2" />
+    </svg>
+  );
+}
+
 export function IconClose(props: IconProps) {
   return (
     <svg {...base(props)}>

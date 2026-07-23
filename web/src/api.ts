@@ -133,6 +133,8 @@ export interface Message {
   body: string;
   createdAt: string;
   editedAt: string | null;
+  /** Message parent (réponse dans un sous-fil), ou `null` pour un message racine. */
+  parentId: string | null;
 }
 
 export type NotificationType =
@@ -313,8 +315,8 @@ export const api = {
   deleteThread: (id: string) => request<void>(`/api/threads/${id}`, { method: 'DELETE' }),
 
   listMessages: (threadId: string) => request<Message[]>(`/api/threads/${threadId}/messages`),
-  postMessage: (threadId: string, body: string) =>
-    request<Message>('/api/messages', { method: 'POST', body: JSON.stringify({ threadId, body }) }),
+  postMessage: (threadId: string, body: string, parentId?: string | null) =>
+    request<Message>('/api/messages', { method: 'POST', body: JSON.stringify({ threadId, body, parentId }) }),
   editMessage: (id: string, body: string) =>
     request<Message>(`/api/messages/${id}`, { method: 'PUT', body: JSON.stringify({ body }) }),
   deleteMessage: (id: string) => request<void>(`/api/messages/${id}`, { method: 'DELETE' }),

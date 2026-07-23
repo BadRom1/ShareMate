@@ -143,9 +143,11 @@ function migrate(db: SqliteDb): void {
       author_id TEXT NOT NULL REFERENCES members(id),
       body TEXT NOT NULL,
       created_at TEXT NOT NULL,
-      edited_at TEXT
+      edited_at TEXT,
+      parent_id TEXT REFERENCES messages(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_id);
 
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
@@ -182,4 +184,13 @@ function migrate(db: SqliteDb): void {
     );
     CREATE INDEX IF NOT EXISTS idx_device_tokens_member ON device_tokens(member_id);
   `);
+
+  // Réponses à un message précis (sous-fils) : ajoute parent_id aux bases antérieures.
+  const currentMessageColumns = db.prepare(`PRAGMA table_info(messages)`).all() as { name: string }[];
+  if (!currentMessageColumns.some((c) => c.name === 'parent_id')) {
+    db.exec(`
+      ALTER TABLE messages ADD COLUMN parent_id TEXT REFERENCES messages(id) ON DELETE CASCADE;
+      CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_id);
+    `);
+  }
 }
