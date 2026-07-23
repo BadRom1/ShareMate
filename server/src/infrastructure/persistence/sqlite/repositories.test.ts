@@ -272,4 +272,54 @@ describe("SQLite — migration depuis l'ancien modèle « collectif »", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('ajoute parent_id (et son index) à une base messages antérieure, sans perte de données', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const { default: Database } = await import('better-sqlite3');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-test-'));
+    const file = path.join(dir, 'pre-parent.sqlite');
+    try {
+      // Base dans l'état « fils sans réponses » : messages a thread_id mais pas parent_id.
+      const legacy = new Database(file);
+      legacy.exec(`
+        CREATE TABLE members (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT);
+        CREATE TABLE equipments (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+        CREATE TABLE threads (
+          id TEXT PRIMARY KEY,
+          equipment_id TEXT NOT NULL REFERENCES equipments(id) ON DELETE CASCADE,
+          author_id TEXT NOT NULL REFERENCES members(id),
+          title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE messages (
+          id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+          author_id TEXT NOT NULL REFERENCES members(id),
+          body TEXT NOT NULL, created_at TEXT NOT NULL, edited_at TEXT
+        );
+        INSERT INTO members VALUES ('m1', 'Alice', NULL);
+        INSERT INTO equipments VALUES ('e1', 'Tracteur');
+        INSERT INTO threads VALUES ('t1', 'e1', 'm1', 'Panne', '2026-01-01', '2026-01-01');
+        INSERT INTO messages VALUES ('msg1', 't1', 'm1', 'Bonjour', '2026-01-01', NULL);
+      `);
+      legacy.close();
+
+      // La migration ne doit pas lever et doit ajouter parent_id + son index, sans toucher aux données.
+      const migrated = openDatabase(file);
+      const columns = (migrated.prepare(`PRAGMA table_info(messages)`).all() as { name: string }[]).map((c) => c.name);
+      expect(columns).toContain('parent_id');
+      expect(
+        migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_messages_parent'`).get(),
+      ).toBeTruthy();
+      expect((migrated.prepare(`SELECT COUNT(*) AS c FROM messages`).get() as { c: number }).c).toBe(1);
+      migrated.close();
+
+      // Idempotence : réouvrir une base déjà migrée ne doit pas lever.
+      const reopened = openDatabase(file);
+      reopened.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

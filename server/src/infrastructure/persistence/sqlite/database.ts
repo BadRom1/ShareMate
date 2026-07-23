@@ -147,7 +147,6 @@ function migrate(db: SqliteDb): void {
       parent_id TEXT REFERENCES messages(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
-    CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_id);
 
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
@@ -186,11 +185,12 @@ function migrate(db: SqliteDb): void {
   `);
 
   // Réponses à un message précis (sous-fils) : ajoute parent_id aux bases antérieures.
+  // Doit précéder la création de l'index parent_id ci-dessous : sur une base existante, le
+  // CREATE TABLE IF NOT EXISTS est ignoré et la colonne n'apparaît que via cet ALTER.
   const currentMessageColumns = db.prepare(`PRAGMA table_info(messages)`).all() as { name: string }[];
   if (!currentMessageColumns.some((c) => c.name === 'parent_id')) {
-    db.exec(`
-      ALTER TABLE messages ADD COLUMN parent_id TEXT REFERENCES messages(id) ON DELETE CASCADE;
-      CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_id);
-    `);
+    db.exec(`ALTER TABLE messages ADD COLUMN parent_id TEXT REFERENCES messages(id) ON DELETE CASCADE;`);
   }
+  // parent_id est désormais garanti présent (base neuve ou migrée) : l'index peut être créé.
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_id);`);
 }
