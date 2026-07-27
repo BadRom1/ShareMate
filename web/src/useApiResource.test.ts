@@ -84,18 +84,34 @@ describe('useApiResource', () => {
     expect(loader).toHaveBeenCalledOnce();
   });
 
+  // Attendre la fin du rechargement pour ne vérifier que la valeur finale n'attesterait de rien :
+  // un `reload` qui remettrait `data` à null pendant le chargement — le clignotement que ce hook
+  // supprime — passerait au vert. C'est l'état intermédiaire qui porte la propriété.
   it('conserve la donnée précédente pendant un rechargement', async () => {
-    let value = 'v1';
-    const loader = vi.fn(async () => value);
+    const premier = deferred<string>();
+    const second = deferred<string>();
+    let next = premier;
+    const loader = vi.fn(() => next.promise);
     const { result } = renderHook(() => useApiResource(loader));
-    await waitFor(() => expect(result.current.data).toBe('v1'));
+    await act(async () => premier.resolve('v1'));
+    expect(result.current.data).toBe('v1');
 
-    value = 'v2';
-    await act(async () => {
-      await result.current.reload();
+    next = second;
+    let rechargement!: Promise<void>;
+    act(() => {
+      rechargement = result.current.reload();
     });
 
+    // Pendant le chargement : l'ancienne donnée reste affichée, l'indicateur tourne.
+    expect(result.current.data).toBe('v1');
+    expect(result.current.loading).toBe(true);
+
+    await act(async () => {
+      second.resolve('v2');
+      await rechargement;
+    });
     expect(result.current.data).toBe('v2');
+    expect(result.current.loading).toBe(false);
   });
 });
 

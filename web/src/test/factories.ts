@@ -136,7 +136,17 @@ export function createApiStub() {
     redeemInvite: vi.fn(async (_code: string, _password: string) => ({ member: me })),
 
     listMembers: vi.fn(async () => [aMember()]),
+    createMember: vi.fn(async (_input: { name: string; email?: string }) => ({
+      ...aMember({ id: 'm9', name: 'Nouveau', hasPassword: false }),
+      inviteCode: 'code-9',
+    })),
+    regenerateInvite: vi.fn(async (_memberId: string) => ({ inviteCode: 'code-9' })),
+
     listEquipments: vi.fn(async () => [anEquipment()]),
+    createEquipment: vi.fn(async (_input: unknown) => anEquipment()),
+    updateEquipment: vi.fn(async (_id: string, _input: unknown) => anEquipment()),
+    deleteEquipment: vi.fn(async (_id: string) => {}),
+    leaveEquipment: vi.fn(async (_id: string) => {}),
 
     calendar: vi.fn(async () => [] as Reservation[]),
     reserve: vi.fn(async () => aReservation()),
@@ -160,6 +170,12 @@ export function createApiStub() {
 
     listThreads: vi.fn(async (_equipmentId: string) => [] as ThreadSummary[]),
     listMessages: vi.fn(async (_threadId: string) => [] as Message[]),
+    createThread: vi.fn(async (_equipmentId: string, _title: string, _body?: string) => aThread()),
+    renameThread: vi.fn(async (_id: string, _title: string) => aThread()),
+    deleteThread: vi.fn(async (_id: string) => {}),
+    postMessage: vi.fn(async (_threadId: string, _body: string, _parentId?: string | null) => aMessage()),
+    editMessage: vi.fn(async (_id: string, _body: string) => aMessage()),
+    deleteMessage: vi.fn(async (_id: string) => {}),
 
     listChecklists: vi.fn(async (_equipmentId: string) => [] as ChecklistSummary[]),
     listChecklistItems: vi.fn(async (_checklistId: string) => [] as ChecklistItem[]),

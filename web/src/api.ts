@@ -248,6 +248,12 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     headers: { ...buildHeaders(Boolean(options?.body)), ...options?.headers },
   });
   if (response.status === 401 && !url.startsWith('/api/auth/')) {
+    // Session expirée ou révoquée. C'est le seul chemin qu'emprunte un intrus — il ne cliquera
+    // pas sur « se déconnecter » —, et c'est celui que produit un changement de mot de passe, qui
+    // révoque toutes les sessions du membre. L'appareil doit donc s'y vider comme à la
+    // déconnexion : sans cela, le geste réflexe après une compromission laisse l'attaquant lire
+    // hors ligne une journée de dépenses, de soldes, de messages et d'annuaire.
+    await forgetSession();
     onUnauthorized?.();
   }
   if (!response.ok) {
@@ -283,6 +289,12 @@ async function purgeOfflineCaches(): Promise<void> {
   await Promise.all(keys.filter((k) => k.startsWith('sharemate-')).map((k) => caches.delete(k)));
 }
 
+/** Ne laisse plus rien de la session sur l'appareil : jeton natif et réponses d'API en cache. */
+async function forgetSession(): Promise<void> {
+  await setToken(null);
+  await purgeOfflineCaches();
+}
+
 export const api = {
   me: () => request<AuthState>('/api/auth/me'),
   bootstrap: (input: { name: string; email?: string; password: string }) =>
@@ -295,8 +307,7 @@ export const api = {
     } finally {
       // Même si la révocation côté serveur échoue (hors ligne), l'appareil se vide : l'écran
       // retombe de toute façon sur la connexion (App.tsx), jeton et caches ne doivent pas rester.
-      await setToken(null);
-      await purgeOfflineCaches();
+      await forgetSession();
     }
   },
   inviteInfo: (code: string) => request<{ memberName: string }>(`/api/auth/invites/${encodeURIComponent(code)}`),

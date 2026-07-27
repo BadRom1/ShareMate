@@ -60,6 +60,36 @@ describe("gestion globale de l'authentification", () => {
     fetchMock.mockResolvedValue(jsonResponse(401, {}));
     await expect(api.listEquipments()).rejects.toBeInstanceOf(ApiError);
   });
+
+  // Un intrus ne clique pas sur « se déconnecter » : le 401 est le seul chemin qu'il emprunte,
+  // et c'est celui que produit un changement de mot de passe, qui révoque toutes les sessions.
+  // Purger seulement à la déconnexion volontaire lui laissait 24 h de réponses d'API lisibles.
+  it('purge les caches hors ligne sur 401, comme à la déconnexion', async () => {
+    const deleted: string[] = [];
+    vi.stubGlobal('caches', {
+      keys: async () => ['sharemate-api', 'sharemate-receipts', 'workbox-precache-v2'],
+      delete: async (key: string) => void deleted.push(key),
+    });
+    fetchMock.mockResolvedValue(jsonResponse(401, { error: 'Session expirée.' }));
+
+    await expect(api.listEquipments()).rejects.toThrow('Session expirée.');
+
+    // Le précache du shell ne contient rien de personnel : le purger empêcherait l'app de
+    // démarrer hors ligne, sans rien protéger.
+    expect(deleted).toEqual(['sharemate-api', 'sharemate-receipts']);
+  });
+
+  it('ne purge rien sur un 401 de connexion : aucune session à oublier', async () => {
+    const deleted: string[] = [];
+    vi.stubGlobal('caches', {
+      keys: async () => ['sharemate-api'],
+      delete: async (key: string) => void deleted.push(key),
+    });
+    fetchMock.mockResolvedValue(jsonResponse(401, { error: 'Identifiants invalides.' }));
+
+    await expect(api.login('alice', 'mauvais')).rejects.toThrow('Identifiants invalides.');
+    expect(deleted).toEqual([]);
+  });
 });
 
 describe('décodage des réponses', () => {
