@@ -1016,6 +1016,23 @@ th {
   resize: vertical;
 }
 
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+/* Ce qu'une suppression emporte : énuméré, pas noyé dans une phrase. */
+.modal-loss {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;
@@ -1038,7 +1055,8 @@ th {
     flex-direction: column;
   }
   /* Les actions restent accessibles en bas de l'écran. */
-  .modal-form {
+  .modal-form,
+  .modal-body {
     flex: 1;
   }
   .modal-actions {

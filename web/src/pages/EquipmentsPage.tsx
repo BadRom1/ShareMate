@@ -3,6 +3,7 @@ import { api } from '../api';
 import type { Equipment, MaintenanceStatus, Member, MeterUnit } from '../api';
 import { formatDate, formatEuros, meterLabel } from '../format';
 import { IconEdit, IconTrash } from '../components/icons';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 
 interface Props {
   members: Member[];
@@ -29,6 +30,8 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
   const [form, setForm] = useState(EMPTY_FORM);
   const [newMemberName, setNewMemberName] = useState('');
   const [invite, setInvite] = useState<{ memberName: string; url: string } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Equipment | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -117,10 +120,20 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
     }
   }
 
-  async function remove(e: Equipment) {
-    if (!confirm(`Supprimer « ${e.name} » ? Ses réservations, relevés et dépenses seront perdus.`)) return;
-    await api.deleteEquipment(e.id);
-    await load();
+  async function confirmRemove() {
+    if (!pendingDelete) return;
+    setError(null);
+    setDeleting(true);
+    try {
+      await api.deleteEquipment(pendingDelete.id);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erreur.');
+    } finally {
+      // Fermée dans tous les cas : l'alerte d'erreur s'affiche en haut de page, sous la modale.
+      setPendingDelete(null);
+      setDeleting(false);
+    }
   }
 
   function memberName(id: string) {
@@ -327,7 +340,7 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
                 </button>
                 <button
                   className="icon-btn icon-danger"
-                  onClick={() => void remove(e)}
+                  onClick={() => setPendingDelete(e)}
                   title="Supprimer"
                   aria-label="Supprimer"
                 >
@@ -338,6 +351,31 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
           );
         })}
       </div>
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title={`Supprimer « ${pendingDelete.name} » ?`}
+          confirmLabel="Supprimer définitivement"
+          busy={deleting}
+          onConfirm={() => void confirmRemove()}
+          onCancel={() => setPendingDelete(null)}
+        >
+          <p style={{ margin: 0 }}>
+            L'équipement disparaîtra pour les {pendingDelete.memberIds.length} membres de son cercle, avec tout son
+            historique :
+          </p>
+          <ul className="modal-loss">
+            <li>ses réservations, passées comme à venir</li>
+            <li>ses relevés de compteur et son suivi d'entretien</li>
+            <li>ses dépenses, justificatifs, remboursements et soldes</li>
+            <li>ses fils de discussion et tous leurs messages</li>
+            <li>ses checklists et tous leurs points</li>
+          </ul>
+          <p className="muted" style={{ margin: 0 }}>
+            Cette suppression est définitive : rien de tout cela ne pourra être restauré.
+          </p>
+        </ConfirmDialog>
+      )}
     </>
   );
 }
