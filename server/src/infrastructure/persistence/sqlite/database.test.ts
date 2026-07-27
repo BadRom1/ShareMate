@@ -112,22 +112,45 @@ describe('Migration des emails de membres', () => {
     return Object.fromEntries(rows.map((r) => [r.id, r.email]));
   }
 
-  it('rogne, oublie les adresses mal formées et dédoublonne, sans toucher aux membres', () => {
+  it('refuse de démarrer plutôt que d’effacer une adresse, en nommant les rangées fautives', () => {
     baseAvecEmailsLibres();
-    openDatabase(fichier).close();
+    // Effacer ces adresses en silence prive leur titulaire de son moyen de connexion sans qu'il
+    // sache pourquoi : la perte n'est pas moins réelle pour tenir dans une colonne.
+    expect(() => openDatabase(fichier)).toThrow(/Emails de membres incompatibles/);
+    try {
+      openDatabase(fichier);
+    } catch (e) {
+      const message = (e as Error).message;
+      expect(message).toContain('m2 (Bruno) « pas une adresse » : forme invalide');
+      expect(message).toContain('m3 (Chloé) « ALICE@example.org » : déjà porté par m1');
+      expect(message).toContain('.backup'); // la sauvegarde d'abord
+    }
 
+    // Rien n'a été écrit : la migration est transactionnelle, la version n'a pas avancé.
     expect(emails()).toEqual({
-      m1: 'alice@example.org', // rogné
-      m2: null, // mal formé : Member.create la refuserait, le membre serait illisible
-      m3: null, // doublon d'Alice à la casse près : le premier venu garde l'adresse
-      m4: null, // champ laissé vide
+      m1: ' alice@example.org ',
+      m2: 'pas une adresse',
+      m3: 'ALICE@example.org',
+      m4: '',
       m5: 'emma@example.org',
     });
   });
 
-  it('laisse tous les membres chargeables par le domaine après migration', async () => {
+  it('rogne et laisse tous les membres chargeables une fois les fautives corrigées', async () => {
     baseAvecEmailsLibres();
+    const brute = new Database(fichier);
+    brute.exec(`UPDATE members SET email = NULL WHERE id IN ('m2', 'm3')`);
+    brute.close();
+
     const db = openDatabase(fichier);
+    // Un champ laissé vide vaut « pas d'adresse » pour le domaine : le passer à NULL n'ôte rien.
+    expect(emails()).toEqual({
+      m1: 'alice@example.org', // rogné
+      m2: null,
+      m3: null,
+      m4: null,
+      m5: 'emma@example.org',
+    });
     // C'est l'enjeu : une seule adresse survivante mal formée rendrait le membre illisible.
     const tous = ['m1', 'm2', 'm3', 'm4', 'm5'];
     expect((await new SqliteMemberRepository(db).findByIds(tous)).map((m) => m.name)).toHaveLength(5);

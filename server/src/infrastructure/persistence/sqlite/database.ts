@@ -39,6 +39,9 @@ interface Migration {
   apply(db: SqliteDb): void;
 }
 
+/** Rappel joint à tout refus de démarrage : rien ne doit être corrigé sans copie préalable. */
+const SAUVEGARDE = 'Sauvegardez d’abord la base (sqlite3 base.sqlite ".backup sauvegarde.sqlite").';
+
 const MIGRATIONS: Migration[] = [
   {
     // Schéma de référence au moment de l'introduction du versionnement : toute base en production
@@ -267,25 +270,45 @@ const MIGRATIONS: Migration[] = [
     // l'application inutilisable pour tout son cercle. Le tri se fait ici, une fois, à froid.
     description: 'emails de membres normalisés, dédoublonnés',
     apply(db) {
-      const rows = db.prepare('SELECT id, email FROM members WHERE email IS NOT NULL').all() as {
+      const rows = db.prepare('SELECT id, name, email FROM members WHERE email IS NOT NULL').all() as {
         id: string;
+        name: string;
         email: string;
       }[];
-      const oublier = db.prepare('UPDATE members SET email = NULL WHERE id = ?');
-      const normaliser = db.prepare('UPDATE members SET email = ? WHERE id = ?');
-      const vus = new Set<string>();
+      const forget = db.prepare('UPDATE members SET email = NULL WHERE id = ?');
+      const normalize = db.prepare('UPDATE members SET email = ? WHERE id = ?');
+      const seen = new Map<string, string>();
+      const rejected: string[] = [];
       for (const row of rows) {
         const email = row.email.trim();
-        // Doublon : le premier venu garde l'adresse, les suivants se connectent par leur nom.
-        // Les départager autrement supposerait de savoir lequel est le titulaire — on ne le sait pas.
-        if (!estEmailValide(email) || vus.has(email.toLowerCase())) {
-          oublier.run(row.id);
+        // Un champ laissé vide par un formulaire n'est pas une perte : le domaine lit déjà
+        // « vide » comme « absent ». Le passer à NULL ne fait qu'écrire ce qu'il signifie.
+        if (email.length === 0) {
+          forget.run(row.id);
           continue;
         }
-        vus.add(email.toLowerCase());
-        if (email !== row.email) {
-          normaliser.run(email, row.id);
+        const owner = seen.get(email.toLowerCase());
+        if (!estEmailValide(email)) {
+          rejected.push(`${row.id} (${row.name}) « ${row.email} » : forme invalide`);
+        } else if (owner) {
+          rejected.push(`${row.id} (${row.name}) « ${row.email} » : déjà porté par ${owner}`);
+        } else {
+          seen.set(email.toLowerCase(), row.id);
+          if (email !== row.email) {
+            normalize.run(email, row.id);
+          }
         }
+      }
+      // Effacer ces adresses en silence, comme le faisait la première version de cette étape,
+      // c'est priver leur titulaire de son moyen de connexion sans qu'il sache pourquoi : la
+      // perte a seulement changé de granularité, de la table à la colonne. Même posture que pour
+      // un schéma incompatible — on refuse de démarrer, l'opérateur tranche, sauvegarde en main.
+      if (rejected.length > 0) {
+        throw new Error(
+          `Emails de membres incompatibles : ces adresses servent d’identifiant de connexion et ne ` +
+            `peuvent pas être conservées telles quelles. ${SAUVEGARDE} Corrigez-les ensuite, ou effacez-les ` +
+            `(UPDATE members SET email = NULL WHERE id = …) :\n  - ${rejected.join('\n  - ')}`,
+        );
       }
     },
   },
@@ -321,17 +344,16 @@ function migrate(db: SqliteDb): void {
  * trancher.
  */
 function refuserSchémaIncompatible(db: SqliteDb): void {
-  const sauvegarde = 'Sauvegardez d’abord la base (sqlite3 base.sqlite ".backup sauvegarde.sqlite").';
   if (tableExiste(db, 'groups')) {
     throw new Error(
-      `Schéma incompatible : la table « groups » relève du modèle « collectif », abandonné. ${sauvegarde} ` +
+      `Schéma incompatible : la table « groups » relève du modèle « collectif », abandonné. ${SAUVEGARDE} ` +
         'Supprimez ensuite manuellement les tables de ce modèle (groups, group_members, equipment_access…).',
     );
   }
   const messages = colonnes(db, 'messages');
   if (messages.length > 0 && !messages.includes('thread_id')) {
     throw new Error(
-      `Schéma incompatible : la table « messages » relève du mur de messages plat, antérieur aux fils. ${sauvegarde} ` +
+      `Schéma incompatible : la table « messages » relève du mur de messages plat, antérieur aux fils. ${SAUVEGARDE} ` +
         'Supprimez ensuite manuellement la table « messages ».',
     );
   }
