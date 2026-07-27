@@ -7,6 +7,7 @@ import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import fs from 'node:fs';
 import {
+  AuthorizationError,
   ConflictError,
   DomainError,
   ForbiddenError,
@@ -231,6 +232,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof UnauthorizedError) {
       return reply.status(401).send({ error: error.message });
+    }
+    // 403 et non 401 : la session est valide, seul le geste est refusé. Un 401 ferait
+    // retomber le client sur l'écran de connexion (web/src/api.ts) pour un simple refus.
+    if (error instanceof AuthorizationError) {
+      return reply.status(403).send({ error: error.message });
     }
     // Accès refusé rendu en 404 : la réponse est identique à celle d'une ressource
     // inexistante (même code, même message), ce qui interdit d'énumérer les

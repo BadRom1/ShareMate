@@ -686,14 +686,24 @@ describe('API — discussions (fils + messages)', () => {
     expect(edited.statusCode).toBe(200);
     expect((edited.json() as { body: string; editedAt: string | null }).editedAt).not.toBeNull();
 
-    // Alice ne peut pas éditer le message de Bruno.
+    // Alice ne peut pas éditer le message de Bruno : 403 (refus assumé) et non 401, qui
+    // déconnecterait Alice de l'application pour un simple geste refusé.
     const editOther = await app.inject({
       method: 'PUT',
       url: `/api/messages/${message.id}`,
       payload: { body: 'pirate' },
       cookies: alice.cookies,
     });
-    expect(editOther.statusCode).toBe(401);
+    expect(editOther.statusCode).toBe(403);
+
+    // Même règle pour le renommage d'un fil dont on n'est pas l'auteur.
+    const renameOther = await app.inject({
+      method: 'PUT',
+      url: `/api/threads/${thread.id}`,
+      payload: { title: 'Détourné' },
+      cookies: bruno.cookies,
+    });
+    expect(renameOther.statusCode).toBe(403);
 
     // Les messages du fil (1er message + réponse).
     const msgs = await get(`/api/threads/${thread.id}/messages`, alice.cookies);
@@ -701,7 +711,7 @@ describe('API — discussions (fils + messages)', () => {
 
     // Seul l'auteur supprime le fil : Bruno ne peut pas, Alice oui (cascade sur les messages).
     const delByOther = await app.inject({ method: 'DELETE', url: `/api/threads/${thread.id}`, cookies: bruno.cookies });
-    expect(delByOther.statusCode).toBe(401);
+    expect(delByOther.statusCode).toBe(403);
     const delByAuthor = await app.inject({
       method: 'DELETE',
       url: `/api/threads/${thread.id}`,

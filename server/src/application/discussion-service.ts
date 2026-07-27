@@ -1,6 +1,6 @@
 import { Message } from '../domain/discussion/message.js';
 import { Thread } from '../domain/discussion/thread.js';
-import { DomainError, NotFoundError, UnauthorizedError } from '../domain/shared/domain-error.js';
+import { AuthorizationError, DomainError, NotFoundError } from '../domain/shared/domain-error.js';
 import { equipmentForMember } from './equipment-access.js';
 import type { Equipment } from '../domain/equipment/equipment.js';
 import type {
@@ -223,8 +223,12 @@ export class DiscussionService {
     return equipmentForMember(this.equipments, equipmentId, memberId, absent);
   }
 
+  /**
+   * Geste réservé à l'auteur. Le demandeur est dans le cercle et voit la ressource : le refus
+   * est assumé (403), pas masqué, et surtout pas un 401 qui le déconnecterait.
+   */
   private assertAuthor(authorId: string, requesterId: string, message: string): void {
-    if (authorId !== requesterId) throw new UnauthorizedError(message);
+    if (authorId !== requesterId) throw new AuthorizationError(message);
   }
 
   private async authorName(memberId: string): Promise<string> {

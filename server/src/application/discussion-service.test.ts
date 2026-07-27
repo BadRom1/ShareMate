@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { DiscussionService } from './discussion-service.js';
-import { DomainError, ForbiddenError, UnauthorizedError } from '../domain/shared/domain-error.js';
+import { AuthorizationError, DomainError, ForbiddenError } from '../domain/shared/domain-error.js';
 import type { NotifyEvent, Notifier } from './ports.js';
 import { makeFixture } from './testing/fixture.js';
 import { InMemoryMessageRepository, InMemoryThreadRepository } from './testing/in-memory.js';
@@ -72,7 +72,7 @@ describe('DiscussionService', () => {
   it('édite un message (auteur uniquement)', async () => {
     const thread = await ctx.service.createThread({ equipmentId: 'e1', authorId: 'm1', title: 'Sujet' });
     const msg = await ctx.service.postMessage({ threadId: thread.id, authorId: 'm2', body: 'Avant' });
-    await expect(ctx.service.editMessage(msg.id, 'm1', 'pirate')).rejects.toThrow(UnauthorizedError);
+    await expect(ctx.service.editMessage(msg.id, 'm1', 'pirate')).rejects.toThrow(AuthorizationError);
     const edited = await ctx.service.editMessage(msg.id, 'm2', 'Après');
     expect(edited.body).toBe('Après');
     expect(edited.editedAt).not.toBeNull();
@@ -118,7 +118,7 @@ describe('DiscussionService', () => {
   it('supprime un fil (auteur uniquement) et ses messages en cascade', async () => {
     const thread = await ctx.service.createThread({ equipmentId: 'e1', authorId: 'm1', title: 'Sujet', body: 'x' });
     await ctx.service.postMessage({ threadId: thread.id, authorId: 'm2', body: 'y' });
-    await expect(ctx.service.deleteThread(thread.id, 'm2')).rejects.toThrow(UnauthorizedError);
+    await expect(ctx.service.deleteThread(thread.id, 'm2')).rejects.toThrow(AuthorizationError);
     await ctx.service.deleteThread(thread.id, 'm1');
     expect(await ctx.service.listThreads('e1', 'm1')).toHaveLength(0);
     // Le fil n'existe plus : on constate la cascade directement sur le dépôt.
