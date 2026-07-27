@@ -17,7 +17,6 @@ import type {
   SettlementTransaction,
   ThreadSummary,
   UsageRecord,
-  api as realApi,
 } from '../api';
 
 export function aMember(over: Partial<DirectoryMember> = {}): DirectoryMember {
@@ -168,9 +167,4 @@ export function createApiStub() {
     unreadCount: vi.fn(async () => ({ count: 0 })),
     listNotifications: vi.fn(async () => [] as AppNotification[]),
   };
-}
-
-/** Le stub ne couvre que les méthodes utilisées par les tests : la façade réelle en a bien plus. */
-export function asApi(stub: ApiStub): typeof realApi {
-  return stub as unknown as typeof realApi;
 }
