@@ -4,6 +4,7 @@ import { Reimbursement } from '../domain/expense/reimbursement.js';
 import { computeBalances, settle } from '../domain/expense/settlement.js';
 import { Money } from '../domain/shared/money.js';
 import { DomainError, NotFoundError } from '../domain/shared/domain-error.js';
+import { equipmentForMember } from './equipment-access.js';
 import type {
   EquipmentRepository,
   ExpenseRepository,
@@ -75,8 +76,8 @@ export class ExpenseService {
     return equipment;
   }
 
-  async addExpense(input: AddExpenseInput): Promise<Expense> {
-    const equipment = await this.getEquipment(input.equipmentId);
+  async addExpense(input: AddExpenseInput, requesterId: string): Promise<Expense> {
+    const equipment = await equipmentForMember(this.equipments, input.equipmentId, requesterId);
     if (!equipment.canBeUsedBy(input.payerId)) {
       throw new DomainError(`Le payeur ${input.payerId} ne fait pas partie du cercle de l'équipement.`);
     }
@@ -149,21 +150,25 @@ export class ExpenseService {
     }
   }
 
-  async deleteExpense(id: string): Promise<void> {
+  async deleteExpense(id: string, requesterId: string): Promise<void> {
+    const absent = `Dépense introuvable : ${id}`;
     const existing = await this.expenses.findById(id);
     if (!existing) {
-      throw new NotFoundError(`Dépense introuvable : ${id}`);
+      throw new NotFoundError(absent);
     }
+    // Hors du cercle, la dépense se comporte comme inexistante (même réponse qu'un id inconnu).
+    await equipmentForMember(this.equipments, existing.equipmentId, requesterId, absent);
     await this.expenses.delete(id);
   }
 
-  async listExpenses(equipmentId: string): Promise<Expense[]> {
+  async listExpenses(equipmentId: string, requesterId: string): Promise<Expense[]> {
+    await equipmentForMember(this.equipments, equipmentId, requesterId);
     const list = await this.expenses.findByEquipmentId(equipmentId);
     return list.sort((a, b) => b.date.getTime() - a.date.getTime());
   }
 
-  async recordReimbursement(input: RecordReimbursementInput): Promise<Reimbursement> {
-    const equipment = await this.getEquipment(input.equipmentId);
+  async recordReimbursement(input: RecordReimbursementInput, requesterId: string): Promise<Reimbursement> {
+    const equipment = await equipmentForMember(this.equipments, input.equipmentId, requesterId);
     this.assertInCircle([input.fromMemberId, input.toMemberId], equipment.memberIds);
     const reimbursement = Reimbursement.create({
       id: this.idGenerator.next(),
@@ -189,14 +194,15 @@ export class ExpenseService {
     return reimbursement;
   }
 
-  async listReimbursements(equipmentId: string): Promise<Reimbursement[]> {
+  async listReimbursements(equipmentId: string, requesterId: string): Promise<Reimbursement[]> {
+    await equipmentForMember(this.equipments, equipmentId, requesterId);
     const list = await this.reimbursements.findByEquipmentId(equipmentId);
     return list.sort((a, b) => b.date.getTime() - a.date.getTime());
   }
 
   /** Solde net par membre du cercle de l'équipement (positif = créditeur). */
-  async equipmentBalances(equipmentId: string): Promise<MemberBalance[]> {
-    const equipment = await this.getEquipment(equipmentId);
+  async equipmentBalances(equipmentId: string, requesterId: string): Promise<MemberBalance[]> {
+    const equipment = await equipmentForMember(this.equipments, equipmentId, requesterId);
     const balances = computeBalances(
       await this.expenses.findByEquipmentId(equipmentId),
       await this.reimbursements.findByEquipmentId(equipmentId),
@@ -208,8 +214,8 @@ export class ExpenseService {
   }
 
   /** Plan de remboursement minimisant le nombre de transactions, pour un équipement. */
-  async settlementPlan(equipmentId: string): Promise<SettlementTransactionDto[]> {
-    await this.getEquipment(equipmentId);
+  async settlementPlan(equipmentId: string, requesterId: string): Promise<SettlementTransactionDto[]> {
+    await equipmentForMember(this.equipments, equipmentId, requesterId);
     const balances = computeBalances(
       await this.expenses.findByEquipmentId(equipmentId),
       await this.reimbursements.findByEquipmentId(equipmentId),

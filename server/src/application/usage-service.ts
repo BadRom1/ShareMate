@@ -2,7 +2,8 @@ import { UsageRecord } from '../domain/usage/usage-record.js';
 import { computeMaintenanceStatus } from '../domain/usage/maintenance-alert.js';
 import type { MaintenanceStatus } from '../domain/usage/maintenance-alert.js';
 import { computeDurations } from '../domain/usage/usage-duration.js';
-import { DomainError, NotFoundError } from '../domain/shared/domain-error.js';
+import { DomainError } from '../domain/shared/domain-error.js';
+import { accessibleEquipmentIds, equipmentForMember, equipmentsForMember } from './equipment-access.js';
 import type { Clock, EquipmentRepository, IdGenerator, Notifier, UsageRecordRepository } from './ports.js';
 
 export interface RecordUsageInput {
@@ -33,13 +34,7 @@ export class UsageService {
   ) {}
 
   async recordUsage(input: RecordUsageInput): Promise<UsageEntry> {
-    const equipment = await this.equipments.findById(input.equipmentId);
-    if (!equipment) {
-      throw new NotFoundError(`Équipement introuvable : ${input.equipmentId}`);
-    }
-    if (!equipment.canBeUsedBy(input.memberId)) {
-      throw new DomainError(`Le membre ${input.memberId} n'a pas accès à cet équipement.`);
-    }
+    const equipment = await equipmentForMember(this.equipments, input.equipmentId, input.memberId);
     const existing = await this.usageRecords.findByEquipmentId(input.equipmentId);
     const lastReading = existing.length > 0 ? Math.max(...existing.map((u) => u.meterReading)) : null;
     const meterReading = this.resolveMeterReading(input, lastReading);
@@ -94,7 +89,8 @@ export class UsageService {
     return lastReading + input.duration;
   }
 
-  async historyByEquipment(equipmentId: string): Promise<UsageEntry[]> {
+  async historyByEquipment(equipmentId: string, requesterId: string): Promise<UsageEntry[]> {
+    await equipmentForMember(this.equipments, equipmentId, requesterId);
     const records = await this.usageRecords.findByEquipmentId(equipmentId);
     const durations = computeDurations(records);
     return records
@@ -102,8 +98,10 @@ export class UsageService {
       .map((record) => ({ record, duration: durations.get(record.id) ?? null }));
   }
 
-  async historyByMember(memberId: string): Promise<UsageEntry[]> {
-    const records = await this.usageRecords.findByMemberId(memberId);
+  /** Historique d'un membre, borné aux équipements que le demandeur partage aussi. */
+  async historyByMember(memberId: string, requesterId: string): Promise<UsageEntry[]> {
+    const accessible = await accessibleEquipmentIds(this.equipments, requesterId);
+    const records = (await this.usageRecords.findByMemberId(memberId)).filter((r) => accessible.has(r.equipmentId));
     // La durée dépend du relevé précédent sur l'équipement, quel qu'en soit l'auteur :
     // on recalcule donc sur l'historique complet de chaque équipement concerné.
     const durations = new Map<string, number | null>();
@@ -118,18 +116,15 @@ export class UsageService {
       .map((record) => ({ record, duration: durations.get(record.id) ?? null }));
   }
 
-  async maintenanceStatus(equipmentId: string): Promise<MaintenanceStatus> {
-    const equipment = await this.equipments.findById(equipmentId);
-    if (!equipment) {
-      throw new NotFoundError(`Équipement introuvable : ${equipmentId}`);
-    }
+  async maintenanceStatus(equipmentId: string, requesterId: string): Promise<MaintenanceStatus> {
+    const equipment = await equipmentForMember(this.equipments, equipmentId, requesterId);
     const records = await this.usageRecords.findByEquipmentId(equipmentId);
     return computeMaintenanceStatus(equipment, records);
   }
 
-  /** Statuts en alerte pour tous les équipements. */
-  async alerts(): Promise<MaintenanceStatus[]> {
-    const equipments = await this.equipments.findAll();
+  /** Statuts en alerte, pour les seuls équipements du cercle du demandeur. */
+  async alerts(requesterId: string): Promise<MaintenanceStatus[]> {
+    const equipments = await equipmentsForMember(this.equipments, requesterId);
     const statuses = await Promise.all(
       equipments.map(async (e) => computeMaintenanceStatus(e, await this.usageRecords.findByEquipmentId(e.id))),
     );

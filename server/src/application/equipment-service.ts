@@ -1,7 +1,8 @@
 import { Equipment } from '../domain/equipment/equipment.js';
 import type { MeterUnit } from '../domain/equipment/equipment.js';
 import { Money } from '../domain/shared/money.js';
-import { DomainError, NotFoundError } from '../domain/shared/domain-error.js';
+import { DomainError } from '../domain/shared/domain-error.js';
+import { equipmentForMember, equipmentsForMember } from './equipment-access.js';
 import type { EquipmentRepository, IdGenerator, MemberRepository } from './ports.js';
 
 export interface CreateEquipmentInput {
@@ -43,8 +44,12 @@ export class EquipmentService {
     }
   }
 
-  async create(input: CreateEquipmentInput): Promise<Equipment> {
+  async create(input: CreateEquipmentInput, creatorId: string): Promise<Equipment> {
     await this.assertMembersExist(input.memberIds);
+    // Sans son créateur dans le cercle, l'équipement serait invisible pour lui dès sa création.
+    if (!input.memberIds.includes(creatorId)) {
+      throw new DomainError("Vous devez faire partie du cercle de l'équipement que vous créez.");
+    }
     const equipment = Equipment.create({
       id: this.idGenerator.next(),
       name: input.name,
@@ -59,11 +64,9 @@ export class EquipmentService {
     return equipment;
   }
 
-  async update(id: string, input: UpdateEquipmentInput): Promise<Equipment> {
-    const existing = await this.equipments.findById(id);
-    if (!existing) {
-      throw new NotFoundError(`Équipement introuvable : ${id}`);
-    }
+  async update(id: string, input: UpdateEquipmentInput, requesterId: string): Promise<Equipment> {
+    // Le cercle se coopte : seul un membre peut modifier l'équipement, y compris sa composition.
+    const existing = await equipmentForMember(this.equipments, id, requesterId);
     if (input.memberIds) {
       await this.assertMembersExist(input.memberIds);
     }
@@ -80,23 +83,17 @@ export class EquipmentService {
     return updated;
   }
 
-  async delete(id: string): Promise<void> {
-    const existing = await this.equipments.findById(id);
-    if (!existing) {
-      throw new NotFoundError(`Équipement introuvable : ${id}`);
-    }
+  async delete(id: string, requesterId: string): Promise<void> {
+    await equipmentForMember(this.equipments, id, requesterId);
     await this.equipments.delete(id);
   }
 
-  async getById(id: string): Promise<Equipment> {
-    const equipment = await this.equipments.findById(id);
-    if (!equipment) {
-      throw new NotFoundError(`Équipement introuvable : ${id}`);
-    }
-    return equipment;
+  async getById(id: string, requesterId: string): Promise<Equipment> {
+    return equipmentForMember(this.equipments, id, requesterId);
   }
 
-  async list(): Promise<Equipment[]> {
-    return this.equipments.findAll();
+  /** Équipements du cercle du demandeur : les autres n'existent pas pour lui. */
+  async list(requesterId: string): Promise<Equipment[]> {
+    return equipmentsForMember(this.equipments, requesterId);
   }
 }

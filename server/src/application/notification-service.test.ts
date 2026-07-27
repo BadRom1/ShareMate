@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { NotificationService } from './notification-service.js';
 import { NotificationPreference } from '../domain/notification/preference.js';
-import { UnauthorizedError } from '../domain/shared/domain-error.js';
+import { ForbiddenError } from '../domain/shared/domain-error.js';
 import type { DeviceToken, FailedTarget, PushPayload, PushSender, WebPushSubscription } from './ports.js';
 import {
   FixedClock,
@@ -65,10 +65,10 @@ describe('NotificationService', () => {
     expect(await ctx.service.unreadCount('m1')).toBe(0);
   });
 
-  it('marque lu et empêche de lire la notification d’un autre membre', async () => {
+  it('marque lu et masque la notification d’un autre membre (traitée comme inexistante)', async () => {
     await ctx.service.notify({ type: 'EXPENSE_ADDED', recipientIds: ['m1'], title: 'T', body: 'B' });
     const [notif] = await ctx.service.list('m1');
-    await expect(ctx.service.markRead(notif!.id, 'm2')).rejects.toThrow(UnauthorizedError);
+    await expect(ctx.service.markRead(notif!.id, 'm2')).rejects.toThrow(ForbiddenError);
     await ctx.service.markRead(notif!.id, 'm1');
     expect(await ctx.service.unreadCount('m1')).toBe(0);
   });
