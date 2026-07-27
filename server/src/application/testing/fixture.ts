@@ -8,6 +8,7 @@ import {
   InMemoryEquipmentRepository,
   InMemoryExpenseRepository,
   InMemoryMemberRepository,
+  InMemoryReceiptStorage,
   InMemoryReimbursementRepository,
   InMemoryReservationRepository,
   InMemorySessionRepository,
@@ -24,6 +25,7 @@ export async function makeFixture() {
   const usageRecords = new InMemoryUsageRecordRepository();
   const expenses = new InMemoryExpenseRepository();
   const reimbursements = new InMemoryReimbursementRepository();
+  const receipts = new InMemoryReceiptStorage();
   const credentials = new InMemoryCredentialRepository();
   const sessions = new InMemorySessionRepository();
   const hasher = new FakePasswordHasher();
@@ -54,6 +56,7 @@ export async function makeFixture() {
     usageRecords,
     expenses,
     reimbursements,
+    receipts,
     credentials,
     sessions,
     hasher,

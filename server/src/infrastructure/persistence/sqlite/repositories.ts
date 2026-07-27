@@ -437,6 +437,11 @@ export class SqliteExpenseRepository implements ExpenseRepository {
     return rows.map((r) => this.toEntity(r));
   }
 
+  async findByReceiptPath(receiptPath: string): Promise<Expense[]> {
+    const rows = this.db.prepare('SELECT * FROM expenses WHERE receipt_path = ?').all(receiptPath) as ExpenseRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
   async save(expense: Expense): Promise<void> {
     this.db
       .prepare(

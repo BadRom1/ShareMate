@@ -2,13 +2,15 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { makeFixture } from './testing/fixture.js';
 import { EquipmentService } from './equipment-service.js';
 import { ForbiddenError } from '../domain/shared/domain-error.js';
+import { Expense } from '../domain/expense/expense.js';
+import { Money } from '../domain/shared/money.js';
 
 let f: Awaited<ReturnType<typeof makeFixture>>;
 let service: EquipmentService;
 
 beforeEach(async () => {
   f = await makeFixture();
-  service = new EquipmentService(f.equipments, f.members, f.idGenerator);
+  service = new EquipmentService(f.equipments, f.members, f.idGenerator, f.expenses, f.receipts);
 });
 
 describe('EquipmentService', () => {
@@ -88,6 +90,27 @@ describe('EquipmentService', () => {
   it('supprime un équipement', async () => {
     await service.delete('e1', 'm1');
     expect(await f.equipments.findById('e1')).toBeNull();
+  });
+
+  it('purge les justificatifs des dépenses emportées par la suppression', async () => {
+    const receiptPath = '/uploads/8f14e45f-ceea-467a-a3f6-9b1f3e2c7d40.png';
+    f.receipts.add(receiptPath);
+    await f.expenses.save(
+      Expense.create({
+        id: 'x1',
+        equipmentId: 'e1',
+        label: 'Plein gasoil',
+        amount: Money.fromEuros(90),
+        payerId: 'm1',
+        date: new Date('2026-07-01'),
+        category: 'FUEL',
+        split: { type: 'EQUAL', memberIds: ['m1', 'm2'] },
+        receiptPath,
+      }),
+    );
+    await service.delete('e1', 'm1');
+    // La cascade de la persistance efface les dépenses ; le fichier, lui, n'est atteint que d'ici.
+    expect(f.receipts.paths.has(receiptPath)).toBe(false);
   });
 
   it('ne liste que les équipements du cercle du demandeur', async () => {

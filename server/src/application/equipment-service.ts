@@ -3,7 +3,8 @@ import type { MeterUnit } from '../domain/equipment/equipment.js';
 import { Money } from '../domain/shared/money.js';
 import { DomainError } from '../domain/shared/domain-error.js';
 import { equipmentForMember, equipmentsForMember } from './equipment-access.js';
-import type { EquipmentRepository, IdGenerator, MemberRepository } from './ports.js';
+import { purgeOrphanReceipts } from './receipt-access.js';
+import type { EquipmentRepository, ExpenseRepository, IdGenerator, MemberRepository, ReceiptStorage } from './ports.js';
 
 export interface CreateEquipmentInput {
   name: string;
@@ -30,6 +31,10 @@ export class EquipmentService {
     private readonly equipments: EquipmentRepository,
     private readonly members: MemberRepository,
     private readonly idGenerator: IdGenerator,
+    // Supprimer un équipement emporte ses dépenses (cascade de la persistance) : leurs
+    // justificatifs, eux, sont des fichiers, hors de portée de cette cascade.
+    private readonly expenses: ExpenseRepository,
+    private readonly receipts?: ReceiptStorage,
   ) {}
 
   private async assertMembersExist(memberIds: string[]): Promise<void> {
@@ -85,7 +90,10 @@ export class EquipmentService {
 
   async delete(id: string, requesterId: string): Promise<void> {
     await equipmentForMember(this.equipments, id, requesterId);
+    // Relevées avant : la cascade les efface avec l'équipement, et plus rien ne nommera leurs fichiers.
+    const doomed = await this.expenses.findByEquipmentId(id);
     await this.equipments.delete(id);
+    await purgeOrphanReceipts(this.expenses, this.receipts, doomed);
   }
 
   async getById(id: string, requesterId: string): Promise<Equipment> {

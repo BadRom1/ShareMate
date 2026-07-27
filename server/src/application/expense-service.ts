@@ -5,12 +5,14 @@ import { computeBalances, settle } from '../domain/expense/settlement.js';
 import { Money } from '../domain/shared/money.js';
 import { DomainError, NotFoundError } from '../domain/shared/domain-error.js';
 import { equipmentForMember } from './equipment-access.js';
+import { expenseForReceipt, purgeOrphanReceipts } from './receipt-access.js';
 import type {
   EquipmentRepository,
   ExpenseRepository,
   IdGenerator,
   MemberRepository,
   Notifier,
+  ReceiptStorage,
   ReimbursementRepository,
   ReservationRepository,
 } from './ports.js';
@@ -62,6 +64,7 @@ export class ExpenseService {
     private readonly idGenerator: IdGenerator,
     private readonly members?: MemberRepository,
     private readonly notifier?: Notifier,
+    private readonly receipts?: ReceiptStorage,
   ) {}
 
   private formatEuros(euros: number): string {
@@ -80,6 +83,12 @@ export class ExpenseService {
     const equipment = await equipmentForMember(this.equipments, input.equipmentId, requesterId);
     if (!equipment.canBeUsedBy(input.payerId)) {
       throw new DomainError(`Le payeur ${input.payerId} ne fait pas partie du cercle de l'équipement.`);
+    }
+    // Un justificatif appartient à une seule dépense : chaque téléversement produit un nom neuf.
+    // Sans cette borne, recopier le chemin d'un fichier d'un autre cercle dans sa propre dépense
+    // suffirait à s'en ouvrir la lecture (voir receipt-access.ts), et sa purge deviendrait ambiguë.
+    if (input.receiptPath && (await this.expenses.findByReceiptPath(input.receiptPath)).length > 0) {
+      throw new DomainError('Ce justificatif est déjà rattaché à une dépense.');
     }
     const split = await this.resolveSplit(input, equipment.memberIds);
     const expense = Expense.create({
@@ -159,6 +168,15 @@ export class ExpenseService {
     // Hors du cercle, la dépense se comporte comme inexistante (même réponse qu'un id inconnu).
     await equipmentForMember(this.equipments, existing.equipmentId, requesterId, absent);
     await this.expenses.delete(id);
+    await purgeOrphanReceipts(this.expenses, this.receipts, [existing]);
+  }
+
+  /**
+   * Dépense portant ce justificatif, si le demandeur y a accès. L'adapter HTTP s'en sert pour
+   * autoriser la lecture du fichier avant de le servir : lui seul sait où il est rangé.
+   */
+  async receiptOwner(receiptPath: string, requesterId: string): Promise<Expense> {
+    return expenseForReceipt(this.expenses, this.equipments, receiptPath, requesterId);
   }
 
   async listExpenses(equipmentId: string, requesterId: string): Promise<Expense[]> {

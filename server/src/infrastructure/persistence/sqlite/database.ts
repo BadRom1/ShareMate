@@ -104,6 +104,8 @@ function migrate(db: SqliteDb): void {
       receipt_path TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_expenses_equipment ON expenses(equipment_id);
+    -- Chaque lecture d'un justificatif remonte à la dépense qui le porte, par ce chemin.
+    CREATE INDEX IF NOT EXISTS idx_expenses_receipt ON expenses(receipt_path);
 
     CREATE TABLE IF NOT EXISTS reimbursements (
       id TEXT PRIMARY KEY,

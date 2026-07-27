@@ -73,12 +73,13 @@ afterEach(async () => {
   await app.close();
 });
 
-async function post(url: string, body: unknown, cookies?: Cookies) {
-  return app.inject({ method: 'POST', url, payload: body as Record<string, unknown>, cookies });
+// `target` : les parcours qui ont besoin d'un répertoire d'upload tournent sur une app dédiée.
+async function post(url: string, body: unknown, cookies?: Cookies, target: FastifyInstance = app) {
+  return target.inject({ method: 'POST', url, payload: body as Record<string, unknown>, cookies });
 }
 
-async function get(url: string, cookies?: Cookies) {
-  return app.inject({ method: 'GET', url, cookies });
+async function get(url: string, cookies?: Cookies, target: FastifyInstance = app) {
+  return target.inject({ method: 'GET', url, cookies });
 }
 
 function sessionCookie(res: { cookies: { name: string; value: string }[] }): Cookies {
@@ -88,27 +89,27 @@ function sessionCookie(res: { cookies: { name: string; value: string }[] }): Coo
 }
 
 /** Premier compte (Alice) via bootstrap : renvoie son id et sa session. */
-async function bootstrapAlice() {
-  const res = await post('/api/auth/bootstrap', { name: 'Alice', password: PASSWORD });
+async function bootstrapAlice(target: FastifyInstance = app) {
+  const res = await post('/api/auth/bootstrap', { name: 'Alice', password: PASSWORD }, undefined, target);
   expect(res.statusCode).toBe(201);
   return { id: (res.json() as { member: { id: string } }).member.id, cookies: sessionCookie(res) };
 }
 
 /** Crée un membre (invité), consomme son invitation et renvoie id + session. */
-async function inviteAndRedeem(name: string, creatorCookies: Cookies) {
-  const created = await post('/api/members', { name }, creatorCookies);
+async function inviteAndRedeem(name: string, creatorCookies: Cookies, target: FastifyInstance = app) {
+  const created = await post('/api/members', { name }, creatorCookies, target);
   expect(created.statusCode).toBe(201);
   const { id, inviteCode } = created.json() as { id: string; inviteCode: string };
-  const redeemed = await post(`/api/auth/invites/${inviteCode}/redeem`, { password: PASSWORD });
+  const redeemed = await post(`/api/auth/invites/${inviteCode}/redeem`, { password: PASSWORD }, undefined, target);
   expect(redeemed.statusCode).toBe(200);
   return { id, cookies: sessionCookie(redeemed) };
 }
 
 /** Trois membres connectés ; la minipelle porte le cercle m1/m2, m3 reste en dehors. */
-async function setupMembersAndEquipment() {
-  const alice = await bootstrapAlice();
-  const bruno = await inviteAndRedeem('Bruno', alice.cookies);
-  const chloe = await inviteAndRedeem('Chloé', alice.cookies);
+async function setupMembersAndEquipment(target: FastifyInstance = app) {
+  const alice = await bootstrapAlice(target);
+  const bruno = await inviteAndRedeem('Bruno', alice.cookies, target);
+  const chloe = await inviteAndRedeem('Chloé', alice.cookies, target);
   const equipmentRes = await post(
     '/api/equipments',
     {
@@ -121,6 +122,7 @@ async function setupMembersAndEquipment() {
       maintenanceThreshold: 50,
     },
     alice.cookies,
+    target,
   );
   const equipment = equipmentRes.json() as { id: string; memberIds: string[] };
   return { equipment, alice, bruno, chloe };
@@ -139,7 +141,7 @@ function filePayload(filename: string, content: Buffer, contentType = 'image/png
   };
 }
 
-describe('API — justificatifs et front statique (@fastify/static)', () => {
+describe('API — justificatifs et front statique', () => {
   let staticApp: FastifyInstance;
   let uploadsDir: string;
   let webDistDir: string;
@@ -173,22 +175,110 @@ describe('API — justificatifs et front statique (@fastify/static)', () => {
     return sessionCookie(res);
   }
 
-  it('téléverse un justificatif, puis ne le sert qu’avec une session', async () => {
-    const cookies = await session();
-    const contenu = Buffer.from('image-factice');
+  /** Téléverse un justificatif et le rattache à une dépense de `equipmentId`. */
+  async function dépenseAvecJustificatif(equipmentId: string, payerId: string, cookies: Cookies) {
+    const contenu = Buffer.from(`justificatif-${equipmentId}`);
     const { payload, headers } = filePayload('recu.png', contenu);
     const upload = await staticApp.inject({ method: 'POST', url: '/api/uploads/receipts', payload, headers, cookies });
     expect(upload.statusCode).toBe(201);
     const { path: servedPath } = upload.json() as { path: string };
     expect(servedPath).toMatch(/^\/uploads\/[\w-]+\.png$/);
+    const dépense = await post(
+      '/api/expenses',
+      {
+        equipmentId,
+        label: 'Plein gasoil',
+        amountEuros: 90,
+        payerId,
+        date: '2026-07-01',
+        category: 'FUEL',
+        split: { type: 'EQUAL' },
+        receiptPath: servedPath,
+      },
+      cookies,
+      staticApp,
+    );
+    expect(dépense.statusCode).toBe(201);
+    const fichier = path.join(uploadsDir, servedPath.slice('/uploads/'.length));
+    return { id: (dépense.json() as { id: string }).id, servedPath, contenu, fichier };
+  }
 
-    const authentifié = await staticApp.inject({ method: 'GET', url: servedPath, cookies });
+  it('téléverse un justificatif, puis ne le sert qu’avec une session', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(staticApp);
+    const { servedPath, contenu } = await dépenseAvecJustificatif(equipment.id, alice.id, alice.cookies);
+
+    const authentifié = await staticApp.inject({ method: 'GET', url: servedPath, cookies: alice.cookies });
     expect(authentifié.statusCode).toBe(200);
     expect(authentifié.rawPayload.equals(contenu)).toBe(true);
+    // Un justificatif ne doit pas survivre sur l'appareil à la perte du droit qui l'ouvre.
+    expect(authentifié.headers['cache-control']).toBe('private, no-store');
 
     // Sans session, le justificatif reste inaccessible.
     const anonyme = await staticApp.inject({ method: 'GET', url: servedPath });
     expect(anonyme.statusCode).toBe(401);
+  });
+
+  it('ne sert un justificatif qu’aux membres du cercle de la dépense qui le porte', async () => {
+    const { equipment, alice, chloe } = await setupMembersAndEquipment(staticApp);
+    // Chloé a son propre cercle : session valide, mais étrangère à la minipelle.
+    const tondeuse = await post(
+      '/api/equipments',
+      {
+        name: 'Tondeuse',
+        category: 'Jardin',
+        acquisitionDate: '2025-03-01',
+        purchaseValueEuros: 900,
+        meterUnit: 'HOURS',
+        memberIds: [chloe.id],
+        maintenanceThreshold: null,
+      },
+      chloe.cookies,
+      staticApp,
+    );
+    expect(tondeuse.statusCode).toBe(201);
+
+    // Réponse de référence : le justificatif n'existe pas encore, ce chemin ne désigne rien.
+    const servedPath = `/uploads/${crypto.randomUUID()}.png`;
+    const avant = await get(servedPath, chloe.cookies, staticApp);
+    expect(avant.statusCode).toBe(404);
+
+    const justificatif = await dépenseAvecJustificatif(equipment.id, alice.id, alice.cookies);
+    const membre = await get(justificatif.servedPath, alice.cookies, staticApp);
+    expect(membre.statusCode).toBe(200);
+
+    // Le même chemin, vu de l'extérieur du cercle : la réponse est celle d'un fichier qui n'existe
+    // pas — même code, même corps. Détenir le chemin n'apprend donc rien (anti-énumération).
+    const après = await get(justificatif.servedPath, chloe.cookies, staticApp);
+    expect(après.statusCode).toBe(avant.statusCode);
+    expect(après.payload).toBe(avant.payload.replace(servedPath, justificatif.servedPath));
+  });
+
+  it('purge le fichier quand la dépense qui le porte est supprimée', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(staticApp);
+    const { id, fichier, servedPath } = await dépenseAvecJustificatif(equipment.id, alice.id, alice.cookies);
+    expect(fs.existsSync(fichier)).toBe(true);
+
+    const suppression = await staticApp.inject({
+      method: 'DELETE',
+      url: `/api/expenses/${id}`,
+      cookies: alice.cookies,
+    });
+    expect(suppression.statusCode).toBe(204);
+    expect(fs.existsSync(fichier)).toBe(false);
+    expect((await get(servedPath, alice.cookies, staticApp)).statusCode).toBe(404);
+  });
+
+  it('purge les justificatifs emportés par la suppression de l’équipement', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(staticApp);
+    const { fichier } = await dépenseAvecJustificatif(equipment.id, alice.id, alice.cookies);
+
+    const suppression = await staticApp.inject({
+      method: 'DELETE',
+      url: `/api/equipments/${equipment.id}`,
+      cookies: alice.cookies,
+    });
+    expect(suppression.statusCode).toBe(204);
+    expect(fs.existsSync(fichier)).toBe(false);
   });
 
   it('refuse les formats non autorisés', async () => {

@@ -75,6 +75,9 @@ export const isoDate = {
   pattern: '^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,3})?)?(Z|[+-]\\d{2}:\\d{2})?)?$',
 };
 
+/** Nom de fichier d'un justificatif, tel que produit par le téléversement : UUID v4 + extension. */
+const RECEIPT_NAME = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.(png|jpe?g|webp|pdf)';
+
 /**
  * Chemin d'un justificatif : exactement la forme produite par l'upload, `/uploads/<uuid>.<ext>`.
  * Sans cette borne, un membre place l'URL externe de son choix dans une dépense visible par tout
@@ -83,8 +86,14 @@ export const isoDate = {
 export const receiptPath = {
   type: ['string', 'null'],
   maxLength: 60,
-  pattern: '^/uploads/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.(png|jpe?g|webp|pdf)$',
+  pattern: `^/uploads/${RECEIPT_NAME}$`,
 };
+
+/**
+ * Paramètre d'URL de la lecture d'un justificatif. Écarte avant tout accès au disque ce que
+ * le téléversement n'a pas pu produire — traversées de répertoire comprises.
+ */
+export const receiptNameParams = params({ name: { type: 'string', pattern: `^${RECEIPT_NAME}$` } });
 
 const SECTIONS: Record<SchemaErrorDataVar, string> = {
   body: 'Corps de requête',

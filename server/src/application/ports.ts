@@ -46,6 +46,12 @@ export interface UsageRecordRepository {
 export interface ExpenseRepository {
   findById(id: string): Promise<Expense | null>;
   findByEquipmentId(equipmentId: string): Promise<Expense[]>;
+  /**
+   * Dépenses portant ce justificatif. Renvoie une liste et non une dépense : les données
+   * antérieures à la règle d'unicité (voir `ExpenseService.addExpense`) peuvent en compter
+   * plusieurs, et l'accès comme la purge doivent alors toutes les considérer.
+   */
+  findByReceiptPath(receiptPath: string): Promise<Expense[]>;
   save(expense: Expense): Promise<void>;
   delete(id: string): Promise<void>;
 }
@@ -149,6 +155,16 @@ export interface SessionRepository {
   /** Révocation globale : toutes les sessions du membre, sur tous ses appareils. */
   deleteByMemberId(memberId: string): Promise<void>;
   deleteExpired(now: Date): Promise<void>;
+}
+
+/**
+ * Port de stockage des justificatifs. La couche application décide quand un justificatif devient
+ * orphelin ; où et comment le fichier est rangé (disque local, objet distant) ne la regarde pas.
+ * Elle ne manipule que le chemin public `/uploads/<uuid>.<ext>` porté par la dépense.
+ */
+export interface ReceiptStorage {
+  /** Supprime le justificatif ; sans effet s'il a déjà disparu (purge idempotente). */
+  delete(receiptPath: string): Promise<void>;
 }
 
 /** Ports techniques. */

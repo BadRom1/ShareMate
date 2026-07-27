@@ -16,6 +16,7 @@ import type {
   PasswordHasher,
   PushSender,
   PushSubscriptionRepository,
+  ReceiptStorage,
   ReimbursementRepository,
   ReservationRepository,
   SessionRepository,
@@ -108,6 +109,9 @@ export class InMemoryExpenseRepository implements ExpenseRepository {
   }
   async findByEquipmentId(equipmentId: string) {
     return [...this.items.values()].filter((x) => x.equipmentId === equipmentId);
+  }
+  async findByReceiptPath(receiptPath: string) {
+    return [...this.items.values()].filter((x) => x.receiptPath === receiptPath);
   }
   async save(expense: Expense) {
     this.items.set(expense.id, expense);
@@ -267,6 +271,17 @@ export class InMemoryDeviceTokenRepository implements DeviceTokenRepository {
   }
   async deleteByToken(token: string) {
     this.items.delete(token);
+  }
+}
+
+/** Justificatifs sans disque : `paths` expose ce qui reste stocké. */
+export class InMemoryReceiptStorage implements ReceiptStorage {
+  readonly paths = new Set<string>();
+  add(receiptPath: string) {
+    this.paths.add(receiptPath);
+  }
+  async delete(receiptPath: string) {
+    this.paths.delete(receiptPath);
   }
 }
 

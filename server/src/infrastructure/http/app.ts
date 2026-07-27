@@ -61,6 +61,7 @@ import { discussionRoutes } from './plugins/discussions.js';
 import { checklistRoutes } from './plugins/checklists.js';
 import { notificationRoutes } from './plugins/notifications.js';
 import { uploadRoutes } from './plugins/uploads.js';
+import { FileSystemReceiptStorage } from '../tech/receipt-storage.js';
 
 export interface AppDependencies {
   members: MemberRepository;
@@ -185,7 +186,15 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.clock,
   );
   const memberService = new MemberService(deps.members, deps.equipments, deps.credentials, deps.idGenerator);
-  const equipmentService = new EquipmentService(deps.equipments, deps.members, deps.idGenerator);
+  // Sans répertoire d'upload, il n'y a ni justificatif à servir ni fichier à purger.
+  const receiptStorage = deps.uploadsDir ? new FileSystemReceiptStorage(deps.uploadsDir) : undefined;
+  const equipmentService = new EquipmentService(
+    deps.equipments,
+    deps.members,
+    deps.idGenerator,
+    deps.expenses,
+    receiptStorage,
+  );
   const reservationService = new ReservationService(
     deps.reservations,
     deps.equipments,
@@ -209,6 +218,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.idGenerator,
     deps.members,
     notificationService,
+    receiptStorage,
   );
   const discussionService = new DiscussionService(
     deps.threads,
@@ -298,8 +308,8 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   await app.register(discussionRoutes, { discussionService });
   await app.register(checklistRoutes, { checklistService });
   await app.register(notificationRoutes, { notificationService, vapidPublicKey: deps.vapidPublicKey ?? null });
-  if (deps.uploadsDir) {
-    await app.register(uploadRoutes, { uploadsDir: deps.uploadsDir, rateLimits });
+  if (receiptStorage) {
+    await app.register(uploadRoutes, { storage: receiptStorage, expenseService, rateLimits });
   }
 
   // --- Front statique (production) ---
