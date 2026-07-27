@@ -40,38 +40,42 @@ l'isolation des cercles.
 ## Suivi des corrections — 27 juillet 2026
 
 Ajouté après coup. Le diagnostic ci-dessous n'a pas été retouché : il reste l'état des lieux daté
-qu'il était, et chaque constat porte désormais sa ligne **Résolution**. Deux constats restent
-ouverts, un troisième est partiel ; ils sont dits tels quels.
+qu'il était, et chaque constat porte désormais sa ligne **Résolution**.
 
-La suite de tests est passée de 236 à 410 (339 serveur, 71 front, 37 fichiers), tous verts.
+> **Ce tableau a été corrigé après relecture adversariale** : plusieurs statuts « corrigé » étaient
+> faux ou partiels, et la relecture a trouvé cinq défauts que le diagnostic initial n'avait pas vus,
+> dont un contournement d'authentification qui annulait la prémisse de S1, S2 et S4. Voir
+> [Deuxième passe](#deuxième-passe--relecture-adversariale--27-juillet-2026), qui fait foi.
 
-| Constat | Statut                | Commit                              |
-| ------- | --------------------- | ----------------------------------- |
-| S1      | Corrigé               | `5291d19`                           |
-| S2      | Corrigé               | `5291d19`                           |
-| S3      | Corrigé               | `5291d19`                           |
-| S4      | Corrigé               | `bfcf604`, `25ed70e`                |
-| S5      | Corrigé               | `2e70acf`                           |
-| S6      | Corrigé               | `9526070`                           |
-| S7      | Corrigé               | `9ccd3b7`                           |
-| S8      | Corrigé               | `4954ad7`                           |
-| S9      | **Ouvert**            | —                                   |
-| S10     | Corrigé               | `9dcef5f`                           |
-| S11     | Corrigé               | `5291d19`                           |
-| S12     | Corrigé               | `2e70acf`                           |
-| Dépend. | **Ouvert**            | —                                   |
-| Q1      | Corrigé               | `1601077`                           |
-| Q2      | Corrigé               | `f4c97bc`                           |
-| Q3      | Corrigé (cache exclu) | `f068da5`                           |
-| Q4      | Corrigé               | `3ad6ba8`                           |
-| Q5      | Corrigé               | `a483676`                           |
-| Q6      | Corrigé               | `1783773`, `f4d10b8`                |
-| Q7      | Corrigé               | `c2a8e1c`                           |
-| Q8      | Corrigé               | `0d3a030` (+ sauvegarde documentée) |
-| Q9      | Corrigé               | `a38adb2`                           |
-| Q10     | Corrigé               | `2d25524`                           |
-| Q11     | Corrigé               | `5291d19`                           |
-| Q12     | Corrigé               | `af10429`                           |
+La suite de tests est passée de 236 à 441 (361 serveur, 80 front), tous verts.
+
+| Constat | Statut                | Commit                          |
+| ------- | --------------------- | ------------------------------- |
+| S1      | Corrigé (2ᵉ passe)    | `5291d19`, `02d65e2`            |
+| S2      | Corrigé               | `5291d19`                       |
+| S3      | Corrigé               | `5291d19`                       |
+| S4      | Corrigé (2ᵉ passe)    | `bfcf604`, `25ed70e`, `40bbb26` |
+| S5      | Corrigé (2ᵉ passe)    | `2e70acf`, `d0358fe`            |
+| S6      | Corrigé               | `9526070`                       |
+| S7      | Corrigé               | `9ccd3b7`                       |
+| S8      | Corrigé               | `4954ad7`                       |
+| S9      | **Ouvert**            | —                               |
+| S10     | Corrigé               | `9dcef5f`                       |
+| S11     | Corrigé               | `5291d19`                       |
+| S12     | Corrigé               | `2e70acf`                       |
+| Dépend. | **Ouvert**            | —                               |
+| Q1      | Corrigé               | `1601077`                       |
+| Q2      | Corrigé (2ᵉ passe)    | `f4c97bc`, `381d33a`, `7ee5a5e` |
+| Q3      | Corrigé (cache exclu) | `f068da5`, `2a47590`            |
+| Q4      | Corrigé               | `3ad6ba8`                       |
+| Q5      | Corrigé (2ᵉ passe)    | `a483676`, `40bbb26`            |
+| Q6      | **Partiel**           | `1783773`, `f4d10b8`, `0acb9ad` |
+| Q7      | Corrigé               | `c2a8e1c`                       |
+| Q8      | Corrigé (2ᵉ passe)    | `0d3a030`, `f33c073`            |
+| Q9      | Corrigé               | `a38adb2`                       |
+| Q10     | Corrigé               | `2d25524`                       |
+| Q11     | Corrigé               | `5291d19`                       |
+| Q12     | Corrigé (2ᵉ passe)    | `af10429`, `f33c073`            |
 
 **Ce qui reste ouvert**
 
@@ -96,6 +100,209 @@ appliqué en base. Aucun test n'échouait — les fixtures étaient déjà dans 
 suite n'attestait pas de ce que fait la production. L'ordre fait désormais partie du contrat écrit
 dans `ports.ts`, et `infrastructure/persistence/sqlite/port-contract.test.ts` le joue à l'identique
 sur les deux implémentations.
+
+## Deuxième passe — relecture adversariale — 27 juillet 2026
+
+Deux relecteurs ont audité le travail de remédiation ci-dessus, preuve à l'appui (tests exécutés
+contre `buildApp`). Leur verdict d'ensemble : sept des douze constats de sécurité étaient réellement
+et solidement traités (S3, S6, S7, S8, S10, S11, S12), mais **la prémisse sur laquelle S1, S2 et S4
+étaient écrits était fausse**, deux régressions avaient été introduites par la vague de correctifs,
+et quatre constats de qualité étaient donnés « corrigés » alors qu'ils étaient partiels.
+
+Tous les constats ci-dessous ont été reproduits avant correction, et chacun porte un test qui
+échouait avant et passe après.
+
+### B1 — CRITIQUE — La garde de session se contournait par un chemin encodé
+
+`app.ts` décidait d'exiger une session à partir de `request.raw.url`, **non décodé**, alors que le
+routeur Fastify décode le pourcentage avant d'apparier. `POST /%61pi/uploads/receipts` atteignait
+donc le handler de `/api/uploads/receipts` **sans aucune session** : dépôt anonyme de fichiers de
+10 Mo sur le disque, jamais purgés (`purgeOrphanReceipts` ne rattrape que les fichiers d'une dépense
+effacée) ; `DELETE /%61pi/notifications/device-tokens` détruisait le canal push d'un membre ;
+`GET /%61pi/members` tournait avec `request.authMember` non posé et échouait en 500.
+
+Le défaut **préexistait** à la vague de correctifs, qui ne l'a pas touché — mais il annulait
+l'essentiel de S1, S2 et S4, et rendait fausse l'affirmation de Q2 selon laquelle « toute route
+`/api/*` ou `/uploads/*` exige une session » et « les plugins de domaine en héritent ».
+
+> **Résolution — corrigé (`381d33a`).** Le périmètre protégé n'est plus deviné d'un préfixe textuel :
+> il est porté par la composition. Les plugins de domaine sont enregistrés dans un contexte Fastify
+> encapsulé qui porte le hook `onRequest` ; toute route qu'ils déclarent exige une session sauf
+> `config.public` explicite — refus par défaut. Les routes hors de ce contexte (front statique,
+> `/api/health`) sont publiques par construction. Effet de bord assumé : une route d'API inconnue
+> rend 404 sans session au lieu de 401, aucune route n'ayant été appariée.
+
+### B2 — ÉLEVÉE — S1 n'était refermé qu'à moitié : les comptes jamais ouverts
+
+La garde `existing?.hasPassword` ne mord qu'après la première connexion. Entre la création d'un
+membre et son redeem, la chaîne d'origine — annuaire, régénération d'invitation, redeem —
+fonctionnait intégralement : l'attaquant choisissait le mot de passe, héritait des cercles de sa
+cible (y compris ceux où il n'était pas) et enfermait le titulaire dehors définitivement. Le champ
+`hasPassword`, **ajouté par le correctif de S1 lui-même**, lui désignait les comptes prenables.
+
+> **Résolution — corrigé (`02d65e2`).** La régénération est réservée au titulaire et à son invitant.
+> Le cercle commun ne suffit plus : il se compose sans l'intéressé (voir B3), donc il ne peut pas
+> ouvrir un geste de reprise de compte. Hors de ce couple, le refus reste masqué en « membre
+> introuvable ».
+
+### B3 — ÉLEVÉE — Le prédicat de périmètre était inscriptible par l'attaquant
+
+`POST /api/equipments` et `PUT /api/equipments/:id` acceptaient n'importe quel `memberIds` : il
+suffisait de connaître un identifiant pour inscrire son porteur dans un cercle, sans son accord.
+Le périmètre — sur lequel reposent le cadrage de l'annuaire (S2) et la garde de S1 — s'écrivait donc
+à la demande par celui qu'il était censé borner.
+
+> **Résolution — corrigé (`02d65e2`).** Un membre ne peut inscrire dans un cercle que des membres de
+> son propre périmètre relationnel (`member-scope.ts` : soi-même, ses cercles, son invitant et ses
+> invités). Un identifiant hors périmètre reçoit le message d'un identifiant inconnu, pour ne pas
+> les distinguer. Le périmètre reste extensible de proche en proche — c'est ce qui permet de composer
+> un cercle — mais chaque ajout est fait par quelqu'un qui a déjà une relation avec l'ajouté, et il
+> ne porte aucun geste irréversible : la régénération d'invitation, elle, s'en tient à l'invitant.
+
+### B4 — MOYENNE — Régression : oracle d'énumération d'emails (introduit par `af10429`)
+
+L'invariant d'unicité d'email ajouté au titre de Q12 répondait 409 « Cette adresse email est déjà
+utilisée par un autre membre » pour toute adresse présente **dans l'instance entière**. N'importe
+quel membre authentifié énumérait ainsi, adresse par adresse, les comptes des autres cercles :
+exactement le canal que le cadrage de l'annuaire (S2) devait fermer.
+
+> **Résolution — corrigé (`02d65e2`).** La collision n'est plus cherchée que dans le périmètre du
+> demandeur, où il voit déjà ces adresses — le refus ne lui apprend rien. Hors périmètre, le doublon
+> est accepté. L'ambiguïté que l'invariant visait reste théorique : `login` n'ouvre que le compte
+> dont le mot de passe correspond, et l'attaquant ne le connaît pas. Une garde à l'échelle de
+> l'instance ne peut pas exister sans répondre « cette adresse est prise » à qui la sonde.
+
+### B5 — MOYENNE — Aucun contrôle de propriétaire sur les canaux push
+
+`DELETE /api/notifications/subscriptions` et `/device-tokens` supprimaient sur la seule connaissance
+de l'endpoint ou du jeton : `unsubscribeWebPush(endpoint)` et `unregisterDeviceToken(token)` ne
+prenaient pas d'identifiant de membre. Or ces valeurs circulent et ne prouvent rien. Effet : coupure
+silencieuse des alertes push d'un tiers — dont la notification `EQUIPMENT_CIRCLE_CHANGED` que le
+correctif de S10 avait ajoutée pour qu'une éviction ne passe pas inaperçue.
+
+> **Résolution — corrigé (`926609d`).** Les deux ports prennent le membre en premier paramètre et
+> n'effacent que ses lignes (`WHERE … AND member_id = ?`). Réponse 204 dans tous les cas, pour ne pas
+> faire de la route un oracle sur l'appartenance d'un endpoint.
+
+### B6 — ÉLEVÉE — S5 : un 500 restait déclenchable par un corps de requête
+
+Le motif `isoDate` ne porte que la _forme_ d'une date, et le commentaire de `schema.ts` promettait au
+domaine une validité calendaire qu'aucune entité ne vérifiait. `date: '9999-99-99'` traversait le
+schéma, `new Date` rendait une Invalid Date et la chaîne cassait à `toISOString()` — un 500 sur un
+corps de requête, ce que S5 devait supprimer. Symétriquement, `acquisitionDate: '2026-02-31'` était
+accepté puis **réécrit en silence** au 3 mars : la donnée enregistrée n'était pas celle saisie.
+
+> **Résolution — corrigé (`d0358fe`).** `parseIsoDate` (domaine) refuse les deux, en vérifiant le
+> calendrier sur le texte — seul endroit où il est lisible sans dépendre du fuseau du serveur.
+> `Equipment`, `Expense`, `UsageRecord` et `Reimbursement` reçoivent le garde-fou qu'avait déjà
+> `TimeRange` : une Invalid Date n'entre plus dans le domaine.
+
+### B7 — FAIBLE — S5 : `coerceTypes: true` promouvait `null` en `0`
+
+Un champ obligatoire envoyé à `null` par le front devenait une valeur d'achat de 0 € ou un montant
+nul dans un calcul de soldes. Le commentaire de `schema.ts` justifiait deux écarts aux défauts
+Fastify par la rigueur, sans mentionner cette conversion, qui va dans le sens inverse.
+
+> **Résolution — corrigé (`d0358fe`).** La coercition n'était utile nulle part — aucun paramètre
+> d'URL ni de querystring n'est déclaré autrement que `string` — elle est coupée (`coerceTypes: false`).
+
+### B8 — FAIBLE — Régression : querystring fermée par `additionalProperties: false`
+
+La seule route dotée d'un schéma de querystring refusait la requête entière pour un paramètre
+inconnu : un anti-cache, un `utm_*` collé par un partage faisait échouer la lecture des notifications
+en 400. Une URL n'est pas maîtrisée par le seul client.
+
+> **Résolution — corrigé (`d0358fe`).** Brique `query()` distincte, sans `additionalProperties: false` :
+> on valide ce qu'on lit, on ignore le reste. Les corps restent fermés.
+
+### B9 — MOYENNE — S4 : la purge des caches hors ligne n'était câblée que sur la déconnexion
+
+`purgeOfflineCaches()` n'était appelée que depuis `api.logout` — le seul chemin qu'un intrus
+n'emprunte jamais, et celui que le changement de mot de passe (S3) n'emprunte pas non plus. Son
+appareil prenait un 401 et gardait jusqu'à 24 h de réponses d'API lisibles (cache `sharemate-api`,
+NetworkFirst : dépenses, soldes, messages, annuaire). Le geste réflexe après compromission
+n'expulsait donc l'attaquant qu'à moitié.
+
+> **Résolution — corrigé (`40bbb26`).** Le jeton natif et les caches tombent dans le traitement
+> global du 401, avant le retour à l'écran de connexion. Les 401 des routes d'authentification en
+> restent exclus : un mot de passe refusé n'est pas une session perdue.
+
+### B10 — MOYENNE — Q3 : le scan complet et le N+1 subsistaient sur l'annuaire
+
+`listVisibleMembers` — la route la plus chaude, appelée à chaque ouverture de page, et précisément la
+vue créée par S2 — relisait tous les membres de l'instance pour les filtrer en mémoire, avec une
+requête `credentials.findByMemberId` par membre. `findAll()` était le seul `findAll` survivant du
+dépôt, et il était branché là.
+
+> **Résolution — corrigé (`2a47590`).** `findAll` cède la place à `findByIds` et `findInvitedBy`, et
+> `CredentialRepository` gagne `findMemberIdsWithPassword` : l'annuaire tient en deux interrogations
+> bornées au périmètre. Plus aucun port ne rend la table entière. Un test compte les appels.
+
+### B11 — MOYENNE — Q8 : la perte de données avait changé de granularité, pas de nature
+
+La migration 6 remettait à NULL, au démarrage et sans une ligne de journal, tout email jugé mal formé
+ou en doublon. L'email est l'identifiant de connexion : le membre concerné perdait son moyen d'entrer
+sans savoir pourquoi. `refuserSchémaIncompatible`, dix lignes plus bas, adopte la posture inverse
+pour un dommage moindre.
+
+> **Résolution — corrigé (`f33c073`).** Même posture que pour un schéma incompatible : refus de
+> démarrer, en nommant chaque rangée (identifiant, nom, adresse, motif) et en rappelant la
+> sauvegarde. La migration étant transactionnelle, rien n'est écrit tant que l'opérateur n'a pas
+> tranché. Reste appliqué en silence ce qui n'est pas une perte : rognage des espaces, passage à NULL
+> d'un champ vide.
+
+### B12 — MOYENNE — Q6 : une page sur trois découpée, les deux autres avaient grossi
+
+Lignes avant → après la première vague : DiscussionsPage 625 → **640**, ChecklistsPage 542 → **550**,
+EquipmentsPage 381 → **446**, CalendarPage 840 → 557. Q6 se déclarait « corrigé » sans réserve.
+
+> **Résolution — PARTIEL (`0acb9ad`).** L'arbre des messages sort de `DiscussionsPage` dans
+> `pages/discussions/MessageTree` avec les cinq états et les deux effets qui lui appartenaient
+> (640 → 452 lignes). Le `key={openThread.id}` remplace l'effet de remise à zéro sur `openThreadId` —
+> exactement le motif qui avait produit la régression du fil refermé. **`ChecklistsPage` (550 lignes)
+> reste à découper** : le constat est requalifié partiel plutôt que déclaré clos.
+
+### B13 — MOYENNE — Q5 : un test attestait d'autre chose que de son titre
+
+« conserve la donnée précédente pendant un rechargement » n'assertionnait rien pendant le
+rechargement, seulement la valeur finale : un `reload` qui remettrait `data` à null pendant le
+chargement — le clignotement que le hook supprime — serait resté vert. Et quatre pages sur six
+n'avaient aucun test, dont `EquipmentsPage`, seule à porter un geste irréversible.
+
+> **Résolution — corrigé (`40bbb26`).** La promesse est suspendue et l'état intermédiaire vérifié.
+> `EquipmentsPage` (quitter le cercle : confirmation, absence pour le dernier membre, refus serveur)
+> et `DiscussionsPage` (ouverture par lien de notification, réponse à un message) sont testées.
+
+### B14 — FAIBLE — Q12 : le seul code mort que la branche ait touché était resté
+
+`NOTIFICATION_TYPE_LABELS` n'avait aucun appelant depuis sa création ; le front porte sa propre table
+(`format.ts`), et la vague de correctifs y avait ajouté une entrée.
+
+> **Résolution — corrigé (`f33c073`).** Supprimé. Les libellés d'interface n'ont pas leur place dans
+> le domaine.
+
+### B15 — FAIBLE — Q2 : convention de langue cassée à moitié
+
+Le refactoring avait introduit des identifiants français dans le code de production
+(`déclarerFonctions`, `dérivationFaite`, `historiques`, `jokers`, `COÛT_COURANT`, clés d'audit
+`retires`/`ajoutes`/`restants`), là où le dépôt était uniformément anglais hors tests.
+
+> **Résolution — corrigé (`7ee5a5e`).** Les identifiants repassent en anglais, et la convention est
+> écrite dans le README plutôt que déduite du code : le français est la langue de ce qui se lit
+> (commentaires, messages, libellés, titres de tests, commits), l'anglais celle de ce qui s'exécute.
+
+### Ce qui reste ouvert après cette passe
+
+- **S9** — `trustProxy: true` en production (inchangé). Il aggrave B1 tant qu'il est ouvert : la clé
+  du rate-limit par IP est forgeable, donc le plafond de 20 téléversements par minute l'est aussi.
+- **Dépendances** — inchangé : 23 vulnérabilités en dépendances de développement, `audit:prod` à 0.
+- **Q3, le cache des soldes** — inchangé, assumé.
+- **Q6, `ChecklistsPage`** — 550 lignes, à découper.
+- **Consentement à l'entrée dans un cercle** — B3 borne qui peut inscrire qui, mais l'inscription
+  reste unilatérale à l'intérieur du périmètre. La vraie réponse est une invitation que l'intéressé
+  accepte ; elle demande un modèle de données et un écran, hors du champ de cette passe.
+- **Comptes fantômes** — chaque `POST /api/members` refusé pour doublon laisse un membre et un code
+  d'invitation en base. Sans effet sur le cloisonnement, mais la table se salit.
 
 ---
 
@@ -168,7 +375,10 @@ entièrement contournable en trois requêtes.
 
 3. Journaliser (`warn`) toute régénération d'invitation portant sur un autre membre que soi.
 
-> **Résolution — corrigé (`5291d19`).** Les deux volets ont été retenus. `regenerateInvite` exige
+> **Résolution — corrigé en deux temps (`5291d19`, puis `02d65e2`).** La première correction
+> ne fermait la chaîne que sur les comptes déjà pourvus d'un mot de passe : voir
+> [B2](#b2--élevée--s1-nétait-refermé-quà-moitié--les-comptes-jamais-ouverts).
+> Les deux volets ont été retenus. `regenerateInvite` exige
 > désormais que la cible soit dans le périmètre du demandeur (lui-même, un cercle partagé, ou
 > quelqu'un qu'il a invité) et refuse un compte qui a déjà un mot de passe ; `redeemInvite` refuse
 > de même, ce qui neutralise au passage les codes émis par la version vulnérable. Une migration
@@ -268,7 +478,10 @@ porte l'est (`expense-service.ts:153-162`) — croissance monotone du volume ; e
 `CacheFirst` du service worker (`vite.config.ts`, `sharemate-uploads`, 30 jours) conserve les
 justificatifs sur l'appareil bien après une déconnexion.
 
-> **Résolution — corrigé (`bfcf604`, `25ed70e`).** `GET /uploads/:name` est devenu une route
+> **Résolution — corrigé en deux temps (`bfcf604`, `25ed70e`, puis `40bbb26`).** La purge des caches
+> hors ligne n'était câblée que sur la déconnexion volontaire : voir
+> [B9](#b9--moyenne--s4--la-purge-des-caches-hors-ligne-nétait-câblée-que-sur-la-déconnexion).
+> `GET /uploads/:name` est devenu une route
 > applicative qui remonte à la dépense portant le fichier et lui applique `equipmentForMember` ;
 > hors cercle, la réponse est celle d'un justificatif jamais déposé. Deux corollaires ont dû être
 > traités pour que la règle tienne : un justificatif ne peut plus être rattaché à deux dépenses
@@ -322,7 +535,10 @@ L'error handler traite déjà `httpError.validation` (`app.ts:330-333`) : les sc
 immédiatement des 400 propres. Alternative si vous préférez garder l'inférence de types :
 `fastify-type-provider-zod`, qui dérive schéma **et** type d'une même source.
 
-> **Résolution — corrigé (`2e70acf`).** Schémas Ajv sur le corps, les paramètres et la querystring
+> **Résolution — corrigé en deux temps (`2e70acf`, puis `d0358fe`).** Un 500 restait déclenchable
+> par une date calendairement impossible, et `coerceTypes` promouvait `null` en `0` : voir
+> [B6](#b6--élevée--s5--un-500-restait-déclenchable-par-un-corps-de-requête), B7 et B8.
+> Schémas Ajv sur le corps, les paramètres et la querystring
 > de toutes les routes, briques communes dans `http/schema.ts` — sans dépendance ajoutée, l'option
 > `fastify-type-provider-zod` n'ayant pas été retenue. Deux réglages Ajv s'écartent des défauts de
 > Fastify et c'est délibéré : `removeAdditional: false` (un champ inconnu doit être refusé, pas
@@ -575,7 +791,11 @@ infrastructure/http/
 Chaque plugin reçoit son service en paramètre — le câblage reste explicite, et `app.test.ts` peut se
 scinder en fichiers alignés sur les plugins.
 
-> **Résolution — corrigé (`f4c97bc`).** Dix plugins dans `http/plugins/`, un par domaine, chacun
+> **Résolution — corrigé en deux temps (`f4c97bc`, puis `381d33a`, `7ee5a5e`).** L'affirmation
+> « les plugins de domaine héritent du hook de session » était fausse — le hook se contournait par un
+> `%61` dans le chemin : voir [B1](#b1--critique--la-garde-de-session-se-contournait-par-un-chemin-encodé).
+> Le refactoring avait aussi cassé à moitié la convention de langue (B15).
+> Dix plugins dans `http/plugins/`, un par domaine, chacun
 > déclarant en `options` les seuls services dont il a besoin. `buildApp` ne garde que le
 > transverse : plugins Fastify, construction des services, hook de session, error handler,
 > `/api/health`, composition — et le front statique, dont le repli SPA appelle `reply.sendFile`
@@ -606,7 +826,10 @@ proportionnels à la taille de **l'instance** et non à celle du cercle.
 jointures sur `equipment_members`. Les ports existent déjà, la signature change seule. Aucune urgence
 aujourd'hui, mais à faire **avant** le multi-groupes, pas après.
 
-> **Résolution — corrigé (`f068da5`), sauf le cache.** Les ports ont gagné `findByMemberId`,
+> **Résolution — corrigé en deux temps (`f068da5`, puis `2a47590`), sauf le cache.** L'annuaire
+> créé par S2 gardait le scan complet et le N+1 : voir
+> [B10](#b10--moyenne--q3--le-scan-complet-et-le-n1-subsistaient-sur-lannuaire).
+> Les ports ont gagné `findByMemberId`,
 > `findByEquipmentIds` et `findByNameOrEmail` ; l'implémentation SQLite les sert par jointure sur
 > `equipment_members` ou par `IN (…)`, et charge les cercles de toute une liste d'équipements en une
 > interrogation au lieu d'une par ligne. La frontière tient : la couche application n'apprend rien
@@ -660,7 +883,10 @@ comportements à risque : navigation par lien de notification (`App.tsx:102-116`
 dépense et calcul des parts, et gestion du 401 global (Q1). Ne pas viser un pourcentage : viser les
 chemins où une régression est silencieuse.
 
-> **Résolution — corrigé (`a483676`).** Vitest passe en deux projets (`server` en Node, `web` en
+> **Résolution — corrigé en deux temps (`a483676`, puis `40bbb26`).** Un test n'attestait pas de ce
+> que son titre annonçait, et quatre pages sur six n'étaient pas testées : voir
+> [B13](#b13--moyenne--q5--un-test-attestait-dautre-chose-que-de-son-titre).
+> Vitest passe en deux projets (`server` en Node, `web` en
 > jsdom + `@testing-library/react`) : `npm test` lance les deux suites, 71 tests front s'ajoutant
 > aux 323 du serveur. La configuration de couverture est inchangée, toujours cadrée sur le cœur
 > métier — le front est visé sur les chemins listés ici, pas au pourcentage. Deux de ces tests ont
@@ -679,7 +905,10 @@ recopié à l'identique dans les six pages, avec à chaque fois le même
 et sortir de `CalendarPage` le calcul de grille (fonction pure, immédiatement testable) et le
 formulaire de réservation (composant dédié).
 
-> **Résolution — corrigé (`1783773`, `f4d10b8`).** `useApiResource(loader)` rend
+> **Résolution — PARTIEL (`1783773`, `f4d10b8`, `0acb9ad`).** Une page sur trois avait été découpée,
+> les deux autres avaient grossi ; `ChecklistsPage` (550 lignes) reste à découper : voir
+> [B12](#b12--moyenne--q6--une-page-sur-trois-découpée-les-deux-autres-avaient-grossi).
+> `useApiResource(loader)` rend
 > `{data, error, loading, reload}` plus `clearError` — les pages affichent un bandeau unique et
 > certaines le referment au clic, ce que ni `reload` ni un simple `error` ne permettent. Le hook
 > ignore aussi les réponses hors séquence : deux changements de sélection rapprochés faisaient
@@ -730,7 +959,10 @@ sans table de version : impossible de savoir dans quel état est une base, ni de
 ne plus jamais supprimer de table sans sauvegarde préalable. Documenter la procédure de sauvegarde du
 volume (`sqlite3 .backup`) dans le README, aujourd'hui absente.
 
-> **Résolution — corrigé (`0d3a030`, documentation dans `2d25524`).**
+> **Résolution — corrigé en deux temps (`0d3a030`, `2d25524`, puis `f33c073`).** La migration des
+> emails avait remplacé une perte de table silencieuse par une perte de colonne, tout aussi
+> silencieuse : voir
+> [B11](#b11--moyenne--q8--la-perte-de-données-avait-changé-de-granularité-pas-de-nature).
 > `PRAGMA user_version` est devenu le seul état de référence, en face d'une liste ordonnée de
 > migrations idempotentes appliquées chacune dans sa propre transaction — la version n'avance que si
 > l'étape a réussi entièrement. Une base antérieure vaut 0 et rejoue la liste sans rien détruire ;
@@ -818,7 +1050,9 @@ contrainte d'unicité dédiée.
   correct, mais `expires` fixé à la date d'expiration initiale n'est **pas** rafraîchi côté client
   lors de la prolongation glissante — la session serveur survit au cookie navigateur.
 
-> **Résolution — corrigé (`af10429`).** Les cinq points sont traités. `NotificationPreference`
+> **Résolution — corrigé en deux temps (`af10429`, puis `f33c073`, `02d65e2`).** L'invariant
+> d'unicité d'email avait ouvert un oracle d'énumération (B4) et `NOTIFICATION_TYPE_LABELS`, code mort
+> touché par la branche, était resté (B14). Les cinq points sont traités. `NotificationPreference`
 > refuse un type inconnu, et le dépôt SQLite écarte symétriquement les rangées d'un type retiré du
 > domaine, qui feraient sinon échouer la lecture de toutes les préférences du membre. Le code mort
 > est supprimé (`MemberService.createMember` et `getMember`, `ExpenseService.getEquipment`).
@@ -863,6 +1097,9 @@ Ajouter dans le même mouvement des tests d'intégration figeant ces trois propr
 14. **Q3** — descendre les filtres en SQL, **avant** le multi-groupes annoncé dans la roadmap.
 
 > **Résolution — les quatorze points sont faits**, dans cet ordre, ainsi que **S10**, **Q6**,
-> **Q11** et **Q12** qui n'y figuraient pas. Restent **S9** (`trustProxy` sans borne) et les
-> vulnérabilités de dépendances de développement ; voir « Suivi des corrections » en tête de
-> document.
+> **Q11** et **Q12** qui n'y figuraient pas. Une relecture adversariale a ensuite montré que
+> plusieurs de ces « faits » étaient partiels ou faux, et a trouvé un contournement
+> d'authentification que ce plan n'avait pas vu : quinze défauts supplémentaires, tous traités sauf
+> ceux listés comme ouverts. Restent **S9** (`trustProxy` sans borne), les vulnérabilités de
+> dépendances de développement, le cache des soldes (Q3) et `ChecklistsPage` (Q6). Voir
+> « Deuxième passe » en tête de document, qui fait foi.
