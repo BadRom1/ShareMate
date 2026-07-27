@@ -266,6 +266,18 @@ async function authRequest(url: string, options: RequestInit): Promise<{ member:
   return { member: res.member };
 }
 
+/**
+ * Vide les caches du service worker (`sharemate-*`, voir web/vite.config.ts). Ils gardent hors
+ * ligne les réponses de l'API du membre qui se déconnecte : sans cette purge, elles restent
+ * lisibles sur l'appareil, y compris par le compte suivant. Le précache du shell applicatif
+ * (`workbox-*`) ne contient rien de personnel et survit, sinon l'app ne démarrerait plus hors ligne.
+ */
+async function purgeOfflineCaches(): Promise<void> {
+  if (typeof caches === 'undefined') return;
+  const keys = await caches.keys();
+  await Promise.all(keys.filter((k) => k.startsWith('sharemate-')).map((k) => caches.delete(k)));
+}
+
 export const api = {
   me: () => request<AuthState>('/api/auth/me'),
   bootstrap: (input: { name: string; email?: string; password: string }) =>
@@ -273,8 +285,14 @@ export const api = {
   login: (identifier: string, password: string) =>
     authRequest('/api/auth/login', { method: 'POST', body: JSON.stringify({ identifier, password }) }),
   logout: async () => {
-    await request<void>('/api/auth/logout', { method: 'POST', body: JSON.stringify({}) });
-    await setToken(null);
+    try {
+      await request<void>('/api/auth/logout', { method: 'POST', body: JSON.stringify({}) });
+    } finally {
+      // Même si la révocation côté serveur échoue (hors ligne), l'appareil se vide : l'écran
+      // retombe de toute façon sur la connexion (App.tsx), jeton et caches ne doivent pas rester.
+      await setToken(null);
+      await purgeOfflineCaches();
+    }
   },
   inviteInfo: (code: string) => request<{ memberName: string }>(`/api/auth/invites/${encodeURIComponent(code)}`),
   redeemInvite: (code: string, password: string) =>
