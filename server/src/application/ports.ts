@@ -249,3 +249,23 @@ export interface NotifyEvent {
 export interface Notifier {
   notify(event: NotifyEvent): Promise<void>;
 }
+
+/** Geste sensible à conserver hors de la portée de ceux qu'il concerne. */
+export interface AuditEntry {
+  /** Geste journalisé, en `domaine.action` (ex. `equipement.cercle-modifie`). */
+  action: string;
+  /** Membre à l'origine du geste. */
+  actorId: string;
+  /** Ressource visée. */
+  targetId: string;
+  details?: Record<string, unknown>;
+}
+
+/**
+ * Journal des gestes sensibles. Complète les notifications, qui s'adressent aux membres et que
+ * ceux-ci peuvent effacer : la trace, elle, reste côté exploitant. Synchrone et sans retour —
+ * un service ne doit jamais échouer, ni ralentir, parce que le journal est indisponible.
+ */
+export interface AuditLogger {
+  record(entry: AuditEntry): void;
+}

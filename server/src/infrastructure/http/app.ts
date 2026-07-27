@@ -25,6 +25,7 @@ import { DiscussionService } from '../../application/discussion-service.js';
 import { ChecklistService } from '../../application/checklist-service.js';
 import { NotificationService } from '../../application/notification-service.js';
 import type {
+  AuditLogger,
   ChecklistItemRepository,
   ChecklistRepository,
   Clock,
@@ -188,11 +189,18 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   const memberService = new MemberService(deps.members, deps.equipments, deps.credentials, deps.idGenerator);
   // Sans répertoire d'upload, il n'y a ni justificatif à servir ni fichier à purger.
   const receiptStorage = deps.uploadsDir ? new FileSystemReceiptStorage(deps.uploadsDir) : undefined;
+  // Le journal des gestes sensibles part dans les logs du serveur : hors de portée des membres
+  // concernés, contrairement aux notifications qu'ils peuvent effacer.
+  const auditLogger: AuditLogger = {
+    record: (entry) => app.log.info(entry, 'geste sensible'),
+  };
   const equipmentService = new EquipmentService(
     deps.equipments,
     deps.members,
     deps.idGenerator,
     deps.expenses,
+    notificationService,
+    auditLogger,
     receiptStorage,
   );
   const reservationService = new ReservationService(

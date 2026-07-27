@@ -65,6 +65,17 @@ export const equipmentRoutes: FastifyPluginAsync<EquipmentRoutesOptions> = async
     return equipmentDto(await equipmentService.update(request.params.id, request.body, request.authMember.id));
   });
 
+  // Se retirer d'un cercle a sa propre route : `PUT` refuse de le faire, pour qu'on ne perde
+  // jamais l'accès à un équipement et à son historique par un décochage involontaire.
+  app.post<{ Params: { id: string } }>(
+    '/api/equipments/:id/leave',
+    { schema: { params: idParams } },
+    async (request, reply) => {
+      await equipmentService.leaveCircle(request.params.id, request.authMember.id);
+      return reply.status(204).send();
+    },
+  );
+
   app.delete<{ Params: { id: string } }>(
     '/api/equipments/:id',
     { schema: { params: idParams } },

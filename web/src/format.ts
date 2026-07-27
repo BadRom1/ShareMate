@@ -37,6 +37,7 @@ export const NOTIFICATION_LABELS: Record<string, string> = {
   RESERVATION_CREATED: 'Nouvelle réservation',
   REIMBURSEMENT_RECORDED: 'Remboursement enregistré',
   MAINTENANCE_ALERT: "Alerte d'entretien",
+  EQUIPMENT_CIRCLE_CHANGED: "Changement dans le cercle d'un équipement",
 };
 
 /** Date relative courte (« il y a 5 min », « il y a 2 h », sinon date). */

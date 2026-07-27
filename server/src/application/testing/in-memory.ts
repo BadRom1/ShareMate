@@ -1,4 +1,6 @@
 import type {
+  AuditEntry,
+  AuditLogger,
   ChecklistItemRepository,
   ChecklistRepository,
   Clock,
@@ -312,6 +314,14 @@ export class CapturingNotifier implements Notifier {
   events: NotifyEvent[] = [];
   async notify(event: NotifyEvent) {
     this.events.push(event);
+  }
+}
+
+/** Journal en mémoire : `entries` expose ce qui a été tracé. */
+export class RecordingAuditLogger implements AuditLogger {
+  readonly entries: AuditEntry[] = [];
+  record(entry: AuditEntry) {
+    this.entries.push(entry);
   }
 }
 

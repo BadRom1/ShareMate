@@ -186,7 +186,12 @@ export interface ChecklistItem {
 }
 
 export type NotificationType =
-  'MESSAGE_POSTED' | 'EXPENSE_ADDED' | 'RESERVATION_CREATED' | 'REIMBURSEMENT_RECORDED' | 'MAINTENANCE_ALERT';
+  | 'MESSAGE_POSTED'
+  | 'EXPENSE_ADDED'
+  | 'RESERVATION_CREATED'
+  | 'REIMBURSEMENT_RECORDED'
+  | 'MAINTENANCE_ALERT'
+  | 'EQUIPMENT_CIRCLE_CHANGED';
 
 export interface AppNotification {
   id: string;
@@ -320,6 +325,8 @@ export const api = {
   updateEquipment: (id: string, input: Partial<Omit<Equipment, 'id'>>) =>
     request<Equipment>(`/api/equipments/${id}`, { method: 'PUT', body: JSON.stringify(input) }),
   deleteEquipment: (id: string) => request<void>(`/api/equipments/${id}`, { method: 'DELETE' }),
+  /** Se retirer du cercle : geste dédié, la mise à jour de l'équipement le refuse. */
+  leaveEquipment: (id: string) => request<void>(`/api/equipments/${id}/leave`, { method: 'POST' }),
 
   calendar: () => request<Reservation[]>('/api/calendar'),
   reserve: (input: { equipmentId: string; start: string; end: string; status?: ReservationStatus; notes?: string }) =>

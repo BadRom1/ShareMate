@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import type { DirectoryMember, Equipment, MaintenanceStatus, MeterUnit } from '../api';
 import { formatDate, formatEuros, meterLabel } from '../format';
-import { IconEdit, IconTrash } from '../components/icons';
+import { IconEdit, IconLogout, IconTrash } from '../components/icons';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 
 interface Props {
@@ -32,6 +32,8 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
   const [invite, setInvite] = useState<{ memberName: string; url: string } | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Equipment | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [pendingLeave, setPendingLeave] = useState<Equipment | null>(null);
+  const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -136,6 +138,21 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
     }
   }
 
+  async function confirmLeave() {
+    if (!pendingLeave) return;
+    setError(null);
+    setLeaving(true);
+    try {
+      await api.leaveEquipment(pendingLeave.id);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erreur.');
+    } finally {
+      setPendingLeave(null);
+      setLeaving(false);
+    }
+  }
+
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;
   }
@@ -219,15 +236,22 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
             <span className="muted">Cercle de partage : qui utilise cet équipement ?</span>
             <div className="row">
               {members.map((m) => {
-                // À la création, le créateur reste dans le cercle : sinon l'équipement lui serait invisible.
-                const locked = !editing && m.id === currentMemberId;
+                // Le demandeur ne se retire jamais d'ici : à la création l'équipement lui serait
+                // invisible, en modification le serveur l'exige (geste dédié « quitter le cercle »).
+                const locked = m.id === currentMemberId;
                 return (
                   <label key={m.id} className="check">
                     <input
                       type="checkbox"
                       checked={form.memberIds.includes(m.id)}
                       disabled={locked}
-                      title={locked ? 'Vous faites partie du cercle des équipements que vous créez.' : undefined}
+                      title={
+                        locked
+                          ? editing
+                            ? 'Pour vous retirer, utilisez « Quitter le cercle » sur la fiche de l’équipement.'
+                            : 'Vous faites partie du cercle des équipements que vous créez.'
+                          : undefined
+                      }
                       onChange={(e) =>
                         setForm({
                           ...form,
@@ -346,6 +370,18 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
                 >
                   <IconEdit size={20} />
                 </button>
+                {/* Le dernier membre n'a rien à quitter : l'équipement deviendrait invisible
+                    pour tout le monde, le serveur le refuse. Il lui reste la suppression. */}
+                {e.memberIds.length > 1 && (
+                  <button
+                    className="icon-btn"
+                    onClick={() => setPendingLeave(e)}
+                    title="Quitter le cercle"
+                    aria-label="Quitter le cercle"
+                  >
+                    <IconLogout size={20} />
+                  </button>
+                )}
                 <button
                   className="icon-btn icon-danger"
                   onClick={() => setPendingDelete(e)}
@@ -359,6 +395,27 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
           );
         })}
       </div>
+
+      {pendingLeave && (
+        <ConfirmDialog
+          title={`Quitter le cercle de « ${pendingLeave.name} » ?`}
+          confirmLabel="Quitter le cercle"
+          busy={leaving}
+          onConfirm={() => void confirmLeave()}
+          onCancel={() => setPendingLeave(null)}
+        >
+          <p style={{ margin: 0 }}>L'équipement disparaîtra de votre application, avec tout ce que vous en voyez :</p>
+          <ul className="modal-loss">
+            <li>ses réservations, ses relevés et son suivi d'entretien</li>
+            <li>ses dépenses, justificatifs, remboursements et votre solde</li>
+            <li>ses fils de discussion et ses checklists</li>
+          </ul>
+          <p className="muted" style={{ margin: 0 }}>
+            Rien n'est supprimé pour les {pendingLeave.memberIds.length - 1} autres membres, qui sont prévenus de votre
+            départ. Seul l'un d'eux pourra vous réintégrer au cercle.
+          </p>
+        </ConfirmDialog>
+      )}
 
       {pendingDelete && (
         <ConfirmDialog

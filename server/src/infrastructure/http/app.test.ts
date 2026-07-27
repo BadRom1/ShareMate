@@ -1508,6 +1508,68 @@ describe('API — notifications', () => {
   });
 });
 
+describe('API — composition du cercle d’un équipement', () => {
+  /** Cercle de l'équipement tel que le serveur le renvoie à un membre. */
+  async function circle(equipmentId: string, cookies: Cookies): Promise<string[]> {
+    const res = await get(`/api/equipments/${equipmentId}`, cookies);
+    return (res.json() as { memberIds: string[] }).memberIds;
+  }
+
+  it('refuse de se retirer soi-même par une mise à jour de l’équipement', async () => {
+    const { equipment, alice, bruno } = await setupMembersAndEquipment();
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/equipments/${equipment.id}`,
+      payload: { memberIds: [bruno.id] },
+      cookies: alice.cookies,
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toMatch(/quitter le cercle/);
+    expect(await circle(equipment.id, alice.cookies)).toEqual([alice.id, bruno.id]);
+  });
+
+  it('évincer un membre le notifie, et l’équipement disparaît de sa vue', async () => {
+    const { equipment, alice, bruno } = await setupMembersAndEquipment();
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/equipments/${equipment.id}`,
+      payload: { memberIds: [alice.id] },
+      cookies: alice.cookies,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const list = await get('/api/notifications', bruno.cookies);
+    const notif = (list.json() as { type: string; body: string }[])[0]!;
+    expect(notif.type).toBe('EQUIPMENT_CIRCLE_CHANGED');
+    expect(notif.body).toMatch(/vous a retiré du cercle/);
+    expect((await get(`/api/equipments/${equipment.id}`, bruno.cookies)).statusCode).toBe(404);
+  });
+
+  it('« quitter le cercle » retire le demandeur et prévient ceux qui restent', async () => {
+    const { equipment, alice, bruno } = await setupMembersAndEquipment();
+    const res = await post(`/api/equipments/${equipment.id}/leave`, {}, bruno.cookies);
+    expect(res.statusCode).toBe(204);
+
+    expect(await circle(equipment.id, alice.cookies)).toEqual([alice.id]);
+    expect((await get(`/api/equipments/${equipment.id}`, bruno.cookies)).statusCode).toBe(404);
+    const list = await get('/api/notifications', alice.cookies);
+    expect((list.json() as { type: string; body: string }[])[0]?.body).toMatch(/a quitté le cercle/);
+  });
+
+  it('le dernier membre ne peut pas quitter son propre équipement', async () => {
+    const { equipment, alice, bruno } = await setupMembersAndEquipment();
+    expect((await post(`/api/equipments/${equipment.id}/leave`, {}, bruno.cookies)).statusCode).toBe(204);
+    const res = await post(`/api/equipments/${equipment.id}/leave`, {}, alice.cookies);
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toMatch(/dernier membre/);
+  });
+
+  it('quitter un équipement hors de son cercle répond 404, comme un identifiant inconnu', async () => {
+    const { equipment, chloe } = await setupMembersAndEquipment();
+    expect((await post(`/api/equipments/${equipment.id}/leave`, {}, chloe.cookies)).statusCode).toBe(404);
+  });
+});
+
 describe('API — validation des requêtes (schémas)', () => {
   /** Message d'erreur d'une réponse, tel que le front l'affiche à l'utilisateur. */
   function erreur(res: { json: () => unknown }): string {
