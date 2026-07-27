@@ -72,6 +72,12 @@ describe('Expense — répartition', () => {
     ).toThrow();
   });
 
+  it('rejette une date illisible', () => {
+    expect(() =>
+      Expense.create({ ...base, date: new Date('9999-99-99'), split: { type: 'EQUAL', memberIds: ['m1'] } }),
+    ).toThrow();
+  });
+
   it('rejette un libellé vide', () => {
     expect(() => Expense.create({ ...base, label: ' ', split: { type: 'EQUAL', memberIds: ['m1'] } })).toThrow();
   });

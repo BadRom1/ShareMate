@@ -2,6 +2,7 @@ import { Equipment } from '../domain/equipment/equipment.js';
 import type { MeterUnit } from '../domain/equipment/equipment.js';
 import { Money } from '../domain/shared/money.js';
 import { DomainError } from '../domain/shared/domain-error.js';
+import { parseIsoDate } from '../domain/shared/iso-date.js';
 import { equipmentForMember, equipmentsForMember } from './equipment-access.js';
 import { visibleMemberIds } from './member-scope.js';
 import { purgeOrphanReceipts } from './receipt-access.js';
@@ -84,7 +85,7 @@ export class EquipmentService {
       id: this.idGenerator.next(),
       name: input.name,
       category: input.category,
-      acquisitionDate: new Date(input.acquisitionDate),
+      acquisitionDate: parseIsoDate(input.acquisitionDate, "La date d'acquisition"),
       purchaseValue: Money.fromEuros(input.purchaseValueEuros),
       meterUnit: input.meterUnit,
       memberIds: input.memberIds,
@@ -111,7 +112,9 @@ export class EquipmentService {
     const updated = existing.update({
       ...(input.name !== undefined && { name: input.name }),
       ...(input.category !== undefined && { category: input.category }),
-      ...(input.acquisitionDate !== undefined && { acquisitionDate: new Date(input.acquisitionDate) }),
+      ...(input.acquisitionDate !== undefined && {
+        acquisitionDate: parseIsoDate(input.acquisitionDate, "La date d'acquisition"),
+      }),
       ...(input.purchaseValueEuros !== undefined && { purchaseValue: Money.fromEuros(input.purchaseValueEuros) }),
       ...(input.meterUnit !== undefined && { meterUnit: input.meterUnit }),
       ...(input.memberIds !== undefined && { memberIds: input.memberIds }),

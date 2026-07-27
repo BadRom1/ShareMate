@@ -4,6 +4,7 @@ import { Reimbursement } from '../domain/expense/reimbursement.js';
 import { computeBalances, settle } from '../domain/expense/settlement.js';
 import { Money } from '../domain/shared/money.js';
 import { DomainError, NotFoundError } from '../domain/shared/domain-error.js';
+import { parseIsoDate } from '../domain/shared/iso-date.js';
 import { equipmentForMember } from './equipment-access.js';
 import { expenseForReceipt, purgeOrphanReceipts } from './receipt-access.js';
 import type {
@@ -89,7 +90,7 @@ export class ExpenseService {
       label: input.label,
       amount: Money.fromEuros(input.amountEuros),
       payerId: input.payerId,
-      date: new Date(input.date),
+      date: parseIsoDate(input.date, 'La date de la dépense'),
       category: input.category,
       split,
       receiptPath: input.receiptPath ?? null,
@@ -184,7 +185,7 @@ export class ExpenseService {
       fromMemberId: input.fromMemberId,
       toMemberId: input.toMemberId,
       amount: Money.fromEuros(input.amountEuros),
-      date: new Date(input.date),
+      date: parseIsoDate(input.date, 'La date du remboursement'),
       notes: input.notes ?? null,
     });
     await this.reimbursements.save(reimbursement);

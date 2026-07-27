@@ -3,7 +3,7 @@ import { NOTIFICATION_TYPES } from '../../../domain/notification/notification-ty
 import type { NotificationType } from '../../../domain/notification/notification-type.js';
 import type { NotificationService, PreferenceUpdate } from '../../../application/notification-service.js';
 import { notificationDto, preferenceDto } from '../dto.js';
-import { arrayOf, enumOf, flag, idParams, object, text } from '../schema.js';
+import { arrayOf, enumOf, flag, idParams, object, query, text } from '../schema.js';
 import '../session.js'; // augmentation de type : request.authMember
 
 export interface NotificationRoutesOptions {
@@ -23,7 +23,7 @@ export const notificationRoutes: FastifyPluginAsync<NotificationRoutesOptions> =
 ) => {
   app.get<{ Querystring: { unread?: string } }>(
     '/api/notifications',
-    { schema: { querystring: object({ unread: enumOf(['0', '1']) }) } },
+    { schema: { querystring: query({ unread: enumOf(['0', '1']) }) } },
     async (request) => {
       const list = await notificationService.list(request.authMember.id, {
         unreadOnly: request.query.unread === '1',

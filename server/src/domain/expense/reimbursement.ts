@@ -1,4 +1,5 @@
 import { DomainError } from '../shared/domain-error.js';
+import { assertValidDate } from '../shared/iso-date.js';
 import type { Money } from '../shared/money.js';
 
 export interface ReimbursementProps {
@@ -30,6 +31,7 @@ export class Reimbursement {
     if (props.fromMemberId === props.toMemberId) {
       throw new DomainError('Un membre ne peut pas se rembourser lui-même.');
     }
+    assertValidDate(props.date, 'La date du remboursement');
     return new Reimbursement(
       props.id,
       props.equipmentId,

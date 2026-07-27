@@ -1902,6 +1902,76 @@ describe('API — validation des requêtes (schémas)', () => {
     expect(filtreInconnu.statusCode).toBe(400);
     expect(erreur(filtreInconnu)).toMatch(/^Paramètre de requête invalide/);
     expect((await get('/api/notifications?unread=1', alice.cookies)).statusCode).toBe(200);
+
+    // Une URL n'est pas maîtrisée par le seul client : anti-cache, `utm_*`, marqueur d'analytics
+    // s'y ajoutent sans que l'application les ait demandés. Les ignorer, ne pas refuser la requête.
+    expect((await get('/api/notifications?unread=1&_=1234&utm_source=sms', alice.cookies)).statusCode).toBe(200);
+  });
+
+  it('refuse une date calendairement impossible (au lieu d’un 500 ou d’une réécriture muette)', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment();
+
+    // Le motif du schéma ne porte que la forme : `new Date` rend ici une Invalid Date, qui ne
+    // cassait qu'à la sérialisation de la réponse — un 500 déclenchable par un corps de requête.
+    for (const absurde of ['0000-00-00', '9999-99-99', '2026-13-01']) {
+      const res = await post(
+        '/api/equipments',
+        equipmentPayload({ memberIds: [alice.id], acquisitionDate: absurde }),
+        alice.cookies,
+      );
+      expect(res.statusCode, `${absurde} → ${res.body}`).toBe(400);
+    }
+    const dépense = await post(
+      '/api/expenses',
+      {
+        equipmentId: equipment.id,
+        label: 'Gasoil',
+        amountEuros: 90,
+        payerId: alice.id,
+        date: '9999-99-99',
+        category: 'FUEL',
+        split: { type: 'EQUAL' },
+      },
+      alice.cookies,
+    );
+    expect(dépense.statusCode, dépense.body).toBe(400);
+
+    // Un jour qui n'existe pas était accepté puis reporté en silence : 2026-02-31 → 3 mars.
+    const février = await post(
+      '/api/equipments',
+      equipmentPayload({ memberIds: [alice.id], acquisitionDate: '2026-02-31' }),
+      alice.cookies,
+    );
+    expect(février.statusCode, février.body).toBe(400);
+  });
+
+  it('n’accepte pas `null` là où un nombre est déclaré', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment();
+
+    // La coercition Ajv promouvait `null` en `0` : un champ obligatoire oublié par le front
+    // devenait une valeur d'achat de 0 €, ou un montant nul dans un calcul de soldes.
+    const sansValeur = await post(
+      '/api/equipments',
+      equipmentPayload({ memberIds: [alice.id], purchaseValueEuros: null }),
+      alice.cookies,
+    );
+    expect(sansValeur.statusCode, sansValeur.body).toBe(400);
+
+    const sansMontant = await post(
+      '/api/expenses',
+      {
+        equipmentId: equipment.id,
+        label: 'Gasoil',
+        amountEuros: null,
+        payerId: alice.id,
+        date: '2026-07-01',
+        category: 'FUEL',
+        split: { type: 'EQUAL' },
+      },
+      alice.cookies,
+    );
+    expect(sansMontant.statusCode, sansMontant.body).toBe(400);
+    expect(erreur(sansMontant)).toMatch(/champ « amountEuros »/);
   });
 });
 

@@ -1,4 +1,5 @@
 import { DomainError } from '../shared/domain-error.js';
+import { assertValidDate } from '../shared/iso-date.js';
 
 export interface UsageRecordProps {
   id: string;
@@ -33,6 +34,7 @@ export class UsageRecord {
     if (props.fuelAddedLiters != null && (!Number.isFinite(props.fuelAddedLiters) || props.fuelAddedLiters < 0)) {
       throw new DomainError('La quantité de carburant doit être positive.');
     }
+    assertValidDate(props.recordedAt, 'La date du relevé');
     return new UsageRecord(
       props.id,
       props.equipmentId,

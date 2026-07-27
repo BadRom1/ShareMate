@@ -14,10 +14,14 @@ import type { SchemaErrorDataVar, SchemaErrorFormatter } from 'fastify/types/sch
  * Deux écarts assumés aux options Ajv par défaut de Fastify :
  * - `removeAdditional: false` — un champ inconnu doit être refusé, pas supprimé en silence
  *   (`additionalProperties: false` n'émet une erreur qu'à cette condition) ;
- * - `coerceTypes: true` au lieu de `'array'` — un scalaire ne doit pas être promu en liste d'un
- *   élément : `preferences: "x"` est une erreur de type, pas une liste de préférences.
+ * - `coerceTypes: false` au lieu de `'array'` — aucune conversion implicite. La coercition n'est
+ *   utile que là où tout arrive en texte, et aucun paramètre d'URL ni de querystring de l'API
+ *   n'est déclaré autrement que `string` : elle ne servait donc rien et laissait passer plus que
+ *   les schémas ne déclarent. `true` promouvait en outre `null` en `0` pour tout `number()` — un
+ *   champ obligatoire envoyé à `null` par le front devenait un montant nul silencieux dans un
+ *   calcul de soldes.
  */
-export const AJV_OPTIONS = { removeAdditional: false, coerceTypes: true };
+export const AJV_OPTIONS = { removeAdditional: false, coerceTypes: false };
 
 /** Identifiant opaque (UUID côté serveur) : borné, jamais interprété à ce niveau. */
 export const id = { type: 'string', minLength: 1, maxLength: 64 };
@@ -33,6 +37,16 @@ export function object(properties: Record<string, unknown>, required: string[] =
 /** Paramètres d'URL : tous obligatoires, puisque portés par le chemin de la route. */
 export function params(properties: Record<string, unknown>) {
   return object(properties, Object.keys(properties));
+}
+
+/**
+ * Querystring : objet ouvert, contrairement aux corps. Une URL n'est pas maîtrisée par le seul
+ * client — un anti-cache, un `utm_*` collé par un partage, un marqueur d'analytics s'y ajoutent
+ * sans que l'application les ait demandés. Refuser la requête entière pour un paramètre qu'elle
+ * ignore est un déni de service sur un ajout inoffensif : on valide ce qu'on lit, on ignore le reste.
+ */
+export function query(properties: Record<string, unknown>) {
+  return { type: 'object', properties };
 }
 
 export function text(maxLength: number, minLength = 1) {

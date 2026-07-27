@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Money } from '../shared/money.js';
 import { Equipment } from './equipment.js';
+import { DomainError } from '../shared/domain-error.js';
 
 const base = {
   id: 'e1',
@@ -24,6 +25,12 @@ describe('Equipment', () => {
 
   it('rejette un nom vide', () => {
     expect(() => Equipment.create({ ...base, name: '' })).toThrow();
+  });
+
+  it("rejette une date d'acquisition illisible", () => {
+    // Une Invalid Date traverse jusqu'à `toISOString()`, très loin de l'entrée : ce n'est plus
+    // une donnée invalide qu'on refuse, c'est un 500 sur la sérialisation de la réponse.
+    expect(() => Equipment.create({ ...base, acquisitionDate: new Date('0000-00-00') })).toThrow(DomainError);
   });
 
   it("rejette une valeur d'achat négative", () => {
