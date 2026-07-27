@@ -53,6 +53,20 @@ describe('ouverture d’un fil', () => {
     expect(screen.getByText(/Sélectionnez un fil/)).toBeTruthy();
   });
 
+  it('répond à un message précis et déplie le sous-fil', async () => {
+    const user = userEvent.setup();
+    render(<DiscussionsPage members={members} currentMemberId="m1" initialEquipmentId="e1" initialThreadId="t1" />);
+    await screen.findByText('Bruit au démarrage.');
+
+    await user.click(screen.getByRole('button', { name: 'Répondre' }));
+    await user.type(screen.getByPlaceholderText('Répondre à Alice…'), 'Le démarreur, sans doute.');
+    await user.click(screen.getByRole('button', { name: 'Envoyer la réponse' }));
+
+    // La réponse porte l'identifiant du message auquel elle répond : c'est ce qui la range
+    // dans le sous-fil plutôt qu'à la racine.
+    await waitFor(() => expect(stub.postMessage).toHaveBeenCalledWith('t1', 'Le démarreur, sans doute.', 'msg1'));
+  });
+
   it('ouvre un fil choisi dans la liste latérale', async () => {
     const user = userEvent.setup();
     render(<DiscussionsPage members={members} currentMemberId="m1" initialEquipmentId="e1" />);
