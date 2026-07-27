@@ -1,11 +1,26 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { EquipmentService } from '../../../application/equipment-service.js';
 import { equipmentDto } from '../dto.js';
+import { arrayOf, enumOf, id, idParams, isoDate, nullableNumber, number, object, text } from '../schema.js';
 import '../session.js'; // augmentation de type : request.authMember
 
 export interface EquipmentRoutesOptions {
   equipmentService: EquipmentService;
 }
+
+/** Champs d'un équipement : tous obligatoires à la création, tous facultatifs à la mise à jour. */
+const FIELDS = {
+  name: text(120),
+  category: text(80),
+  acquisitionDate: isoDate,
+  purchaseValueEuros: number(),
+  meterUnit: enumOf(['HOURS', 'KILOMETERS']),
+  // Cercle borné : chaque membre ajoute une part à calculer sur chaque dépense de l'équipement.
+  memberIds: arrayOf(id, 50, 1),
+  maintenanceThreshold: nullableNumber(),
+};
+
+const REQUIRED = ['name', 'category', 'acquisitionDate', 'purchaseValueEuros', 'meterUnit', 'memberIds'];
 
 export const equipmentRoutes: FastifyPluginAsync<EquipmentRoutesOptions> = async (app, { equipmentService }) => {
   app.post<{
@@ -18,7 +33,7 @@ export const equipmentRoutes: FastifyPluginAsync<EquipmentRoutesOptions> = async
       memberIds: string[];
       maintenanceThreshold?: number | null;
     };
-  }>('/api/equipments', async (request, reply) => {
+  }>('/api/equipments', { schema: { body: object(FIELDS, REQUIRED) } }, async (request, reply) => {
     const equipment = await equipmentService.create(
       { ...request.body, maintenanceThreshold: request.body.maintenanceThreshold ?? null },
       request.authMember.id,
@@ -31,7 +46,7 @@ export const equipmentRoutes: FastifyPluginAsync<EquipmentRoutesOptions> = async
     return list.map(equipmentDto);
   });
 
-  app.get<{ Params: { id: string } }>('/api/equipments/:id', async (request) => {
+  app.get<{ Params: { id: string } }>('/api/equipments/:id', { schema: { params: idParams } }, async (request) => {
     return equipmentDto(await equipmentService.getById(request.params.id, request.authMember.id));
   });
 
@@ -46,12 +61,16 @@ export const equipmentRoutes: FastifyPluginAsync<EquipmentRoutesOptions> = async
       memberIds: string[];
       maintenanceThreshold: number | null;
     }>;
-  }>('/api/equipments/:id', async (request) => {
+  }>('/api/equipments/:id', { schema: { params: idParams, body: object(FIELDS) } }, async (request) => {
     return equipmentDto(await equipmentService.update(request.params.id, request.body, request.authMember.id));
   });
 
-  app.delete<{ Params: { id: string } }>('/api/equipments/:id', async (request, reply) => {
-    await equipmentService.delete(request.params.id, request.authMember.id);
-    return reply.status(204).send();
-  });
+  app.delete<{ Params: { id: string } }>(
+    '/api/equipments/:id',
+    { schema: { params: idParams } },
+    async (request, reply) => {
+      await equipmentService.delete(request.params.id, request.authMember.id);
+      return reply.status(204).send();
+    },
+  );
 };

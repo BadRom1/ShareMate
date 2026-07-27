@@ -23,6 +23,7 @@ import { CryptoTokenGenerator, ScryptPasswordHasher, SystemClock, UuidGenerator 
 import { FixedClock } from '../../application/testing/in-memory.js';
 import { buildApp } from './app.js';
 import type { AppDependencies } from './app.js';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -351,14 +352,24 @@ describe('API — authentification', () => {
 
   it('la réservation est créée au nom du membre de la session, pas du body', async () => {
     const { equipment, alice, bruno } = await setupMembersAndEquipment();
-    const res = await post(
+
+    // `memberId` n'appartient pas au schéma de la route : il est refusé net, et non plus
+    // accepté puis silencieusement écrasé — un appelant ne doit pas croire son auteur retenu.
+    const usurpation = await post(
       '/api/reservations',
       {
         equipmentId: equipment.id,
-        memberId: alice.id, // ignoré : la session de Bruno prime
+        memberId: alice.id,
         start: '2026-07-10T08:00:00Z',
         end: '2026-07-10T10:00:00Z',
       },
+      bruno.cookies,
+    );
+    expect(usurpation.statusCode).toBe(400);
+
+    const res = await post(
+      '/api/reservations',
+      { equipmentId: equipment.id, start: '2026-07-10T08:00:00Z', end: '2026-07-10T10:00:00Z' },
       bruno.cookies,
     );
     expect(res.statusCode).toBe(201);
@@ -1384,5 +1395,168 @@ describe('API — notifications', () => {
     const res = await get('/api/notifications/vapid-public-key', alice.cookies);
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ publicKey: null });
+  });
+});
+
+describe('API — validation des requêtes (schémas)', () => {
+  /** Message d'erreur d'une réponse, tel que le front l'affiche à l'utilisateur. */
+  function erreur(res: { json: () => unknown }): string {
+    return (res.json() as { error: string }).error;
+  }
+
+  const equipmentPayload = (overrides: Record<string, unknown> = {}) => ({
+    name: 'Tracteur',
+    category: 'Agricole',
+    acquisitionDate: '2025-01-01',
+    purchaseValueEuros: 30000,
+    meterUnit: 'HOURS',
+    memberIds: ['remplacé'],
+    ...overrides,
+  });
+
+  it('refuse un corps absent, vide ou illisible en 400 et en français', async () => {
+    // Aucun corps du tout : rien à valider, donc rien d'exploitable côté service.
+    const absent = await app.inject({ method: 'POST', url: '/api/auth/login' });
+    expect(absent.statusCode).toBe(400);
+    expect(erreur(absent)).toMatch(/^Corps de requête invalide/);
+
+    // Corps présent mais vide : le champ obligatoire est nommé.
+    const vide = await post('/api/auth/login', {});
+    expect(vide.statusCode).toBe(400);
+    expect(erreur(vide)).toBe('Corps de requête invalide : le champ « identifier » est obligatoire.');
+
+    // JSON malformé : Fastify échoue avant tout schéma, le message reste français.
+    const illisible = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: '{"identifier":',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(illisible.statusCode).toBe(400);
+    expect(erreur(illisible)).toBe('Corps de requête invalide : JSON illisible.');
+  });
+
+  it('refuse un champ mal typé, inconnu ou trop long sur les routes d’authentification', async () => {
+    const malTypé = await post('/api/auth/login', { identifier: { $ne: null }, password: PASSWORD });
+    expect(malTypé.statusCode).toBe(400);
+    expect(erreur(malTypé)).toBe('Corps de requête invalide : le champ « identifier » doit être de type texte.');
+
+    const inconnu = await post('/api/auth/login', { identifier: 'Alice', password: PASSWORD, admin: true });
+    expect(inconnu.statusCode).toBe(400);
+    expect(erreur(inconnu)).toBe('Corps de requête invalide : le champ « admin » n’est pas attendu.');
+
+    const tropLong = await post('/api/auth/login', { identifier: 'x'.repeat(201), password: PASSWORD });
+    expect(tropLong.statusCode).toBe(400);
+    expect(erreur(tropLong)).toBe('Corps de requête invalide : le champ « identifier » dépasse 200 caractères.');
+  });
+
+  it('refuse un équipement incomplet ou hors nomenclature (au lieu d’échouer en 500)', async () => {
+    const alice = await bootstrapAlice();
+
+    const incomplet = await post('/api/equipments', { name: 'Tracteur' }, alice.cookies);
+    expect(incomplet.statusCode).toBe(400);
+    expect(erreur(incomplet)).toBe('Corps de requête invalide : le champ « category » est obligatoire.');
+
+    const unitéInconnue = await post(
+      '/api/equipments',
+      equipmentPayload({ memberIds: [alice.id], meterUnit: 'PARSECS' }),
+      alice.cookies,
+    );
+    expect(unitéInconnue.statusCode).toBe(400);
+    expect(erreur(unitéInconnue)).toBe(
+      'Corps de requête invalide : le champ « meterUnit » n’accepte que : HOURS, KILOMETERS.',
+    );
+
+    const dateFantaisiste = await post(
+      '/api/equipments',
+      equipmentPayload({ memberIds: [alice.id], acquisitionDate: 'hier' }),
+      alice.cookies,
+    );
+    expect(dateFantaisiste.statusCode).toBe(400);
+
+    const cercleVide = await post('/api/equipments', equipmentPayload({ memberIds: [] }), alice.cookies);
+    expect(cercleVide.statusCode).toBe(400);
+  });
+
+  it('refuse une dépense mal formée et n’accepte qu’un justificatif issu de l’upload', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment();
+    const dépense = (overrides: Record<string, unknown> = {}) => ({
+      equipmentId: equipment.id,
+      label: 'Gasoil',
+      amountEuros: 90,
+      payerId: alice.id,
+      date: '2026-07-01',
+      category: 'FUEL',
+      split: { type: 'EQUAL' },
+      ...overrides,
+    });
+
+    expect((await post('/api/expenses', dépense({ category: 'CAVIAR' }), alice.cookies)).statusCode).toBe(400);
+    expect((await post('/api/expenses', dépense({ amountEuros: 'beaucoup' }), alice.cookies)).statusCode).toBe(400);
+    expect((await post('/api/expenses', dépense({ split: { type: 'MOITIÉ' } }), alice.cookies)).statusCode).toBe(400);
+    // Champ étranger à la forme EQUAL : refusé, et non ignoré en silence.
+    const splitHybride = await post(
+      '/api/expenses',
+      dépense({ split: { type: 'EQUAL', amountsEuros: { [alice.id]: 90 } } }),
+      alice.cookies,
+    );
+    expect(splitHybride.statusCode).toBe(400);
+
+    // Hameçonnage : une URL externe rendue par le front comme un justificatif de l'application.
+    const externe = await post(
+      '/api/expenses',
+      dépense({ receiptPath: 'https://faux-recu.example/facture.pdf' }),
+      alice.cookies,
+    );
+    expect(externe.statusCode).toBe(400);
+    expect(erreur(externe)).toBe('Corps de requête invalide : le champ « receiptPath » n’a pas le format attendu.');
+
+    // Chemin relatif hors du répertoire servi : même refus.
+    expect(
+      (await post('/api/expenses', dépense({ receiptPath: '/uploads/../secret.txt' }), alice.cookies)).statusCode,
+    ).toBe(400);
+
+    // Seule la forme réellement produite par POST /api/uploads/receipts est acceptée.
+    const valide = await post(
+      '/api/expenses',
+      dépense({ receiptPath: `/uploads/${crypto.randomUUID()}.png` }),
+      alice.cookies,
+    );
+    expect(valide.statusCode).toBe(201);
+  });
+
+  it('refuse des préférences de notification mal typées (au lieu d’échouer en 500)', async () => {
+    const alice = await bootstrapAlice();
+
+    const malTypées = await app.inject({
+      method: 'PUT',
+      url: '/api/notifications/preferences',
+      payload: { preferences: 'x' },
+      cookies: alice.cookies,
+    });
+    expect(malTypées.statusCode).toBe(400);
+    expect(erreur(malTypées)).toBe('Corps de requête invalide : le champ « preferences » doit être de type liste.');
+
+    const typeInconnu = await app.inject({
+      method: 'PUT',
+      url: '/api/notifications/preferences',
+      payload: { preferences: [{ type: 'PLUIE_DE_GRENOUILLES', inApp: true, push: true }] },
+      cookies: alice.cookies,
+    });
+    expect(typeInconnu.statusCode).toBe(400);
+    expect(erreur(typeInconnu)).toMatch(/champ « preferences.0.type »/);
+  });
+
+  it('valide aussi les paramètres d’URL et la querystring', async () => {
+    const alice = await bootstrapAlice();
+
+    const idInterminable = await get(`/api/equipments/${'x'.repeat(100)}`, alice.cookies);
+    expect(idInterminable.statusCode).toBe(400);
+    expect(erreur(idInterminable)).toMatch(/^Paramètre d’URL invalide/);
+
+    const filtreInconnu = await get('/api/notifications?unread=oui', alice.cookies);
+    expect(filtreInconnu.statusCode).toBe(400);
+    expect(erreur(filtreInconnu)).toMatch(/^Paramètre de requête invalide/);
+    expect((await get('/api/notifications?unread=1', alice.cookies)).statusCode).toBe(200);
   });
 });

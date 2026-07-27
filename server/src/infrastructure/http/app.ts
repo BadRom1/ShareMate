@@ -48,6 +48,7 @@ import type {
   UsageRecordRepository,
 } from '../../application/ports.js';
 import { CLIENT_HEADER, sessionToken } from './session.js';
+import { AJV_OPTIONS, schemaErrorFormatter } from './schema.js';
 import { authRoutes } from './plugins/auth.js';
 import { memberRoutes } from './plugins/members.js';
 import { equipmentRoutes } from './plugins/equipments.js';
@@ -102,7 +103,12 @@ export interface AppDependencies {
 }
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
-  const app = Fastify({ logger: deps.logger ?? false, trustProxy: deps.trustProxy ?? false });
+  const app = Fastify({
+    logger: deps.logger ?? false,
+    trustProxy: deps.trustProxy ?? false,
+    ajv: { customOptions: AJV_OPTIONS },
+    schemaErrorFormatter,
+  });
 
   const corsOrigins = deps.corsOrigins ?? [];
   const corsEnabled = corsOrigins.length > 0;
@@ -257,7 +263,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     if (error instanceof DomainError) {
       return reply.status(400).send({ error: error.message });
     }
-    const httpError = error as { validation?: unknown; statusCode?: number; message?: string };
+    const httpError = error as { validation?: unknown; statusCode?: number; message?: string; code?: string };
+    // Corps illisible : Fastify échoue avant tout schéma, avec son message en anglais.
+    if (httpError.code === 'FST_ERR_CTP_INVALID_JSON_BODY' || httpError.code === 'FST_ERR_CTP_EMPTY_JSON_BODY') {
+      return reply.status(400).send({ error: 'Corps de requête invalide : JSON illisible.' });
+    }
     if (httpError.validation || (httpError.statusCode && httpError.statusCode < 500)) {
       return reply.status(httpError.statusCode ?? 400).send({ error: httpError.message ?? 'Requête invalide.' });
     }

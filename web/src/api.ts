@@ -13,6 +13,18 @@ export function assetUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
+/** Forme exacte des chemins produits par POST /api/uploads/receipts. */
+const RECEIPT_PATH = /^\/uploads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpe?g|webp|pdf)$/;
+
+/**
+ * URL d'un justificatif, ou `null` si le chemin n'est pas celui d'un fichier téléversé ici.
+ * Le serveur applique la même règle à l'écriture : ce filtre couvre les dépenses enregistrées
+ * avant elle, pour ne jamais rendre cliquable une URL choisie par un membre du cercle.
+ */
+export function receiptUrl(path: string | null): string | null {
+  return path && RECEIPT_PATH.test(path) ? assetUrl(path) : null;
+}
+
 export interface Member {
   id: string;
   name: string;

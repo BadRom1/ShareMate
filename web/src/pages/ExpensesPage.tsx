@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, assetUrl } from '../api';
+import { api, receiptUrl } from '../api';
 import type {
   Balance,
   Equipment,
@@ -404,35 +404,39 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {expenses.map((x) => (
-                  <tr key={x.id}>
-                    <td>{formatDate(x.date)}</td>
-                    <td>
-                      {x.label}
-                      {x.receiptPath && (
-                        <>
-                          {' '}
-                          <a href={assetUrl(x.receiptPath)} target="_blank" rel="noreferrer">
-                            📎
-                          </a>
-                        </>
-                      )}
-                    </td>
-                    <td>{CATEGORY_LABELS[x.category]}</td>
-                    <td>{formatEuros(x.amountEuros)}</td>
-                    <td>{memberName(x.payerId)}</td>
-                    <td className="muted">
-                      {Object.entries(x.sharesEuros)
-                        .map(([id, euros]) => `${memberName(id)} ${formatEuros(euros)}`)
-                        .join(' · ')}
-                    </td>
-                    <td>
-                      <button className="danger" onClick={() => void removeExpense(x)}>
-                        ✕
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {expenses.map((x) => {
+                  // Lien ouvert seulement si le chemin est bien celui d'un fichier téléversé ici.
+                  const receipt = receiptUrl(x.receiptPath);
+                  return (
+                    <tr key={x.id}>
+                      <td>{formatDate(x.date)}</td>
+                      <td>
+                        {x.label}
+                        {receipt && (
+                          <>
+                            {' '}
+                            <a href={receipt} target="_blank" rel="noreferrer">
+                              📎
+                            </a>
+                          </>
+                        )}
+                      </td>
+                      <td>{CATEGORY_LABELS[x.category]}</td>
+                      <td>{formatEuros(x.amountEuros)}</td>
+                      <td>{memberName(x.payerId)}</td>
+                      <td className="muted">
+                        {Object.entries(x.sharesEuros)
+                          .map(([id, euros]) => `${memberName(id)} ${formatEuros(euros)}`)
+                          .join(' · ')}
+                      </td>
+                      <td>
+                        <button className="danger" onClick={() => void removeExpense(x)}>
+                          ✕
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
