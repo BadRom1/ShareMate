@@ -8,6 +8,9 @@ import type { Reimbursement } from '../../domain/expense/reimbursement.js';
 import type { Message } from '../../domain/discussion/message.js';
 import type { Thread } from '../../domain/discussion/thread.js';
 import type { ThreadSummary } from '../../application/discussion-service.js';
+import type { Checklist } from '../../domain/checklist/checklist.js';
+import type { ChecklistItem } from '../../domain/checklist/checklist-item.js';
+import type { ChecklistSummary } from '../../application/checklist-service.js';
 import type { Notification } from '../../domain/notification/notification.js';
 import type { NotificationPreference } from '../../domain/notification/preference.js';
 
@@ -125,6 +128,32 @@ export function messageDto(m: Message) {
     createdAt: m.createdAt.toISOString(),
     editedAt: m.editedAt ? m.editedAt.toISOString() : null,
     parentId: m.parentId,
+  };
+}
+
+export function checklistDto(c: Checklist) {
+  return {
+    id: c.id,
+    equipmentId: c.equipmentId,
+    authorId: c.authorId,
+    title: c.title,
+    createdAt: c.createdAt.toISOString(),
+    updatedAt: c.updatedAt.toISOString(),
+  };
+}
+
+export function checklistSummaryDto(s: ChecklistSummary) {
+  return { ...checklistDto(s.checklist), itemCount: s.itemCount, checkedCount: s.checkedCount };
+}
+
+export function checklistItemDto(i: ChecklistItem) {
+  return {
+    id: i.id,
+    checklistId: i.checklistId,
+    label: i.label,
+    position: i.position,
+    checkedAt: i.checkedAt ? i.checkedAt.toISOString() : null,
+    checkedById: i.checkedById,
   };
 }
 

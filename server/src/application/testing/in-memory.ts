@@ -1,4 +1,6 @@
 import type {
+  ChecklistItemRepository,
+  ChecklistRepository,
   Clock,
   CredentialRepository,
   DeviceToken,
@@ -31,6 +33,8 @@ import type { Expense } from '../../domain/expense/expense.js';
 import type { Reimbursement } from '../../domain/expense/reimbursement.js';
 import type { Message } from '../../domain/discussion/message.js';
 import type { Thread } from '../../domain/discussion/thread.js';
+import type { Checklist } from '../../domain/checklist/checklist.js';
+import type { ChecklistItem } from '../../domain/checklist/checklist-item.js';
 import type { Notification } from '../../domain/notification/notification.js';
 import type { NotificationPreference } from '../../domain/notification/preference.js';
 
@@ -156,6 +160,42 @@ export class InMemoryMessageRepository implements MessageRepository {
   }
   async save(message: Message) {
     this.items.set(message.id, message);
+  }
+  async delete(id: string) {
+    this.items.delete(id);
+  }
+}
+
+export class InMemoryChecklistRepository implements ChecklistRepository {
+  private items = new Map<string, Checklist>();
+  async findById(id: string) {
+    return this.items.get(id) ?? null;
+  }
+  async findByEquipmentId(equipmentId: string) {
+    return [...this.items.values()]
+      .filter((c) => c.equipmentId === equipmentId)
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  }
+  async save(checklist: Checklist) {
+    this.items.set(checklist.id, checklist);
+  }
+  async delete(id: string) {
+    this.items.delete(id);
+  }
+}
+
+export class InMemoryChecklistItemRepository implements ChecklistItemRepository {
+  private items = new Map<string, ChecklistItem>();
+  async findById(id: string) {
+    return this.items.get(id) ?? null;
+  }
+  async findByChecklistId(checklistId: string) {
+    return [...this.items.values()]
+      .filter((i) => i.checklistId === checklistId)
+      .sort((a, b) => a.position - b.position);
+  }
+  async save(item: ChecklistItem) {
+    this.items.set(item.id, item);
   }
   async delete(id: string) {
     this.items.delete(id);

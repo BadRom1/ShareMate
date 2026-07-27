@@ -2,6 +2,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './infrastructure/persistence/sqlite/database.js';
 import {
+  SqliteChecklistItemRepository,
+  SqliteChecklistRepository,
   SqliteCredentialRepository,
   SqliteDeviceTokenRepository,
   SqliteEquipmentRepository,
@@ -55,6 +57,8 @@ const app = await buildApp({
   reimbursements: new SqliteReimbursementRepository(db),
   threads: new SqliteThreadRepository(db),
   messages: new SqliteMessageRepository(db),
+  checklists: new SqliteChecklistRepository(db),
+  checklistItems: new SqliteChecklistItemRepository(db),
   notifications: new SqliteNotificationRepository(db),
   notificationPreferences: new SqliteNotificationPreferenceRepository(db),
   pushSubscriptions: new SqlitePushSubscriptionRepository(db),

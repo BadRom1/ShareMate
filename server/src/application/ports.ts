@@ -8,6 +8,8 @@ import type { Expense } from '../domain/expense/expense.js';
 import type { Reimbursement } from '../domain/expense/reimbursement.js';
 import type { Message } from '../domain/discussion/message.js';
 import type { Thread } from '../domain/discussion/thread.js';
+import type { Checklist } from '../domain/checklist/checklist.js';
+import type { ChecklistItem } from '../domain/checklist/checklist-item.js';
 import type { Notification } from '../domain/notification/notification.js';
 import type { NotificationPreference } from '../domain/notification/preference.js';
 import type { NotificationType } from '../domain/notification/notification-type.js';
@@ -67,6 +69,22 @@ export interface MessageRepository {
   findByThreadId(threadId: string): Promise<Message[]>;
   countByThreadId(threadId: string): Promise<number>;
   save(message: Message): Promise<void>;
+  delete(id: string): Promise<void>;
+}
+
+export interface ChecklistRepository {
+  findById(id: string): Promise<Checklist | null>;
+  /** Checklists de l'équipement, triées par activité décroissante (plus récente d'abord). */
+  findByEquipmentId(equipmentId: string): Promise<Checklist[]>;
+  save(checklist: Checklist): Promise<void>;
+  delete(id: string): Promise<void>;
+}
+
+export interface ChecklistItemRepository {
+  findById(id: string): Promise<ChecklistItem | null>;
+  /** Points de contrôle d'une checklist, triés par position croissante. */
+  findByChecklistId(checklistId: string): Promise<ChecklistItem[]>;
+  save(item: ChecklistItem): Promise<void>;
   delete(id: string): Promise<void>;
 }
 

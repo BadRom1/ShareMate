@@ -13,10 +13,14 @@ import { MemberCredential } from '../../../domain/auth/credential.js';
 import type { Session } from '../../../domain/auth/session.js';
 import { Message } from '../../../domain/discussion/message.js';
 import { Thread } from '../../../domain/discussion/thread.js';
+import { Checklist } from '../../../domain/checklist/checklist.js';
+import { ChecklistItem } from '../../../domain/checklist/checklist-item.js';
 import { Notification } from '../../../domain/notification/notification.js';
 import { NotificationPreference } from '../../../domain/notification/preference.js';
 import type { NotificationType } from '../../../domain/notification/notification-type.js';
 import type {
+  ChecklistItemRepository,
+  ChecklistRepository,
   CredentialRepository,
   DeviceToken,
   DeviceTokenRepository,
@@ -596,6 +600,123 @@ export class SqliteMessageRepository implements MessageRepository {
 
   async delete(id: string): Promise<void> {
     this.db.prepare('DELETE FROM messages WHERE id = ?').run(id);
+  }
+}
+
+interface ChecklistRow {
+  id: string;
+  equipment_id: string;
+  author_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export class SqliteChecklistRepository implements ChecklistRepository {
+  constructor(private readonly db: SqliteDb) {}
+
+  private toEntity(row: ChecklistRow): Checklist {
+    return Checklist.create({
+      id: row.id,
+      equipmentId: row.equipment_id,
+      authorId: row.author_id,
+      title: row.title,
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+    });
+  }
+
+  async findById(id: string): Promise<Checklist | null> {
+    const row = this.db.prepare('SELECT * FROM checklists WHERE id = ?').get(id) as ChecklistRow | undefined;
+    return row ? this.toEntity(row) : null;
+  }
+
+  async findByEquipmentId(equipmentId: string): Promise<Checklist[]> {
+    const rows = this.db
+      .prepare('SELECT * FROM checklists WHERE equipment_id = ? ORDER BY updated_at DESC')
+      .all(equipmentId) as ChecklistRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
+  async save(checklist: Checklist): Promise<void> {
+    // ON CONFLICT DO UPDATE (et non INSERT OR REPLACE) : un REPLACE supprimerait puis réinsérerait
+    // la ligne, déclenchant le ON DELETE CASCADE qui effacerait tous les points de la checklist.
+    this.db
+      .prepare(
+        `INSERT INTO checklists (id, equipment_id, author_id, title, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at`,
+      )
+      .run(
+        checklist.id,
+        checklist.equipmentId,
+        checklist.authorId,
+        checklist.title,
+        checklist.createdAt.toISOString(),
+        checklist.updatedAt.toISOString(),
+      );
+  }
+
+  async delete(id: string): Promise<void> {
+    this.db.prepare('DELETE FROM checklists WHERE id = ?').run(id);
+  }
+}
+
+interface ChecklistItemRow {
+  id: string;
+  checklist_id: string;
+  label: string;
+  position: number;
+  checked_at: string | null;
+  checked_by_id: string | null;
+}
+
+export class SqliteChecklistItemRepository implements ChecklistItemRepository {
+  constructor(private readonly db: SqliteDb) {}
+
+  private toEntity(row: ChecklistItemRow): ChecklistItem {
+    return ChecklistItem.create({
+      id: row.id,
+      checklistId: row.checklist_id,
+      label: row.label,
+      position: row.position,
+      checkedAt: row.checked_at ? new Date(row.checked_at) : null,
+      checkedById: row.checked_by_id,
+    });
+  }
+
+  async findById(id: string): Promise<ChecklistItem | null> {
+    const row = this.db.prepare('SELECT * FROM checklist_items WHERE id = ?').get(id) as ChecklistItemRow | undefined;
+    return row ? this.toEntity(row) : null;
+  }
+
+  async findByChecklistId(checklistId: string): Promise<ChecklistItem[]> {
+    const rows = this.db
+      .prepare('SELECT * FROM checklist_items WHERE checklist_id = ? ORDER BY position')
+      .all(checklistId) as ChecklistItemRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
+  async save(item: ChecklistItem): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO checklist_items (id, checklist_id, label, position, checked_at, checked_by_id)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET label = excluded.label, position = excluded.position,
+           checked_at = excluded.checked_at, checked_by_id = excluded.checked_by_id`,
+      )
+      .run(
+        item.id,
+        item.checklistId,
+        item.label,
+        item.position,
+        item.checkedAt ? item.checkedAt.toISOString() : null,
+        item.checkedById,
+      );
+  }
+
+  async delete(id: string): Promise<void> {
+    this.db.prepare('DELETE FROM checklist_items WHERE id = ?').run(id);
   }
 }
 
