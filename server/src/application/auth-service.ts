@@ -31,6 +31,7 @@ export interface AuthResult {
 }
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 jours, expiration glissante
+const SESSION_RENEWAL_THRESHOLD_MS = SESSION_TTL_MS / 3; // en deçà, la session est repoussée
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 jours : un code circule hors bande (SMS, WhatsApp)
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -184,7 +185,12 @@ export class AuthService {
     if (!member) {
       return null;
     }
-    await this.sessions.save({ ...session, expiresAt: new Date(now.getTime() + SESSION_TTL_MS) });
+    // Prolonger à chaque appel ferait de la moindre lecture d'API une transaction en écriture
+    // SQLite — sur un volume réseau, c'est le point de contention de toute l'application. Repousser
+    // l'échéance dans le dernier tiers du TTL suffit : un usage même épisodique la maintient ouverte.
+    if (session.expiresAt.getTime() - now.getTime() < SESSION_RENEWAL_THRESHOLD_MS) {
+      await this.sessions.save({ ...session, expiresAt: new Date(now.getTime() + SESSION_TTL_MS) });
+    }
     return member;
   }
 

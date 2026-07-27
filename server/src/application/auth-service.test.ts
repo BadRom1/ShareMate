@@ -207,6 +207,23 @@ describe('AuthService — login et sessions', () => {
     expect(await service.authenticate('jeton-invente')).toBeNull();
   });
 
+  it('une session loin de son échéance n’est pas réécrite à chaque appel', async () => {
+    const { session } = await service.login('Bruno', 'secretbruno');
+    // Chaque prolongation est une transaction en écriture SQLite : à ce stade, elle n'apporte rien.
+    fixture.clock.set(new Date('2026-07-12T10:00:00Z')); // +10 jours, il en reste 20
+    expect(await service.authenticate(session.token)).not.toBeNull();
+    expect((await fixture.sessions.findByTokenHash(`hash(${session.token})`))?.expiresAt).toEqual(session.expiresAt);
+  });
+
+  it('une session proche de son échéance est prolongée', async () => {
+    const { session } = await service.login('Bruno', 'secretbruno');
+    fixture.clock.set(new Date('2026-07-24T10:00:00Z')); // +22 jours, il en reste 8 (< 10)
+    expect(await service.authenticate(session.token)).not.toBeNull();
+    expect((await fixture.sessions.findByTokenHash(`hash(${session.token})`))?.expiresAt).toEqual(
+      new Date('2026-08-23T10:00:00Z'),
+    );
+  });
+
   it('changement de mot de passe : vérifie l’actuel', async () => {
     const { member } = await service.login('Bruno', 'secretbruno');
     await expect(service.changePassword(member.id, 'mauvais', 'nouveausecret')).rejects.toThrow(UnauthorizedError);
