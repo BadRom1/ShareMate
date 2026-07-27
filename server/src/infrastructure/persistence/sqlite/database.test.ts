@@ -128,8 +128,9 @@ describe('Migration des emails de membres', () => {
   it('laisse tous les membres chargeables par le domaine après migration', async () => {
     baseAvecEmailsLibres();
     const db = openDatabase(fichier);
-    // C'est l'enjeu : une seule adresse survivante mal formée rendrait `findAll` impossible.
-    expect((await new SqliteMemberRepository(db).findAll()).map((m) => m.name)).toHaveLength(5);
+    // C'est l'enjeu : une seule adresse survivante mal formée rendrait le membre illisible.
+    const tous = ['m1', 'm2', 'm3', 'm4', 'm5'];
+    expect((await new SqliteMemberRepository(db).findByIds(tous)).map((m) => m.name)).toHaveLength(5);
     db.close();
   });
 });

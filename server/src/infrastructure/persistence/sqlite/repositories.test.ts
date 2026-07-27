@@ -60,9 +60,18 @@ describe('SQLite — membres', () => {
     expect(m?.email).toBe('b@ex.fr');
   });
 
-  it('liste tous les membres triés par nom', async () => {
+  it('liste les membres demandés, triés par nom, en ignorant les inconnus', async () => {
     const { members } = await seedBase();
-    expect((await members.findAll()).map((m) => m.name)).toEqual(['Alice', 'Bruno']);
+    expect((await members.findByIds(['m2', 'm1', 'inconnu'])).map((m) => m.name)).toEqual(['Alice', 'Bruno']);
+    expect(await members.findByIds([])).toEqual([]);
+  });
+
+  it('liste les membres créés par un invitant', async () => {
+    const { members } = await seedBase();
+    await members.save(Member.create({ id: 'm4', name: 'David', invitedById: 'm1' }));
+    await members.save(Member.create({ id: 'm3', name: 'Chloé', invitedById: 'm1' }));
+    expect((await members.findInvitedBy('m1')).map((m) => m.name)).toEqual(['Chloé', 'David']);
+    expect(await members.findInvitedBy('m2')).toEqual([]);
   });
 
   it('retrouve par nom ou email, insensible à la casse, accents compris', async () => {

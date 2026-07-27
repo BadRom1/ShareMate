@@ -1,5 +1,5 @@
 import type { Member } from '../domain/member/member.js';
-import { circleMemberIds } from './equipment-access.js';
+import { visibleMemberIds } from './member-scope.js';
 import type { CredentialRepository, EquipmentRepository, MemberRepository } from './ports.js';
 
 /** Membre de l'annuaire, vu par un demandeur donné. */
@@ -17,19 +17,19 @@ export class MemberService {
   ) {}
 
   /**
-   * Annuaire cadré sur le périmètre du demandeur : lui-même, les membres des cercles qu'il partage,
-   * et ceux qu'il a invités mais avec qui aucun équipement n'est encore partagé. Tout nom affiché
-   * par le front (calendrier, dépenses, discussions, checklists) provient d'un cercle commun, donc
+   * Annuaire cadré sur le périmètre du demandeur (voir `visibleMemberIds`). Tout nom affiché par
+   * le front (calendrier, dépenses, discussions, checklists) provient d'un cercle commun, donc
    * reste couvert ; en dehors, un membre n'a pas à connaître l'existence — ni l'email — des autres.
+   *
+   * C'est la route la plus chaude de l'application (chaque ouverture de page) : le périmètre est
+   * calculé par les ports, puis chargé en deux interrogations. Relire l'annuaire complet pour le
+   * filtrer en mémoire, avec une requête d'accès par membre, faisait payer à chaque page la taille
+   * de l'instance.
    */
   async listVisibleMembers(requesterId: string): Promise<DirectoryEntry[]> {
-    const visible = await circleMemberIds(this.equipments, requesterId);
-    const entries: DirectoryEntry[] = [];
-    for (const member of await this.members.findAll()) {
-      if (!visible.has(member.id) && member.invitedById !== requesterId) continue;
-      const credential = await this.credentials.findByMemberId(member.id);
-      entries.push({ member, hasPassword: credential?.hasPassword ?? false });
-    }
-    return entries;
+    const visible = await visibleMemberIds(this.equipments, this.members, requesterId);
+    const members = await this.members.findByIds([...visible]);
+    const withPassword = await this.credentials.findMemberIdsWithPassword(members.map((m) => m.id));
+    return members.map((member) => ({ member, hasPassword: withPassword.has(member.id) }));
   }
 }

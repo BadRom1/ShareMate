@@ -62,8 +62,14 @@ export class InMemoryMemberRepository implements MemberRepository {
   async findById(id: string) {
     return this.items.get(id) ?? null;
   }
-  async findAll() {
-    return [...this.items.values()].sort((a, b) => parPointsDeCode(a.name, b.name));
+  async findByIds(ids: readonly string[]) {
+    const wanted = new Set(ids);
+    return [...this.items.values()].filter((m) => wanted.has(m.id)).sort((a, b) => parPointsDeCode(a.name, b.name));
+  }
+  async findInvitedBy(inviterId: string) {
+    return [...this.items.values()]
+      .filter((m) => m.invitedById === inviterId)
+      .sort((a, b) => parPointsDeCode(a.name, b.name));
   }
   async findByNameOrEmail(identifier: string) {
     const recherché = identifier.trim().toLowerCase();
@@ -369,6 +375,9 @@ export class InMemoryCredentialRepository implements CredentialRepository {
   }
   async findByInviteCode(code: string) {
     return [...this.items.values()].find((c) => c.inviteCode === code) ?? null;
+  }
+  async findMemberIdsWithPassword(memberIds: readonly string[]) {
+    return new Set(memberIds.filter((id) => this.items.get(id)?.hasPassword));
   }
   async count() {
     return this.items.size;

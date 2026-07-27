@@ -65,8 +65,18 @@ export class SqliteMemberRepository implements MemberRepository {
     return row ? this.toEntity(row) : null;
   }
 
-  async findAll(): Promise<Member[]> {
-    const rows = this.db.prepare('SELECT * FROM members ORDER BY name').all() as MemberRow[];
+  async findByIds(ids: readonly string[]): Promise<Member[]> {
+    if (ids.length === 0) return [];
+    const rows = this.db
+      .prepare(`SELECT * FROM members WHERE id IN (${jokers(ids.length)}) ORDER BY name`)
+      .all(...ids) as MemberRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
+  async findInvitedBy(inviterId: string): Promise<Member[]> {
+    const rows = this.db
+      .prepare('SELECT * FROM members WHERE invited_by = ? ORDER BY name')
+      .all(inviterId) as MemberRow[];
     return rows.map((r) => this.toEntity(r));
   }
 
@@ -119,6 +129,17 @@ export class SqliteCredentialRepository implements CredentialRepository {
     const row = this.db.prepare('SELECT * FROM member_credentials WHERE invite_code = ?').get(code) as
       CredentialRow | undefined;
     return row ? this.toEntity(row) : null;
+  }
+
+  async findMemberIdsWithPassword(memberIds: readonly string[]): Promise<Set<string>> {
+    if (memberIds.length === 0) return new Set();
+    const rows = this.db
+      .prepare(
+        `SELECT member_id FROM member_credentials
+         WHERE password_hash IS NOT NULL AND member_id IN (${jokers(memberIds.length)})`,
+      )
+      .all(...memberIds) as { member_id: string }[];
+    return new Set(rows.map((r) => r.member_id));
   }
 
   async count(): Promise<number> {

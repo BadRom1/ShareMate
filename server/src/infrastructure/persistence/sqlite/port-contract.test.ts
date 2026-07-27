@@ -177,7 +177,14 @@ describe.each(IMPLÉMENTATIONS)('Contrat des ports — $nom', ({ ouvrir }) => {
   // locale (`localeCompare`) rangerait « Émile » avec les E — divergence invisible tant qu'aucun
   // nom n'est accentué, c'est-à-dire jusqu'au premier vrai membre.
   it("range l'annuaire par nom, dans l'ordre des points de code", async () => {
-    expect((await dépôts.members.findAll()).map((m) => m.name)).toEqual(['Alice', 'Zoé', 'Émile']);
+    expect((await dépôts.members.findByIds(['m3', 'm2', 'm1'])).map((m) => m.name)).toEqual(['Alice', 'Zoé', 'Émile']);
+  });
+
+  it('range par nom les membres créés par un invitant', async () => {
+    await dépôts.members.save(Member.create({ id: 'm4', name: 'Zoé', invitedById: 'm1' }));
+    await dépôts.members.save(Member.create({ id: 'm5', name: 'Émile', invitedById: 'm1' }));
+    await dépôts.members.save(Member.create({ id: 'm6', name: 'Alice', invitedById: 'm1' }));
+    expect((await dépôts.members.findInvitedBy('m1')).map((m) => m.id)).toEqual(['m6', 'm4', 'm5']);
   });
 
   // Un nom n'est pas unique : le port rend tous les homonymes, à charge du service de trancher.

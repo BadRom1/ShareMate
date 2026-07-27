@@ -29,8 +29,14 @@ import type { NotificationType } from '../domain/notification/notification-type.
 
 export interface MemberRepository {
   findById(id: string): Promise<Member | null>;
-  /** Tous les membres de l'instance, triés par nom. */
-  findAll(): Promise<Member[]>;
+  /**
+   * Membres portant ces identifiants, triés par nom ; les inconnus sont simplement absents.
+   * Aucune vue ne charge l'annuaire entier : le coût d'une page suit le périmètre du demandeur,
+   * jamais la taille de l'instance.
+   */
+  findByIds(ids: readonly string[]): Promise<Member[]>;
+  /** Membres créés par cet invitant, triés par nom. */
+  findInvitedBy(inviterId: string): Promise<Member[]>;
   /**
    * Membres dont le nom ou l'email vaut `identifier`, à la casse près (et aux espaces de bord),
    * triés par nom. Le port doit répondre sans charger l'annuaire : une tentative de connexion ne
@@ -179,6 +185,11 @@ export interface DeviceTokenRepository {
 export interface CredentialRepository {
   findByMemberId(memberId: string): Promise<MemberCredential | null>;
   findByInviteCode(code: string): Promise<MemberCredential | null>;
+  /**
+   * Parmi ces membres, ceux dont le compte a déjà été ouvert. Le port répond en une interrogation :
+   * l'annuaire pose la question pour tout un périmètre, pas membre par membre.
+   */
+  findMemberIdsWithPassword(memberIds: readonly string[]): Promise<Set<string>>;
   count(): Promise<number>;
   save(credential: MemberCredential): Promise<void>;
   /**
