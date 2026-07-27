@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
-import type { Equipment, Member, Message, ThreadSummary } from '../api';
+import type { Member, Message } from '../api';
 import { formatDateTime, formatRelative } from '../format';
 import { pickInitialEquipmentId, setLastEquipmentId } from '../lastEquipment';
+import { clearErrors, errorMessage, firstError, useApiResource } from '../useApiResource';
 import {
   IconBack,
   IconChat,
@@ -26,12 +27,9 @@ interface Props {
 
 /** Discussions par équipement : liste de fils, puis vue d'un fil avec ses messages. */
 export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, initialThreadId }: Props) {
-  const [equipments, setEquipments] = useState<Equipment[]>([]);
   const [selectedId, setSelectedId] = useState('');
-  const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [openThreadId, setOpenThreadId] = useState<string | null>(initialThreadId ?? null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   // Formulaire de nouveau fil.
@@ -53,6 +51,29 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
   const [draft, setDraft] = useState('');
   const listEndRef = useRef<HTMLDivElement | null>(null);
 
+  const equipmentsResource = useApiResource(
+    useCallback(async () => {
+      const list = await api.listEquipments();
+      setSelectedId((id) =>
+        pickInitialEquipmentId(list, currentMemberId, { current: id, deepLink: initialEquipmentId }),
+      );
+      return list;
+    }, [currentMemberId, initialEquipmentId]),
+  );
+
+  const threadsResource = useApiResource(
+    useCallback(async () => (selectedId ? api.listThreads(selectedId) : []), [selectedId]),
+  );
+
+  const messagesResource = useApiResource(
+    useCallback(async () => (openThreadId ? api.listMessages(openThreadId) : []), [openThreadId]),
+  );
+
+  const equipments = equipmentsResource.data ?? [];
+  const threads = threadsResource.data ?? [];
+  const messages = useMemo(() => messagesResource.data ?? [], [messagesResource.data]);
+  const error = actionError ?? firstError(equipmentsResource, threadsResource, messagesResource);
+
   const selected = equipments.find((e) => e.id === selectedId) ?? null;
   const inCircle = selected?.memberIds.includes(currentMemberId) ?? false;
   const openThread = threads.find((t) => t.id === openThreadId) ?? null;
@@ -73,38 +94,13 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     return map;
   }, [messages]);
 
-  const loadEquipments = useCallback(async () => {
-    const list = await api.listEquipments();
-    setEquipments(list);
-    setSelectedId((id) => pickInitialEquipmentId(list, currentMemberId, { current: id, deepLink: initialEquipmentId }));
-  }, [currentMemberId, initialEquipmentId]);
-
-  const loadThreads = useCallback(async () => {
-    if (!selectedId) return;
-    setThreads(await api.listThreads(selectedId));
-  }, [selectedId]);
-
-  const loadMessages = useCallback(async () => {
-    if (!openThreadId) return;
-    setMessages(await api.listMessages(openThreadId));
-  }, [openThreadId]);
-
+  // Changement de fil : on repart d'une vue propre (pas de réponse en cours, tout déplié).
   useEffect(() => {
-    loadEquipments().catch((e: Error) => setError(e.message));
-  }, [loadEquipments]);
-
-  useEffect(() => {
-    loadThreads().catch((e: Error) => setError(e.message));
-  }, [loadThreads]);
-
-  useEffect(() => {
-    if (openThreadId) loadMessages().catch((e: Error) => setError(e.message));
-    // Changement de fil : on repart d'une vue propre (pas de réponse en cours, tout déplié).
     setReplyingTo(null);
     setReplyDraft('');
     setEditingMessageId(null);
     setCollapsed(new Set());
-  }, [openThreadId, loadMessages]);
+  }, [openThreadId]);
 
   useEffect(() => {
     listEndRef.current?.scrollIntoView({ block: 'nearest' });
@@ -136,20 +132,20 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
   }
 
   function fail(e: unknown) {
-    setError(e instanceof Error ? e.message : 'Erreur.');
+    setActionError(errorMessage(e));
   }
 
   async function createThread(event: React.FormEvent) {
     event.preventDefault();
     if (!selectedId || !newTitle.trim()) return;
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       const thread = await api.createThread(selectedId, newTitle.trim(), newBody.trim() || undefined);
       setNewTitle('');
       setNewBody('');
       setShowNewThread(false);
-      await loadThreads();
+      await threadsResource.reload();
       setOpenThreadId(thread.id);
     } catch (e) {
       fail(e);
@@ -163,7 +159,7 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     try {
       await api.deleteThread(id);
       if (openThreadId === id) setOpenThreadId(null);
-      await loadThreads();
+      await threadsResource.reload();
     } catch (e) {
       fail(e);
     }
@@ -174,7 +170,7 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     try {
       await api.renameThread(openThread.id, renameDraft.trim());
       setRenamingThread(false);
-      await loadThreads();
+      await threadsResource.reload();
     } catch (e) {
       fail(e);
     }
@@ -185,11 +181,11 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     const body = draft.trim();
     if (!body || !openThreadId) return;
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       await api.postMessage(openThreadId, body);
       setDraft('');
-      await Promise.all([loadMessages(), loadThreads()]);
+      await Promise.all([messagesResource.reload(), threadsResource.reload()]);
     } catch (e) {
       fail(e);
     } finally {
@@ -201,7 +197,7 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     const body = replyDraft.trim();
     if (!body || !openThreadId) return;
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       await api.postMessage(openThreadId, body, parentId);
       setReplyDraft('');
@@ -213,7 +209,7 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
         next.delete(parentId);
         return next;
       });
-      await Promise.all([loadMessages(), loadThreads()]);
+      await Promise.all([messagesResource.reload(), threadsResource.reload()]);
     } catch (e) {
       fail(e);
     } finally {
@@ -241,7 +237,7 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     try {
       await api.editMessage(id, editDraft.trim());
       setEditingMessageId(null);
-      await loadMessages();
+      await messagesResource.reload();
     } catch (e) {
       fail(e);
     }
@@ -251,7 +247,7 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     if (!confirm('Supprimer ce message ?')) return;
     try {
       await api.deleteMessage(id);
-      await Promise.all([loadMessages(), loadThreads()]);
+      await Promise.all([messagesResource.reload(), threadsResource.reload()]);
     } catch (e) {
       fail(e);
     }
@@ -269,7 +265,13 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
   return (
     <>
       {error && (
-        <div className="alert" onClick={() => setError(null)}>
+        <div
+          className="alert"
+          onClick={() => {
+            setActionError(null);
+            clearErrors(equipmentsResource, threadsResource, messagesResource);
+          }}
+        >
           {error}
         </div>
       )}

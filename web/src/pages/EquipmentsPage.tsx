@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { api } from '../api';
 import type { DirectoryMember, Equipment, MaintenanceStatus, MeterUnit } from '../api';
 import { formatDate, formatEuros, meterLabel } from '../format';
+import { errorMessage, useApiResource } from '../useApiResource';
 import { IconEdit, IconLogout, IconTrash } from '../components/icons';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 
@@ -23,8 +24,6 @@ const EMPTY_FORM = {
 };
 
 export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: Props) {
-  const [equipments, setEquipments] = useState<Equipment[]>([]);
-  const [statuses, setStatuses] = useState<Record<string, MaintenanceStatus>>({});
   const [editing, setEditing] = useState<Equipment | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -34,18 +33,19 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
   const [deleting, setDeleting] = useState(false);
   const [pendingLeave, setPendingLeave] = useState<Equipment | null>(null);
   const [leaving, setLeaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    const list = await api.listEquipments();
-    setEquipments(list);
-    const entries = await Promise.all(list.map(async (e) => [e.id, await api.maintenanceStatus(e.id)] as const));
-    setStatuses(Object.fromEntries(entries));
-  }, []);
+  const resource = useApiResource(
+    useCallback(async () => {
+      const list = await api.listEquipments();
+      const entries = await Promise.all(list.map(async (e) => [e.id, await api.maintenanceStatus(e.id)] as const));
+      return { list, statuses: Object.fromEntries(entries) as Record<string, MaintenanceStatus> };
+    }, []),
+  );
 
-  useEffect(() => {
-    load().catch((e: Error) => setError(e.message));
-  }, [load]);
+  const equipments = resource.data?.list ?? [];
+  const statuses = resource.data?.statuses ?? {};
+  const error = actionError ?? resource.error;
 
   function startCreate() {
     setEditing(null);
@@ -69,7 +69,7 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    setError(null);
+    setActionError(null);
     const payload = {
       name: form.name,
       category: form.category,
@@ -86,9 +86,9 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
         await api.createEquipment(payload);
       }
       setShowForm(false);
-      await load();
+      await resource.reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur.');
+      setActionError(errorMessage(e));
     }
   }
 
@@ -99,7 +99,7 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
   async function addMember() {
     const name = newMemberName.trim();
     if (!name) return;
-    setError(null);
+    setActionError(null);
     try {
       const created = await api.createMember({ name });
       setNewMemberName('');
@@ -108,29 +108,29 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
       setInvite({ memberName: created.name, url: inviteUrl(created.inviteCode) });
       onMembersChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur.');
+      setActionError(errorMessage(e));
     }
   }
 
   async function shareInvite(member: DirectoryMember) {
-    setError(null);
+    setActionError(null);
     try {
       const { inviteCode } = await api.regenerateInvite(member.id);
       setInvite({ memberName: member.name, url: inviteUrl(inviteCode) });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur.');
+      setActionError(errorMessage(e));
     }
   }
 
   async function confirmRemove() {
     if (!pendingDelete) return;
-    setError(null);
+    setActionError(null);
     setDeleting(true);
     try {
       await api.deleteEquipment(pendingDelete.id);
-      await load();
+      await resource.reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur.');
+      setActionError(errorMessage(e));
     } finally {
       // Fermée dans tous les cas : l'alerte d'erreur s'affiche en haut de page, sous la modale.
       setPendingDelete(null);
@@ -140,13 +140,13 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
 
   async function confirmLeave() {
     if (!pendingLeave) return;
-    setError(null);
+    setActionError(null);
     setLeaving(true);
     try {
       await api.leaveEquipment(pendingLeave.id);
-      await load();
+      await resource.reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur.');
+      setActionError(errorMessage(e));
     } finally {
       setPendingLeave(null);
       setLeaving(false);
