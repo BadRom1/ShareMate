@@ -27,14 +27,14 @@ export interface ScryptCost {
 }
 
 /** Recommandation OWASP pour scrypt (N ≥ 2¹⁷). ~128 Mio et ~0,3 s par dérivation. */
-export const COÛT_COURANT: ScryptCost = { N: 2 ** 17, r: 8, p: 1 };
+export const CURRENT_COST: ScryptCost = { N: 2 ** 17, r: 8, p: 1 };
 
 /**
  * Coût implicite des hachages au format hérité `scrypt:<sel>:<dérivé>` : ce sont les défauts de
  * Node, jamais écrits nulle part. Les relire suppose de les figer ici — c'est précisément ce que
  * le format versionné évite pour la suite.
  */
-const COÛT_HÉRITÉ: ScryptCost = { N: 16384, r: 8, p: 1 };
+const LEGACY_COST: ScryptCost = { N: 16384, r: 8, p: 1 };
 
 const LONGUEUR_SEL = 16;
 const LONGUEUR_DÉRIVÉE = 32;
@@ -47,7 +47,7 @@ function maxmem(cost: ScryptCost): number {
   return 128 * cost.N * cost.r * 2;
 }
 
-interface HachageAnalysé {
+interface ParsedHash {
   cost: ScryptCost;
   salt: string;
   derived: Buffer;
@@ -59,7 +59,7 @@ function entierPositif(valeur: string | undefined): number | null {
 }
 
 /** Analyse un hachage stocké, dans le format versionné comme dans le format hérité. */
-function analyser(stored: string): HachageAnalysé | null {
+function parseHash(stored: string): ParsedHash | null {
   const champs = stored.split('$');
   if (champs.length === 6 && champs[0] === 'scrypt') {
     const [, n, r, p, salt, derived] = champs;
@@ -73,7 +73,7 @@ function analyser(stored: string): HachageAnalysé | null {
   if (schéma !== 'scrypt' || !salt || !derived) {
     return null;
   }
-  return { cost: COÛT_HÉRITÉ, salt, derived: Buffer.from(derived, 'hex') };
+  return { cost: LEGACY_COST, salt, derived: Buffer.from(derived, 'hex') };
 }
 
 /**
@@ -83,35 +83,35 @@ function analyser(stored: string): HachageAnalysé | null {
  * Le format hérité `scrypt:<sel>:<dérivé>` reste accepté en lecture le temps de la transition.
  */
 export class ScryptPasswordHasher implements PasswordHasher {
-  constructor(private readonly cost: ScryptCost = COÛT_COURANT) {}
+  constructor(private readonly cost: ScryptCost = CURRENT_COST) {}
 
-  private dériver(password: string, salt: string, cost: ScryptCost): Promise<Buffer> {
+  private derive(password: string, salt: string, cost: ScryptCost): Promise<Buffer> {
     return scrypt(password, salt, LONGUEUR_DÉRIVÉE, { ...cost, maxmem: maxmem(cost) });
   }
 
   async hash(password: string): Promise<string> {
     const salt = crypto.randomBytes(LONGUEUR_SEL).toString('hex');
-    const derived = await this.dériver(password, salt, this.cost);
+    const derived = await this.derive(password, salt, this.cost);
     return `scrypt$${this.cost.N}$${this.cost.r}$${this.cost.p}$${salt}$${derived.toString('hex')}`;
   }
 
   async verify(password: string, stored: string): Promise<boolean> {
-    const analysé = analyser(stored);
-    if (!analysé) {
+    const parsed = parseHash(stored);
+    if (!parsed) {
       return false;
     }
-    const derived = await this.dériver(password, analysé.salt, analysé.cost);
-    return derived.length === analysé.derived.length && crypto.timingSafeEqual(derived, analysé.derived);
+    const derived = await this.derive(password, parsed.salt, parsed.cost);
+    return derived.length === parsed.derived.length && crypto.timingSafeEqual(derived, parsed.derived);
   }
 
   /** Hachage produit sous un coût inférieur au coût courant : à refaire dès que possible. */
   needsRehash(stored: string): boolean {
-    const analysé = analyser(stored);
+    const parsed = parseHash(stored);
     // Illisible : `verify` le rejettera, aucune connexion n'atteindra le re-hachage.
-    if (!analysé) {
+    if (!parsed) {
       return false;
     }
-    return analysé.cost.N < this.cost.N || analysé.cost.r < this.cost.r || analysé.cost.p < this.cost.p;
+    return parsed.cost.N < this.cost.N || parsed.cost.r < this.cost.r || parsed.cost.p < this.cost.p;
   }
 }
 

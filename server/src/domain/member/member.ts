@@ -15,7 +15,7 @@ export interface MemberProps {
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** Un email vide, mal formé ou dupliqué ne peut pas servir d'identifiant de connexion. */
-export function estEmailValide(email: string): boolean {
+export function isValidEmail(email: string): boolean {
   return EMAIL.test(email.trim());
 }
 
@@ -40,7 +40,7 @@ export class Member {
     }
     // Champ facultatif laissé vide par un formulaire : absence d'email, pas email invalide.
     const email = props.email?.trim() ? props.email.trim() : null;
-    if (email !== null && !estEmailValide(email)) {
+    if (email !== null && !isValidEmail(email)) {
       throw new DomainError(`Adresse email invalide : ${email}`);
     }
     return new Member(props.id, name, email, props.invitedById ?? null);

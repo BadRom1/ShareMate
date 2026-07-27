@@ -145,7 +145,7 @@ export class EquipmentService {
       action: 'equipement.cercle-quitte',
       actorId: requesterId,
       targetId: id,
-      details: { restants: remaining },
+      details: { remaining },
     });
     await this.notifier.notify({
       type: 'EQUIPMENT_CIRCLE_CHANGED',
@@ -175,7 +175,7 @@ export class EquipmentService {
       action: 'equipement.cercle-modifie',
       actorId,
       targetId: after.id,
-      details: { retires: removed, ajoutes: added, cercle: [...after.memberIds] },
+      details: { removed, added, circle: [...after.memberIds] },
     });
     const author = await this.memberName(actorId);
     if (removed.length > 0) {

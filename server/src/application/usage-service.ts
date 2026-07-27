@@ -103,8 +103,8 @@ export class UsageService {
     // La durée dépend du relevé précédent sur l'équipement, quel qu'en soit l'auteur :
     // on recalcule donc sur l'historique complet des équipements concernés, chargé d'un seul coup.
     const durations = new Map<string, number | null>();
-    for (const historique of (await this.historiques([...new Set(records.map((r) => r.equipmentId))])).values()) {
-      for (const [id, duration] of computeDurations(historique)) {
+    for (const history of (await this.recordsByEquipment([...new Set(records.map((r) => r.equipmentId))])).values()) {
+      for (const [id, duration] of computeDurations(history)) {
         durations.set(id, duration);
       }
     }
@@ -122,16 +122,16 @@ export class UsageService {
   /** Statuts en alerte, pour les seuls équipements du cercle du demandeur. */
   async alerts(requesterId: string): Promise<MaintenanceStatus[]> {
     const equipments = await equipmentsForMember(this.equipments, requesterId);
-    const historiques = await this.historiques(equipments.map((e) => e.id));
-    return equipments.map((e) => computeMaintenanceStatus(e, historiques.get(e.id) ?? [])).filter((s) => s.alert);
+    const byEquipment = await this.recordsByEquipment(equipments.map((e) => e.id));
+    return equipments.map((e) => computeMaintenanceStatus(e, byEquipment.get(e.id) ?? [])).filter((s) => s.alert);
   }
 
   /** Relevés de plusieurs équipements, indexés par équipement, en une seule interrogation. */
-  private async historiques(equipmentIds: string[]): Promise<Map<string, UsageRecord[]>> {
-    const historiques = new Map<string, UsageRecord[]>(equipmentIds.map((id) => [id, []]));
+  private async recordsByEquipment(equipmentIds: string[]): Promise<Map<string, UsageRecord[]>> {
+    const byEquipment = new Map<string, UsageRecord[]>(equipmentIds.map((id) => [id, []]));
     for (const record of await this.usageRecords.findByEquipmentIds(equipmentIds)) {
-      historiques.get(record.equipmentId)?.push(record);
+      byEquipment.get(record.equipmentId)?.push(record);
     }
-    return historiques;
+    return byEquipment;
   }
 }

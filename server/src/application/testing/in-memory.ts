@@ -53,7 +53,7 @@ import type { NotificationPreference } from '../../domain/notification/preferenc
  */
 
 /** Ordre de `ORDER BY <texte>` en SQLite : comparaison des points de code, pas de la locale. */
-function parPointsDeCode(a: string, b: string): number {
+function byCodePoint(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
@@ -64,18 +64,18 @@ export class InMemoryMemberRepository implements MemberRepository {
   }
   async findByIds(ids: readonly string[]) {
     const wanted = new Set(ids);
-    return [...this.items.values()].filter((m) => wanted.has(m.id)).sort((a, b) => parPointsDeCode(a.name, b.name));
+    return [...this.items.values()].filter((m) => wanted.has(m.id)).sort((a, b) => byCodePoint(a.name, b.name));
   }
   async findInvitedBy(inviterId: string) {
     return [...this.items.values()]
       .filter((m) => m.invitedById === inviterId)
-      .sort((a, b) => parPointsDeCode(a.name, b.name));
+      .sort((a, b) => byCodePoint(a.name, b.name));
   }
   async findByNameOrEmail(identifier: string) {
-    const recherché = identifier.trim().toLowerCase();
+    const wanted = identifier.trim().toLowerCase();
     return [...this.items.values()]
-      .filter((m) => m.name.toLowerCase() === recherché || m.email?.toLowerCase() === recherché)
-      .sort((a, b) => parPointsDeCode(a.name, b.name));
+      .filter((m) => m.name.toLowerCase() === wanted || m.email?.toLowerCase() === wanted)
+      .sort((a, b) => byCodePoint(a.name, b.name));
   }
   async save(member: Member) {
     this.items.set(member.id, member);
@@ -88,9 +88,7 @@ export class InMemoryEquipmentRepository implements EquipmentRepository {
     return this.items.get(id) ?? null;
   }
   async findByMemberId(memberId: string) {
-    return [...this.items.values()]
-      .filter((e) => e.canBeUsedBy(memberId))
-      .sort((a, b) => parPointsDeCode(a.name, b.name));
+    return [...this.items.values()].filter((e) => e.canBeUsedBy(memberId)).sort((a, b) => byCodePoint(a.name, b.name));
   }
   async save(equipment: Equipment) {
     this.items.set(equipment.id, equipment);
@@ -111,9 +109,9 @@ export class InMemoryReservationRepository implements ReservationRepository {
       .sort((a, b) => a.range.start.getTime() - b.range.start.getTime());
   }
   async findByEquipmentIds(equipmentIds: readonly string[]) {
-    const cherchés = new Set(equipmentIds);
+    const wanted = new Set(equipmentIds);
     return [...this.items.values()]
-      .filter((r) => cherchés.has(r.equipmentId))
+      .filter((r) => wanted.has(r.equipmentId))
       .sort((a, b) => a.range.start.getTime() - b.range.start.getTime());
   }
   async save(reservation: Reservation) {
@@ -125,21 +123,21 @@ export class InMemoryReservationRepository implements ReservationRepository {
 }
 
 /** `ORDER BY recorded_at` : les dates sont stockées en ISO 8601 UTC, dont l'ordre est chronologique. */
-function parRelevé(a: UsageRecord, b: UsageRecord): number {
+function byRecordedAt(a: UsageRecord, b: UsageRecord): number {
   return a.recordedAt.getTime() - b.recordedAt.getTime();
 }
 
 export class InMemoryUsageRecordRepository implements UsageRecordRepository {
   private items = new Map<string, UsageRecord>();
   async findByEquipmentId(equipmentId: string) {
-    return [...this.items.values()].filter((u) => u.equipmentId === equipmentId).sort(parRelevé);
+    return [...this.items.values()].filter((u) => u.equipmentId === equipmentId).sort(byRecordedAt);
   }
   async findByEquipmentIds(equipmentIds: readonly string[]) {
-    const cherchés = new Set(equipmentIds);
-    return [...this.items.values()].filter((u) => cherchés.has(u.equipmentId)).sort(parRelevé);
+    const wanted = new Set(equipmentIds);
+    return [...this.items.values()].filter((u) => wanted.has(u.equipmentId)).sort(byRecordedAt);
   }
   async findByMemberId(memberId: string) {
-    return [...this.items.values()].filter((u) => u.memberId === memberId).sort(parRelevé);
+    return [...this.items.values()].filter((u) => u.memberId === memberId).sort(byRecordedAt);
   }
   async save(record: UsageRecord) {
     this.items.set(record.id, record);

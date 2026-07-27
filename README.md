@@ -85,7 +85,7 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 
 ```bash
 npm install
-npm test              # 410 tests : 339 serveur (Node) + 71 front (jsdom)
+npm test              # 440 tests : 361 serveur (Node) + 79 front (jsdom)
 npm run test:coverage # Tests + seuils de couverture (90 % lignes/fonctions, 85 % branches)
 npm run lint          # ESLint (frontières hexagonales + règles React hooks)
 npm run format        # Prettier (format:check en CI)
@@ -96,6 +96,18 @@ npm run dev:web       # Front Vite sur http://localhost:5173 (proxy /api → 300
 npm run build         # Build de production (server/dist + web/dist)
 npm start             # Sert l'API + le front buildé
 ```
+
+### Conventions de code
+
+- **Le français est la langue de ce qui se lit** : commentaires, messages d'erreur, libellés
+  d'interface, noms de tests et messages de commit. **L'anglais est la langue de ce qui s'exécute** :
+  identifiants du code de production (variables, fonctions, types, clés de journal d'audit), au même
+  titre que les mots-clés du langage et les noms des bibliothèques. Les fichiers de test s'autorisent
+  des identifiants français, qui prolongent l'intention décrite par le titre du test.
+- **Un commentaire dit pourquoi**, jamais quoi : la contrainte, l'invariant, le piège que le code
+  suivant évite. Ce que fait le code se lit dans le code.
+- **Architecture hexagonale**, vérifiée par ESLint : `server/src/domain` ne dépend de rien,
+  `server/src/application` ne dépend pas de `infrastructure`.
 
 Variables d'environnement du serveur :
 

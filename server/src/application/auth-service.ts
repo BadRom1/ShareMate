@@ -172,13 +172,13 @@ export class AuthService {
   /** Connexion par nom ou email (insensible à la casse). */
   async login(identifier: string, password: string): Promise<AuthResult> {
     const candidates = await this.members.findByNameOrEmail(identifier);
-    let dérivationFaite = false;
+    let derivationDone = false;
     for (const member of candidates) {
       const credential = await this.credentials.findByMemberId(member.id);
       if (!credential?.passwordHash) {
         continue;
       }
-      dérivationFaite = true;
+      derivationDone = true;
       if (await this.hasher.verify(password, credential.passwordHash)) {
         // Migration progressive du coût de hachage : durcir les paramètres n'invalide rien, chaque
         // membre est repassé au coût courant à sa première connexion suivante, sans le savoir.
@@ -191,7 +191,7 @@ export class AuthService {
     // Sans candidat vérifiable (identifiant inconnu, ou invitation jamais consommée), le refus
     // reviendrait sans aucune dérivation de clé : le temps de réponse trahirait alors l'existence
     // du compte, malgré le message générique. Un hachage leurre, de coût identique, referme ce canal.
-    if (!dérivationFaite) {
+    if (!derivationDone) {
       await this.hasher.hash(password);
     }
     throw new UnauthorizedError('Identifiants invalides.');

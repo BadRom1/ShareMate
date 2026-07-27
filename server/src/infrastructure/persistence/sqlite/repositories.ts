@@ -42,8 +42,8 @@ import type {
 } from '../../../application/ports.js';
 
 /** `IN (?, ?, …)` : better-sqlite3 ne lie pas un tableau à un seul paramètre. */
-function jokers(nombre: number): string {
-  return new Array(nombre).fill('?').join(', ');
+function placeholders(count: number): string {
+  return new Array(count).fill('?').join(', ');
 }
 
 interface MemberRow {
@@ -68,7 +68,7 @@ export class SqliteMemberRepository implements MemberRepository {
   async findByIds(ids: readonly string[]): Promise<Member[]> {
     if (ids.length === 0) return [];
     const rows = this.db
-      .prepare(`SELECT * FROM members WHERE id IN (${jokers(ids.length)}) ORDER BY name`)
+      .prepare(`SELECT * FROM members WHERE id IN (${placeholders(ids.length)}) ORDER BY name`)
       .all(...ids) as MemberRow[];
     return rows.map((r) => this.toEntity(r));
   }
@@ -83,10 +83,10 @@ export class SqliteMemberRepository implements MemberRepository {
   async findByNameOrEmail(identifier: string): Promise<Member[]> {
     // `minuscule` (déclarée à l'ouverture de la base) et non `lower` : cette dernière ne replie
     // que l'ASCII et écarterait « JOSÉ » de « josé ».
-    const recherché = identifier.trim().toLowerCase();
+    const wanted = identifier.trim().toLowerCase();
     const rows = this.db
       .prepare('SELECT * FROM members WHERE minuscule(name) = ? OR minuscule(email) = ? ORDER BY name')
-      .all(recherché, recherché) as MemberRow[];
+      .all(wanted, wanted) as MemberRow[];
     return rows.map((r) => this.toEntity(r));
   }
 
@@ -136,7 +136,7 @@ export class SqliteCredentialRepository implements CredentialRepository {
     const rows = this.db
       .prepare(
         `SELECT member_id FROM member_credentials
-         WHERE password_hash IS NOT NULL AND member_id IN (${jokers(memberIds.length)})`,
+         WHERE password_hash IS NOT NULL AND member_id IN (${placeholders(memberIds.length)})`,
       )
       .all(...memberIds) as { member_id: string }[];
     return new Set(rows.map((r) => r.member_id));
@@ -232,7 +232,7 @@ export class SqliteEquipmentRepository implements EquipmentRepository {
     const rows = this.db
       .prepare(
         `SELECT equipment_id, member_id FROM equipment_members
-         WHERE equipment_id IN (${jokers(ids.length)}) ORDER BY equipment_id, position`,
+         WHERE equipment_id IN (${placeholders(ids.length)}) ORDER BY equipment_id, position`,
       )
       .all(...ids) as { equipment_id: string; member_id: string }[];
     for (const row of rows) {
@@ -351,7 +351,9 @@ export class SqliteReservationRepository implements ReservationRepository {
       return [];
     }
     const rows = this.db
-      .prepare(`SELECT * FROM reservations WHERE equipment_id IN (${jokers(equipmentIds.length)}) ORDER BY start_at`)
+      .prepare(
+        `SELECT * FROM reservations WHERE equipment_id IN (${placeholders(equipmentIds.length)}) ORDER BY start_at`,
+      )
       .all(...equipmentIds) as ReservationRow[];
     return rows.map((r) => this.toEntity(r));
   }
@@ -421,7 +423,7 @@ export class SqliteUsageRecordRepository implements UsageRecordRepository {
     }
     const rows = this.db
       .prepare(
-        `SELECT * FROM usage_records WHERE equipment_id IN (${jokers(equipmentIds.length)}) ORDER BY recorded_at`,
+        `SELECT * FROM usage_records WHERE equipment_id IN (${placeholders(equipmentIds.length)}) ORDER BY recorded_at`,
       )
       .all(...equipmentIds) as UsageRow[];
     return rows.map((r) => this.toEntity(r));

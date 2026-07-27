@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
-import { COÛT_COURANT, ScryptPasswordHasher } from './adapters.js';
+import { CURRENT_COST, ScryptPasswordHasher } from './adapters.js';
 
 const scrypt = promisify<crypto.BinaryLike, crypto.BinaryLike, number, Buffer>(crypto.scrypt);
 
@@ -43,7 +43,7 @@ describe('ScryptPasswordHasher', () => {
   });
 
   it('signale à re-hacher les formats hérité et versionné moins coûteux', async () => {
-    const hasher = new ScryptPasswordHasher(COÛT_COURANT);
+    const hasher = new ScryptPasswordHasher(CURRENT_COST);
     expect(hasher.needsRehash(await hachageHérité('motdepasse'))).toBe(true);
     expect(hasher.needsRehash(await new ScryptPasswordHasher(COÛT_TEST).hash('motdepasse'))).toBe(true);
   });

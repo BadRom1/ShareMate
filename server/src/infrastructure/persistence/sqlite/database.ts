@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
-import { estEmailValide } from '../../../domain/member/member.js';
+import { isValidEmail } from '../../../domain/member/member.js';
 
 export type SqliteDb = Database.Database;
 
@@ -13,7 +13,7 @@ export function openDatabase(filePath: string): SqliteDb {
   const db = new Database(filePath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
-  déclarerFonctions(db);
+  declareFunctions(db);
   migrate(db);
   return db;
 }
@@ -23,14 +23,14 @@ export function openDatabase(filePath: string): SqliteDb {
  * La comparaison d'identifiant à la connexion doit garder la sémantique de `String.toLowerCase`,
  * sinon un membre au nom accentué ne pourrait plus se connecter qu'à la casse exacte.
  */
-function déclarerFonctions(db: SqliteDb): void {
+function declareFunctions(db: SqliteDb): void {
   db.function('minuscule', { deterministic: true }, (valeur: unknown) =>
     typeof valeur === 'string' ? valeur.toLowerCase() : null,
   );
 }
 
 /**
- * Une étape de schéma, appliquée une seule fois puis figée : son numéro de version est son rang
+ * Une étape de schéma, appliquée une seule fois puis figée : son numéro de version est son rank
  * dans `MIGRATIONS`. Chaque `apply` doit rester idempotent — les bases antérieures au
  * versionnement partent de `user_version = 0` et rejouent donc la liste entière.
  */
@@ -40,7 +40,7 @@ interface Migration {
 }
 
 /** Rappel joint à tout refus de démarrage : rien ne doit être corrigé sans copie préalable. */
-const SAUVEGARDE = 'Sauvegardez d’abord la base (sqlite3 base.sqlite ".backup sauvegarde.sqlite").';
+const BACKUP_FIRST = 'Sauvegardez d’abord la base (sqlite3 base.sqlite ".backup sauvegarde.sqlite").';
 
 const MIGRATIONS: Migration[] = [
   {
@@ -221,7 +221,7 @@ const MIGRATIONS: Migration[] = [
     // antérieure, la colonne n'existe qu'une fois celui-ci passé.
     description: 'messages.parent_id',
     apply(db) {
-      if (!colonnes(db, 'messages').includes('parent_id')) {
+      if (!columns(db, 'messages').includes('parent_id')) {
         db.exec(`ALTER TABLE messages ADD COLUMN parent_id TEXT REFERENCES messages(id) ON DELETE CASCADE;`);
       }
       db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_id);`);
@@ -232,7 +232,7 @@ const MIGRATIONS: Migration[] = [
     // voie son invité (et puisse lui repartager son lien) avant qu'un équipement ne les réunisse.
     description: 'members.invited_by',
     apply(db) {
-      if (!colonnes(db, 'members').includes('invited_by')) {
+      if (!columns(db, 'members').includes('invited_by')) {
         db.exec(`ALTER TABLE members ADD COLUMN invited_by TEXT REFERENCES members(id);`);
       }
     },
@@ -242,7 +242,7 @@ const MIGRATIONS: Migration[] = [
     // indéfiniment.
     description: 'échéance des invitations et révocation des codes de reprise de compte',
     apply(db) {
-      if (!colonnes(db, 'member_credentials').includes('invite_expires_at')) {
+      if (!columns(db, 'member_credentials').includes('invite_expires_at')) {
         db.exec(`ALTER TABLE member_credentials ADD COLUMN invite_expires_at TEXT;`);
       }
       // Un code posé au-dessus d'un mot de passe existant est un vestige de la version où une
@@ -288,7 +288,7 @@ const MIGRATIONS: Migration[] = [
           continue;
         }
         const owner = seen.get(email.toLowerCase());
-        if (!estEmailValide(email)) {
+        if (!isValidEmail(email)) {
           rejected.push(`${row.id} (${row.name}) « ${row.email} » : forme invalide`);
         } else if (owner) {
           rejected.push(`${row.id} (${row.name}) « ${row.email} » : déjà porté par ${owner}`);
@@ -306,7 +306,7 @@ const MIGRATIONS: Migration[] = [
       if (rejected.length > 0) {
         throw new Error(
           `Emails de membres incompatibles : ces adresses servent d’identifiant de connexion et ne ` +
-            `peuvent pas être conservées telles quelles. ${SAUVEGARDE} Corrigez-les ensuite, ou effacez-les ` +
+            `peuvent pas être conservées telles quelles. ${BACKUP_FIRST} Corrigez-les ensuite, ou effacez-les ` +
             `(UPDATE members SET email = NULL WHERE id = …) :\n  - ${rejected.join('\n  - ')}`,
         );
       }
@@ -314,7 +314,7 @@ const MIGRATIONS: Migration[] = [
   },
 ];
 
-/** Version de schéma attendue par ce code : rang de la dernière migration connue. */
+/** Version de schéma attendue par ce code : rank de la dernière migration connue. */
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
 /**
@@ -324,11 +324,11 @@ export const SCHEMA_VERSION = MIGRATIONS.length;
  * qui existe déjà.
  */
 function migrate(db: SqliteDb): void {
-  refuserSchémaIncompatible(db);
-  const appliquées = Number(db.pragma('user_version', { simple: true }));
-  for (let rang = appliquées; rang < MIGRATIONS.length; rang += 1) {
-    const migration = MIGRATIONS[rang]!;
-    const version = rang + 1;
+  rejectIncompatibleSchema(db);
+  const applied = Number(db.pragma('user_version', { simple: true }));
+  for (let rank = applied; rank < MIGRATIONS.length; rank += 1) {
+    const migration = MIGRATIONS[rank]!;
+    const version = rank + 1;
     db.transaction(() => {
       migration.apply(db);
       // PRAGMA n'accepte pas de paramètre lié ; `version` est un entier issu de MIGRATIONS.
@@ -343,27 +343,27 @@ function migrate(db: SqliteDb): void {
  * irréversible que personne n'a décidée : on refuse désormais de démarrer et on laisse l'opérateur
  * trancher.
  */
-function refuserSchémaIncompatible(db: SqliteDb): void {
-  if (tableExiste(db, 'groups')) {
+function rejectIncompatibleSchema(db: SqliteDb): void {
+  if (tableExists(db, 'groups')) {
     throw new Error(
-      `Schéma incompatible : la table « groups » relève du modèle « collectif », abandonné. ${SAUVEGARDE} ` +
+      `Schéma incompatible : la table « groups » relève du modèle « collectif », abandonné. ${BACKUP_FIRST} ` +
         'Supprimez ensuite manuellement les tables de ce modèle (groups, group_members, equipment_access…).',
     );
   }
-  const messages = colonnes(db, 'messages');
+  const messages = columns(db, 'messages');
   if (messages.length > 0 && !messages.includes('thread_id')) {
     throw new Error(
-      `Schéma incompatible : la table « messages » relève du mur de messages plat, antérieur aux fils. ${SAUVEGARDE} ` +
+      `Schéma incompatible : la table « messages » relève du mur de messages plat, antérieur aux fils. ${BACKUP_FIRST} ` +
         'Supprimez ensuite manuellement la table « messages ».',
     );
   }
 }
 
-function tableExiste(db: SqliteDb, nom: string): boolean {
-  return db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(nom) !== undefined;
+function tableExists(db: SqliteDb, name: string): boolean {
+  return db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name) !== undefined;
 }
 
-function colonnes(db: SqliteDb, table: string): string[] {
+function columns(db: SqliteDb, table: string): string[] {
   // `PRAGMA table_info` d'une table absente renvoie une liste vide, sans lever.
   return (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
 }

@@ -154,7 +154,7 @@ describe('EquipmentService — composition du cercle', () => {
         action: 'equipement.cercle-modifie',
         actorId: 'm1',
         targetId: 'e1',
-        details: { retires: ['m2'], ajoutes: ['m3'], cercle: ['m1', 'm3'] },
+        details: { removed: ['m2'], added: ['m3'], circle: ['m1', 'm3'] },
       },
     ]);
   });

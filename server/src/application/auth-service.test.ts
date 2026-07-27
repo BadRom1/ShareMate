@@ -139,9 +139,7 @@ describe('AuthService — invitations', () => {
   it('partager un cercle ne donne pas le droit de reprendre un compte jamais ouvert', async () => {
     // m2 s'inscrit dans un équipement avec m3 : le cercle commun se fabrique à la demande, il ne
     // peut donc pas ouvrir la reprise d'un compte que m2 n'a pas invité.
-    await fixture.equipments.save(
-      (await fixture.equipments.findById('e1'))!.update({ id: 'e1', memberIds: ['m2', 'm3'] }),
-    );
+    await fixture.equipments.save((await fixture.equipments.findById('e1'))!.update({ memberIds: ['m2', 'm3'] }));
     await expect(service.regenerateInvite('m3', 'm2')).rejects.toThrow(ForbiddenError);
     await expect(service.regenerateInvite('m3', 'm2')).rejects.toThrow('Membre introuvable : m3');
   });
