@@ -17,6 +17,13 @@ partage des frais façon Tricount.
   image/PDF optionnel ; répartition **par parts égales**, **au prorata du temps d'usage** (calculé à
   partir des réservations) ou **montants personnalisés** ; soldes « qui doit combien à qui » avec
   **minimisation du nombre de transactions** ; historique des remboursements déclarés.
+- **Checklists** : une ou plusieurs checklists par équipement (ex. « Avant utilisation »,
+  « Hivernage ») avec leurs points de contrôle. Une checklist **appartient au cercle, pas à son
+  créateur** : tout membre du cercle peut la cocher, la renommer, ajouter/modifier/supprimer ses
+  points et la supprimer entièrement. Chaque coche garde la trace de qui l'a validée et quand, et le
+  créateur reste affiché. Avancement affiché (`3/7`) et remise à zéro en un geste pour réutiliser la
+  checklist à la prochaine sortie. **Hors du cercle, rien n'est visible** : l'API refuse la lecture
+  comme l'écriture, et l'onglet ne propose que les équipements partagés avec l'utilisateur.
 
 ## Architecture
 
@@ -30,8 +37,10 @@ server/src/
 │   ├── equipment/    # Equipment (compteur heures/km, seuil d'entretien)
 │   ├── reservation/  # Reservation + règle de non-chevauchement
 │   ├── usage/        # UsageRecord + calcul des alertes de maintenance
-│   └── expense/      # Expense (règles de répartition), Reimbursement,
-│                     # calcul des soldes + minimisation des transactions (type Tricount)
+│   ├── expense/      # Expense (règles de répartition), Reimbursement,
+│   │                 # calcul des soldes + minimisation des transactions (type Tricount)
+│   ├── discussion/   # Thread + Message (sous-fils de réponses)
+│   └── checklist/    # Checklist + ChecklistItem (points cochés, traçabilité de la coche)
 ├── application/      # Use cases + ports (interfaces des repositories, Clock, IdGenerator)
 └── infrastructure/   # Adapters : SQLite (better-sqlite3), HTTP (Fastify), uploads
 web/                  # Front React (Vite) — adapter de présentation
@@ -53,7 +62,7 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 
 ```bash
 npm install
-npm test              # 171 tests (domaine, application, intégration SQLite + HTTP)
+npm test              # 220 tests (domaine, application, intégration SQLite + HTTP)
 npm run test:coverage # Tests + seuils de couverture (90 % lignes/fonctions, 85 % branches)
 npm run lint          # ESLint (frontières hexagonales + règles React hooks)
 npm run format        # Prettier (format:check en CI)

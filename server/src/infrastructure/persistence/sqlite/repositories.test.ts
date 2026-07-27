@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase } from './database.js';
 import type { SqliteDb } from './database.js';
 import {
+  SqliteChecklistItemRepository,
+  SqliteChecklistRepository,
   SqliteCredentialRepository,
   SqliteEquipmentRepository,
   SqliteExpenseRepository,
@@ -18,6 +20,8 @@ import { Reservation } from '../../../domain/reservation/reservation.js';
 import { UsageRecord } from '../../../domain/usage/usage-record.js';
 import { Expense } from '../../../domain/expense/expense.js';
 import { Reimbursement } from '../../../domain/expense/reimbursement.js';
+import { Checklist } from '../../../domain/checklist/checklist.js';
+import { ChecklistItem } from '../../../domain/checklist/checklist-item.js';
 import { Money } from '../../../domain/shared/money.js';
 import { TimeRange } from '../../../domain/shared/time-range.js';
 
@@ -242,6 +246,83 @@ describe('SQLite — dépenses et remboursements', () => {
     expect(list).toHaveLength(1);
     expect(list[0]?.amount.cents).toBe(500);
     expect(list[0]?.notes).toBe('virement');
+  });
+});
+
+describe('SQLite — checklists', () => {
+  async function seedChecklist() {
+    await seedBase();
+    const checklists = new SqliteChecklistRepository(db);
+    const items = new SqliteChecklistItemRepository(db);
+    await checklists.save(
+      Checklist.create({
+        id: 'c1',
+        equipmentId: 'e1',
+        authorId: 'm1',
+        title: 'Avant utilisation',
+        createdAt: new Date('2026-07-01T08:00:00Z'),
+      }),
+    );
+    return { checklists, items };
+  }
+
+  it('roundtrip d’une checklist et de ses points, triés par position', async () => {
+    const { checklists, items } = await seedChecklist();
+    await items.save(ChecklistItem.create({ id: 'i2', checklistId: 'c1', label: 'Gasoil', position: 1 }));
+    await items.save(
+      ChecklistItem.create({
+        id: 'i1',
+        checklistId: 'c1',
+        label: 'Niveau d’huile',
+        position: 0,
+        checkedAt: new Date('2026-07-02T09:00:00Z'),
+        checkedById: 'm2',
+      }),
+    );
+
+    const checklist = await checklists.findById('c1');
+    expect(checklist?.title).toBe('Avant utilisation');
+    expect((await checklists.findByEquipmentId('e1')).map((c) => c.id)).toEqual(['c1']);
+
+    const list = await items.findByChecklistId('c1');
+    expect(list.map((i) => i.id)).toEqual(['i1', 'i2']);
+    expect(list[0]?.checkedById).toBe('m2');
+    expect(list[0]?.checkedAt).toEqual(new Date('2026-07-02T09:00:00Z'));
+    expect(list[1]?.isChecked).toBe(false);
+    expect((await items.findById('i2'))?.label).toBe('Gasoil');
+  });
+
+  it('la mise à jour d’une checklist ne détruit pas ses points (pas de REPLACE)', async () => {
+    const { checklists, items } = await seedChecklist();
+    await items.save(ChecklistItem.create({ id: 'i1', checklistId: 'c1', label: 'Niveau d’huile', position: 0 }));
+    const checklist = (await checklists.findById('c1'))!;
+    await checklists.save(checklist.rename('Avant chantier', new Date('2026-07-03T08:00:00Z')));
+    expect((await checklists.findById('c1'))?.title).toBe('Avant chantier');
+    expect(await items.findByChecklistId('c1')).toHaveLength(1);
+  });
+
+  it('décocher et supprimer : le point puis la checklist (cascade SQL)', async () => {
+    const { checklists, items } = await seedChecklist();
+    await items.save(
+      ChecklistItem.create({
+        id: 'i1',
+        checklistId: 'c1',
+        label: 'Niveau d’huile',
+        position: 0,
+        checkedAt: new Date('2026-07-02T09:00:00Z'),
+        checkedById: 'm2',
+      }),
+    );
+    await items.save((await items.findById('i1'))!.uncheck());
+    expect((await items.findById('i1'))?.isChecked).toBe(false);
+
+    await items.delete('i1');
+    expect(await items.findByChecklistId('c1')).toHaveLength(0);
+
+    await items.save(ChecklistItem.create({ id: 'i2', checklistId: 'c1', label: 'Gasoil', position: 1 }));
+    await checklists.delete('c1');
+    expect(await checklists.findById('c1')).toBeNull();
+    expect(await items.findById('i2')).toBeNull();
   });
 });
 

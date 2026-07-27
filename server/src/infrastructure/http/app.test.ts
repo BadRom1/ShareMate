@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { openDatabase } from '../persistence/sqlite/database.js';
 import {
+  SqliteChecklistItemRepository,
+  SqliteChecklistRepository,
   SqliteCredentialRepository,
   SqliteDeviceTokenRepository,
   SqliteEquipmentRepository,
@@ -36,6 +38,8 @@ beforeEach(async () => {
     reimbursements: new SqliteReimbursementRepository(db),
     threads: new SqliteThreadRepository(db),
     messages: new SqliteMessageRepository(db),
+    checklists: new SqliteChecklistRepository(db),
+    checklistItems: new SqliteChecklistItemRepository(db),
     notifications: new SqliteNotificationRepository(db),
     notificationPreferences: new SqliteNotificationPreferenceRepository(db),
     pushSubscriptions: new SqlitePushSubscriptionRepository(db),
@@ -482,6 +486,8 @@ describe('API — CORS (origines de l’app native)', () => {
       reimbursements: new SqliteReimbursementRepository(db),
       threads: new SqliteThreadRepository(db),
       messages: new SqliteMessageRepository(db),
+      checklists: new SqliteChecklistRepository(db),
+      checklistItems: new SqliteChecklistItemRepository(db),
       notifications: new SqliteNotificationRepository(db),
       notificationPreferences: new SqliteNotificationPreferenceRepository(db),
       pushSubscriptions: new SqlitePushSubscriptionRepository(db),
@@ -584,6 +590,161 @@ describe('API — discussions (fils + messages)', () => {
     });
     expect(delByAuthor.statusCode).toBe(204);
     expect(((await get(`/api/equipments/${equipment.id}/threads`, alice.cookies)).json() as unknown[]).length).toBe(0);
+  });
+});
+
+describe('API — checklists (checklists + points de contrôle)', () => {
+  it('crée deux checklists, coche depuis le cercle, remet à zéro ; le hors-cercle est refusé', async () => {
+    const { equipment, alice, bruno, chloe } = await setupMembersAndEquipment();
+
+    // Alice crée sa checklist avec ses points ; Bruno la sienne : plusieurs par équipement.
+    const created = await post(
+      '/api/checklists',
+      { equipmentId: equipment.id, title: 'Avant utilisation', itemLabels: ['Niveau d’huile', 'Gasoil'] },
+      alice.cookies,
+    );
+    expect(created.statusCode).toBe(201);
+    const checklist = created.json() as { id: string; authorId: string };
+    expect(checklist.authorId).toBe(alice.id);
+    expect(
+      (await post('/api/checklists', { equipmentId: equipment.id, title: 'Hivernage' }, bruno.cookies)).statusCode,
+    ).toBe(201);
+
+    // Chloé (hors cercle) ne peut pas créer de checklist.
+    const refused = await post('/api/checklists', { equipmentId: equipment.id, title: 'X' }, chloe.cookies);
+    expect(refused.statusCode).toBe(400);
+
+    // Liste avec avancement.
+    const list = await get(`/api/equipments/${equipment.id}/checklists`, bruno.cookies);
+    const summaries = list.json() as { id: string; itemCount: number; checkedCount: number }[];
+    expect(summaries).toHaveLength(2);
+    expect(summaries.find((s) => s.id === checklist.id)).toMatchObject({ itemCount: 2, checkedCount: 0 });
+
+    // Bruno n'a pas créé la checklist mais fait partie du cercle : il peut y ajouter un point.
+    const added = await post('/api/checklist-items', { checklistId: checklist.id, label: 'Chenilles' }, bruno.cookies);
+    expect(added.statusCode).toBe(201);
+    expect((added.json() as { position: number }).position).toBe(2);
+
+    // Chloé, hors cercle, ne voit rien et ne peut rien ajouter.
+    const addedByOutsider = await post(
+      '/api/checklist-items',
+      { checklistId: checklist.id, label: 'Pirate' },
+      chloe.cookies,
+    );
+    expect(addedByOutsider.statusCode).toBe(400);
+    expect((await get(`/api/equipments/${equipment.id}/checklists`, chloe.cookies)).statusCode).toBe(400);
+    expect((await get(`/api/checklists/${checklist.id}/items`, chloe.cookies)).statusCode).toBe(400);
+
+    // Cocher est également ouvert à tout le cercle.
+    const items = (await get(`/api/checklists/${checklist.id}/items`, bruno.cookies)).json() as { id: string }[];
+    expect(items).toHaveLength(3);
+    const checked = await app.inject({
+      method: 'PUT',
+      url: `/api/checklist-items/${items[0]!.id}`,
+      payload: { checked: true },
+      cookies: bruno.cookies,
+    });
+    expect(checked.statusCode).toBe(200);
+    expect(checked.json()).toMatchObject({ checkedById: bruno.id });
+
+    // Chloé ne peut pas cocher.
+    const checkedByOutsider = await app.inject({
+      method: 'PUT',
+      url: `/api/checklist-items/${items[1]!.id}`,
+      payload: { checked: true },
+      cookies: chloe.cookies,
+    });
+    expect(checkedByOutsider.statusCode).toBe(400);
+
+    // Remise à zéro par un membre du cercle.
+    expect((await post(`/api/checklists/${checklist.id}/reset`, {}, bruno.cookies)).statusCode).toBe(204);
+    const afterReset = (await get(`/api/equipments/${equipment.id}/checklists`, alice.cookies)).json() as {
+      id: string;
+      checkedCount: number;
+    }[];
+    expect(afterReset.find((s) => s.id === checklist.id)!.checkedCount).toBe(0);
+  });
+
+  it('renomme, supprime un point puis la checklist depuis un membre qui ne l’a pas créée', async () => {
+    const { equipment, alice, bruno, chloe } = await setupMembersAndEquipment();
+    // Checklist créée par Alice ; c'est Bruno (même cercle) qui la remanie ensuite.
+    const checklist = (
+      await post(
+        '/api/checklists',
+        { equipmentId: equipment.id, title: 'Avant utilisation', itemLabels: ['Niveau d’huile'] },
+        alice.cookies,
+      )
+    ).json() as { id: string };
+    const item = ((await get(`/api/checklists/${checklist.id}/items`, alice.cookies)).json() as { id: string }[])[0]!;
+
+    const renamed = await app.inject({
+      method: 'PUT',
+      url: `/api/checklists/${checklist.id}`,
+      payload: { title: 'Avant chantier' },
+      cookies: bruno.cookies,
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect((renamed.json() as { title: string }).title).toBe('Avant chantier');
+
+    const relabelled = await app.inject({
+      method: 'PUT',
+      url: `/api/checklist-items/${item.id}`,
+      payload: { label: 'Huile moteur' },
+      cookies: bruno.cookies,
+    });
+    expect((relabelled.json() as { label: string }).label).toBe('Huile moteur');
+
+    // Chloé, hors cercle, ne peut ni renommer la checklist ni ses points.
+    expect(
+      (
+        await app.inject({
+          method: 'PUT',
+          url: `/api/checklists/${checklist.id}`,
+          payload: { title: 'Pirate' },
+          cookies: chloe.cookies,
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: 'PUT',
+          url: `/api/checklist-items/${item.id}`,
+          payload: { label: 'Pirate' },
+          cookies: chloe.cookies,
+        })
+      ).statusCode,
+    ).toBe(400);
+
+    // Un PUT sans libellé ni coche ne veut rien dire.
+    const empty = await app.inject({
+      method: 'PUT',
+      url: `/api/checklist-items/${item.id}`,
+      payload: {},
+      cookies: alice.cookies,
+    });
+    expect(empty.statusCode).toBe(400);
+
+    // Suppression : refusée hors cercle, autorisée dans le cercle sans être le créateur.
+    expect(
+      (await app.inject({ method: 'DELETE', url: `/api/checklist-items/${item.id}`, cookies: chloe.cookies }))
+        .statusCode,
+    ).toBe(400);
+    expect(
+      (await app.inject({ method: 'DELETE', url: `/api/checklist-items/${item.id}`, cookies: bruno.cookies }))
+        .statusCode,
+    ).toBe(204);
+    expect(
+      (await app.inject({ method: 'DELETE', url: `/api/checklists/${checklist.id}`, cookies: chloe.cookies }))
+        .statusCode,
+    ).toBe(400);
+    expect(
+      (await app.inject({ method: 'DELETE', url: `/api/checklists/${checklist.id}`, cookies: bruno.cookies }))
+        .statusCode,
+    ).toBe(204);
+    expect(((await get(`/api/equipments/${equipment.id}/checklists`, alice.cookies)).json() as unknown[]).length).toBe(
+      0,
+    );
   });
 });
 

@@ -289,8 +289,8 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
         </div>
       </div>
 
-      <div className={`discussion-layout ${openThread ? 'has-open' : ''}`}>
-        <div className="discussion-main">
+      <div className={`split-layout ${openThread ? 'has-open' : ''}`}>
+        <div className="split-main">
           {openThread ? (
             ThreadView()
           ) : (
@@ -303,7 +303,7 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
           )}
         </div>
 
-        <aside className="discussion-aside">
+        <aside className="split-aside">
           <div className="card">
             <div className="bell-head">
               <h3
@@ -334,14 +334,14 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
             {threads.length === 0 ? (
               <p className="empty">Aucun fil{inCircle ? ' — ouvrez le premier !' : '.'}</p>
             ) : (
-              <ul className="thread-list">
+              <ul className="side-list">
                 {threads.map((t) => (
-                  <li key={t.id} className={`thread-row ${t.id === openThreadId ? 'thread-active' : ''}`}>
-                    <button className="thread-open" onClick={() => setOpenThreadId(t.id)}>
+                  <li key={t.id} className={`side-row ${t.id === openThreadId ? 'side-active' : ''}`}>
+                    <button className="side-open" onClick={() => setOpenThreadId(t.id)}>
                       <IconChat size={18} />
-                      <span className="thread-titles">
-                        <span className="thread-title">{t.title}</span>
-                        <span className="muted thread-sub">
+                      <span className="side-titles">
+                        <span className="side-title">{t.title}</span>
+                        <span className="muted side-sub">
                           {memberName(t.authorId)} · {t.messageCount} msg · {formatRelative(t.updatedAt)}
                         </span>
                       </span>
@@ -541,7 +541,7 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     return (
       <div className="card">
         <div className="bell-head">
-          <button className="icon-btn thread-back" onClick={() => setOpenThreadId(null)} title="Retour aux fils">
+          <button className="icon-btn side-back" onClick={() => setOpenThreadId(null)} title="Retour aux fils">
             <IconBack size={20} />
           </button>
           {renamingThread ? (

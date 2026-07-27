@@ -137,6 +137,33 @@ export interface Message {
   parentId: string | null;
 }
 
+/** Checklist d'un équipement (ex. « Avant utilisation »), créée par un membre du cercle. */
+export interface Checklist {
+  id: string;
+  equipmentId: string;
+  authorId: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Checklist enrichie de son avancement, pour la liste. */
+export interface ChecklistSummary extends Checklist {
+  itemCount: number;
+  checkedCount: number;
+}
+
+export interface ChecklistItem {
+  id: string;
+  checklistId: string;
+  label: string;
+  position: number;
+  /** Date de la coche, ou `null` si le point reste à faire. */
+  checkedAt: string | null;
+  /** Membre ayant coché le point, ou `null`. */
+  checkedById: string | null;
+}
+
 export type NotificationType =
   'MESSAGE_POSTED' | 'EXPENSE_ADDED' | 'RESERVATION_CREATED' | 'REIMBURSEMENT_RECORDED' | 'MAINTENANCE_ALERT';
 
@@ -320,6 +347,24 @@ export const api = {
   editMessage: (id: string, body: string) =>
     request<Message>(`/api/messages/${id}`, { method: 'PUT', body: JSON.stringify({ body }) }),
   deleteMessage: (id: string) => request<void>(`/api/messages/${id}`, { method: 'DELETE' }),
+
+  listChecklists: (equipmentId: string) => request<ChecklistSummary[]>(`/api/equipments/${equipmentId}/checklists`),
+  createChecklist: (equipmentId: string, title: string, itemLabels?: string[]) =>
+    request<Checklist>('/api/checklists', { method: 'POST', body: JSON.stringify({ equipmentId, title, itemLabels }) }),
+  renameChecklist: (id: string, title: string) =>
+    request<Checklist>(`/api/checklists/${id}`, { method: 'PUT', body: JSON.stringify({ title }) }),
+  deleteChecklist: (id: string) => request<void>(`/api/checklists/${id}`, { method: 'DELETE' }),
+  resetChecklist: (id: string) =>
+    request<void>(`/api/checklists/${id}/reset`, { method: 'POST', body: JSON.stringify({}) }),
+
+  listChecklistItems: (checklistId: string) => request<ChecklistItem[]>(`/api/checklists/${checklistId}/items`),
+  addChecklistItem: (checklistId: string, label: string) =>
+    request<ChecklistItem>('/api/checklist-items', { method: 'POST', body: JSON.stringify({ checklistId, label }) }),
+  renameChecklistItem: (id: string, label: string) =>
+    request<ChecklistItem>(`/api/checklist-items/${id}`, { method: 'PUT', body: JSON.stringify({ label }) }),
+  setChecklistItemChecked: (id: string, checked: boolean) =>
+    request<ChecklistItem>(`/api/checklist-items/${id}`, { method: 'PUT', body: JSON.stringify({ checked }) }),
+  deleteChecklistItem: (id: string) => request<void>(`/api/checklist-items/${id}`, { method: 'DELETE' }),
 
   listNotifications: (unreadOnly = false) =>
     request<AppNotification[]>(`/api/notifications${unreadOnly ? '?unread=1' : ''}`),

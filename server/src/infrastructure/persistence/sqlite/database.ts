@@ -148,6 +148,26 @@ function migrate(db: SqliteDb): void {
     );
     CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
 
+    CREATE TABLE IF NOT EXISTS checklists (
+      id TEXT PRIMARY KEY,
+      equipment_id TEXT NOT NULL REFERENCES equipments(id) ON DELETE CASCADE,
+      author_id TEXT NOT NULL REFERENCES members(id),
+      title TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_checklists_equipment ON checklists(equipment_id);
+
+    CREATE TABLE IF NOT EXISTS checklist_items (
+      id TEXT PRIMARY KEY,
+      checklist_id TEXT NOT NULL REFERENCES checklists(id) ON DELETE CASCADE,
+      label TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      checked_at TEXT,
+      checked_by_id TEXT REFERENCES members(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_checklist_items_checklist ON checklist_items(checklist_id);
+
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
       recipient_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,

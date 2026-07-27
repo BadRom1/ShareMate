@@ -81,6 +81,46 @@ export function IconChat(props: IconProps) {
   );
 }
 
+/** Presse-papier coché (checklists). */
+export function IconChecklist(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M9 4H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2" />
+      <rect x="9" y="2" width="6" height="4" rx="1" />
+      <path d="m9 13 2 2 4-4" />
+    </svg>
+  );
+}
+
+/** Case à cocher vide (point de contrôle à faire). */
+export function IconSquare(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+    </svg>
+  );
+}
+
+/** Case cochée (point de contrôle fait). */
+export function IconCheckSquare(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M21 11v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+      <path d="m8 11 3 3 9-9" />
+    </svg>
+  );
+}
+
+/** Flèche circulaire (remise à zéro d'une checklist). */
+export function IconReset(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M3 12a9 9 0 1 0 3-6.7" />
+      <path d="M3 4v5h5" />
+    </svg>
+  );
+}
+
 /** Flèche de réponse (répondre à un message). */
 export function IconReply(props: IconProps) {
   return (
