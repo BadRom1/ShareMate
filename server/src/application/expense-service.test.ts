@@ -5,6 +5,7 @@ import { ForbiddenError, NotFoundError } from '../domain/shared/domain-error.js'
 import { Expense } from '../domain/expense/expense.js';
 import { Money } from '../domain/shared/money.js';
 import { ReservationService } from './reservation-service.js';
+import { NullNotifier } from './testing/in-memory.js';
 
 let f: Awaited<ReturnType<typeof makeFixture>>;
 let service: ExpenseService;
@@ -18,11 +19,18 @@ beforeEach(async () => {
     f.equipments,
     f.reservations,
     f.idGenerator,
-    undefined,
-    undefined,
+    f.members,
+    new NullNotifier(),
     f.receipts,
   );
-  reservationService = new ReservationService(f.reservations, f.equipments, f.idGenerator, f.clock);
+  reservationService = new ReservationService(
+    f.reservations,
+    f.equipments,
+    f.idGenerator,
+    f.clock,
+    f.members,
+    new NullNotifier(),
+  );
 });
 
 // Le cercle de e1 est m1/m2 : les dépenses se répartissent entre eux.

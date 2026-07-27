@@ -44,7 +44,7 @@ export class DiscussionService {
     private readonly members: MemberRepository,
     private readonly idGenerator: IdGenerator,
     private readonly clock: Clock,
-    private readonly notifier?: Notifier,
+    private readonly notifier: Notifier,
   ) {}
 
   // --- Fils ---
@@ -240,7 +240,6 @@ export class DiscussionService {
     authorId: string,
     payload: { title: string; body: string; thread: string },
   ): Promise<void> {
-    if (!this.notifier) return;
     const recipientIds = equipment.memberIds.filter((id) => id !== authorId);
     if (recipientIds.length === 0) return;
     await this.notifier.notify({

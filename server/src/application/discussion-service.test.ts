@@ -1,16 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { DiscussionService } from './discussion-service.js';
 import { AuthorizationError, DomainError, ForbiddenError } from '../domain/shared/domain-error.js';
-import type { NotifyEvent, Notifier } from './ports.js';
 import { makeFixture } from './testing/fixture.js';
-import { InMemoryMessageRepository, InMemoryThreadRepository } from './testing/in-memory.js';
-
-class CapturingNotifier implements Notifier {
-  events: NotifyEvent[] = [];
-  async notify(event: NotifyEvent) {
-    this.events.push(event);
-  }
-}
+import { CapturingNotifier, InMemoryMessageRepository, InMemoryThreadRepository } from './testing/in-memory.js';
 
 async function setup() {
   const fx = await makeFixture();

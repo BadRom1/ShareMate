@@ -13,6 +13,8 @@ import type {
   ThreadRepository,
   NotificationPreferenceRepository,
   NotificationRepository,
+  Notifier,
+  NotifyEvent,
   PasswordHasher,
   PushSender,
   PushSubscriptionRepository,
@@ -293,6 +295,23 @@ export class InMemoryReceiptStorage implements ReceiptStorage {
   }
   async delete(receiptPath: string) {
     this.paths.delete(receiptPath);
+  }
+}
+
+/**
+ * Ne notifie personne. Le port `Notifier` est obligatoire — en production il est toujours branché
+ * sur `NotificationService` — donc les tests qui n'observent pas les notifications le déclarent
+ * explicitement ici plutôt que de laisser une branche « pas de notifier » dans le code de service.
+ */
+export class NullNotifier implements Notifier {
+  async notify() {}
+}
+
+/** Enregistre les événements notifiés au lieu de les délivrer, pour les assertions de test. */
+export class CapturingNotifier implements Notifier {
+  events: NotifyEvent[] = [];
+  async notify(event: NotifyEvent) {
+    this.events.push(event);
   }
 }
 

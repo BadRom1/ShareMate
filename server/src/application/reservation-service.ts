@@ -42,8 +42,8 @@ export class ReservationService {
     private readonly equipments: EquipmentRepository,
     private readonly idGenerator: IdGenerator,
     private readonly clock: Clock,
-    private readonly members?: MemberRepository,
-    private readonly notifier?: Notifier,
+    private readonly members: MemberRepository,
+    private readonly notifier: Notifier,
   ) {}
 
   async reserve(input: ReserveInput): Promise<ReserveResult> {
@@ -61,22 +61,20 @@ export class ReservationService {
     const conflicts = findConflicts(reservation, existing);
     await this.reservations.save(reservation);
 
-    if (this.notifier) {
-      const author = await this.members?.findById(input.memberId);
-      const recipientIds = equipment.memberIds.filter((id) => id !== input.memberId);
-      if (recipientIds.length > 0) {
-        const when = reservation.range.start.toLocaleDateString('fr-FR', {
-          day: 'numeric',
-          month: 'long',
-        });
-        await this.notifier.notify({
-          type: 'RESERVATION_CREATED',
-          recipientIds,
-          title: `📅 ${equipment.name}`,
-          body: `${author?.name ?? 'Un membre'} a réservé pour le ${when}.`,
-          link: `/?tab=calendar`,
-        });
-      }
+    const recipientIds = equipment.memberIds.filter((id) => id !== input.memberId);
+    if (recipientIds.length > 0) {
+      const author = await this.members.findById(input.memberId);
+      const when = reservation.range.start.toLocaleDateString('fr-FR', {
+        day: 'numeric',
+        month: 'long',
+      });
+      await this.notifier.notify({
+        type: 'RESERVATION_CREATED',
+        recipientIds,
+        title: `📅 ${equipment.name}`,
+        body: `${author?.name ?? 'Un membre'} a réservé pour le ${when}.`,
+        link: `/?tab=calendar`,
+      });
     }
     return { reservation, conflicts };
   }

@@ -30,7 +30,7 @@ export class UsageService {
     private readonly equipments: EquipmentRepository,
     private readonly idGenerator: IdGenerator,
     private readonly clock: Clock,
-    private readonly notifier?: Notifier,
+    private readonly notifier: Notifier,
   ) {}
 
   async recordUsage(input: RecordUsageInput): Promise<UsageEntry> {
@@ -56,18 +56,16 @@ export class UsageService {
     const statusBefore = computeMaintenanceStatus(equipment, existing);
     await this.usageRecords.save(record);
 
-    if (this.notifier) {
-      const statusAfter = computeMaintenanceStatus(equipment, [...existing, record]);
-      // Notifier uniquement au passage en alerte, pas à chaque relevé au-dessus du seuil.
-      if (!statusBefore.alert && statusAfter.alert) {
-        await this.notifier.notify({
-          type: 'MAINTENANCE_ALERT',
-          recipientIds: [...equipment.memberIds],
-          title: `🔧 Entretien : ${equipment.name}`,
-          body: `Le seuil d'entretien est atteint (${statusAfter.unitsSinceMaintenance ?? '?'} ${equipment.meterUnit === 'HOURS' ? 'h' : 'km'} depuis le dernier entretien).`,
-          link: `/?tab=usage&equipment=${equipment.id}`,
-        });
-      }
+    const statusAfter = computeMaintenanceStatus(equipment, [...existing, record]);
+    // Notifier uniquement au passage en alerte, pas à chaque relevé au-dessus du seuil.
+    if (!statusBefore.alert && statusAfter.alert) {
+      await this.notifier.notify({
+        type: 'MAINTENANCE_ALERT',
+        recipientIds: [...equipment.memberIds],
+        title: `🔧 Entretien : ${equipment.name}`,
+        body: `Le seuil d'entretien est atteint (${statusAfter.unitsSinceMaintenance ?? '?'} ${equipment.meterUnit === 'HOURS' ? 'h' : 'km'} depuis le dernier entretien).`,
+        link: `/?tab=usage&equipment=${equipment.id}`,
+      });
     }
     return { record, duration: lastReading === null ? null : record.meterReading - lastReading };
   }
