@@ -374,34 +374,7 @@ describe('SQLite — checklists', () => {
   });
 });
 
-describe("SQLite — migration depuis l'ancien modèle « collectif »", () => {
-  it("détecte l'ancien schéma et repart de zéro", async () => {
-    const fs = await import('node:fs');
-    const os = await import('node:os');
-    const path = await import('node:path');
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-test-'));
-    const file = path.join(dir, 'legacy.sqlite');
-    try {
-      const legacy = openDatabase(file);
-      legacy.exec(`
-        CREATE TABLE "groups" (id TEXT PRIMARY KEY, name TEXT NOT NULL);
-        INSERT INTO "groups" VALUES ('g1', 'Les voisins');
-      `);
-      legacy.close();
-      // Réouvre la même base : la migration doit purger l'ancien schéma.
-      const migrated = openDatabase(file);
-      expect(
-        migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'groups'`).get(),
-      ).toBeUndefined();
-      expect(
-        migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'equipment_members'`).get(),
-      ).toBeTruthy();
-      migrated.close();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
+describe('SQLite — migration des bases antérieures', () => {
   it('ajoute parent_id (et son index) à une base messages antérieure, sans perte de données', async () => {
     const fs = await import('node:fs');
     const os = await import('node:os');

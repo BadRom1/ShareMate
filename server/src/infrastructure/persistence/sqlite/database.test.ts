@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openDatabase } from './database.js';
+import { openDatabase, SCHEMA_VERSION } from './database.js';
 
 let répertoire: string;
 let fichier: string;
@@ -34,6 +34,13 @@ function baseAntérieure(): void {
     INSERT INTO member_credentials VALUES ('m2', NULL, 'code-bruno');
   `);
   db.close();
+}
+
+function version(): number {
+  const db = new Database(fichier);
+  const valeur = Number(db.pragma('user_version', { simple: true }));
+  db.close();
+  return valeur;
 }
 
 describe('Migration du schéma', () => {
@@ -78,5 +85,145 @@ describe('Migration du schéma', () => {
     };
     expect(bruno.invite_code).toBe('code-bruno');
     db.close();
+  });
+});
+
+describe('Versionnement du schéma (PRAGMA user_version)', () => {
+  it('une base neuve reçoit le schéma complet et la version courante', () => {
+    const db = openDatabase(fichier);
+    expect(Number(db.pragma('user_version', { simple: true }))).toBe(SCHEMA_VERSION);
+    expect(
+      db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'equipment_members'`).get(),
+    ).toBeTruthy();
+    expect(
+      db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_equipment_members_member'`).get(),
+    ).toBeTruthy();
+    db.close();
+  });
+
+  it('une base antérieure au versionnement est migrée puis marquée, sans perte de données', () => {
+    baseAntérieure();
+    expect(version()).toBe(0);
+    openDatabase(fichier).close();
+    expect(version()).toBe(SCHEMA_VERSION);
+
+    const db = new Database(fichier);
+    expect((db.prepare(`SELECT COUNT(*) AS c FROM members`).get() as { c: number }).c).toBe(2);
+    db.close();
+  });
+
+  it('une base au schéma courant mais non versionnée est reconnue et marquée telle quelle', () => {
+    // Cas de la base en production : elle a déjà tout le schéma, mais `user_version` vaut 0 faute
+    // d'avoir jamais été posé. Rejouer la liste ne doit rien coûter et surtout rien détruire.
+    const db = openDatabase(fichier);
+    db.exec(`
+      INSERT INTO members (id, name) VALUES ('m1', 'Alice'), ('m2', 'Bruno');
+      INSERT INTO equipments VALUES ('e1', 'Minipelle', 'BTP', '2025-01-01', 1500000, 'HOURS', 50);
+      INSERT INTO equipment_members VALUES ('e1', 'm1', 0), ('e1', 'm2', 1);
+      INSERT INTO member_credentials (member_id, password_hash) VALUES ('m1', 'hash-alice');
+    `);
+    db.pragma('user_version = 0');
+    db.close();
+
+    openDatabase(fichier).close();
+
+    expect(version()).toBe(SCHEMA_VERSION);
+    const relu = new Database(fichier);
+    expect((relu.prepare(`SELECT COUNT(*) AS c FROM equipment_members`).get() as { c: number }).c).toBe(2);
+    expect(
+      (
+        relu.prepare(`SELECT password_hash FROM member_credentials WHERE member_id = 'm1'`).get() as {
+          password_hash: string | null;
+        }
+      ).password_hash,
+    ).toBe('hash-alice');
+    relu.close();
+  });
+
+  it('une base déjà à jour ne rejoue aucune migration', () => {
+    const db = openDatabase(fichier);
+    db.exec(`
+      INSERT INTO members (id, name) VALUES ('m1', 'Alice');
+      INSERT INTO member_credentials (member_id, invite_code) VALUES ('m1', 'code-alice');
+    `);
+    db.close();
+
+    openDatabase(fichier).close();
+
+    // Le correctif de données de la version 4 daterait cette invitation : il ne doit plus tourner.
+    const relu = new Database(fichier);
+    expect(
+      (
+        relu.prepare(`SELECT invite_expires_at FROM member_credentials WHERE member_id = 'm1'`).get() as {
+          invite_expires_at: string | null;
+        }
+      ).invite_expires_at,
+    ).toBeNull();
+    relu.close();
+  });
+
+  it('une base à une version intermédiaire ne rejoue que les migrations manquantes', () => {
+    const db = openDatabase(fichier);
+    db.exec(`
+      INSERT INTO members (id, name) VALUES ('m1', 'Alice');
+      INSERT INTO member_credentials (member_id, invite_code) VALUES ('m1', 'code-alice');
+      DROP INDEX idx_equipment_members_member;
+    `);
+    db.pragma('user_version = 3');
+    db.close();
+
+    openDatabase(fichier).close();
+
+    expect(version()).toBe(SCHEMA_VERSION);
+    const relu = new Database(fichier);
+    // La migration 4, redevenue en attente, date bien l'invitation…
+    expect(
+      (
+        relu.prepare(`SELECT invite_expires_at FROM member_credentials WHERE member_id = 'm1'`).get() as {
+          invite_expires_at: string | null;
+        }
+      ).invite_expires_at,
+    ).not.toBeNull();
+    // …et la 5 recrée l'index supprimé.
+    expect(
+      relu
+        .prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_equipment_members_member'`)
+        .get(),
+    ).toBeTruthy();
+    relu.close();
+  });
+});
+
+describe('Schémas incompatibles', () => {
+  it('refuse de démarrer sur l’ancien modèle « collectif » plutôt que de le supprimer', () => {
+    const db = new Database(fichier);
+    db.exec(`
+      CREATE TABLE "groups" (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+      INSERT INTO "groups" VALUES ('g1', 'Les voisins');
+    `);
+    db.close();
+
+    expect(() => openDatabase(fichier)).toThrow(/groups/);
+
+    // Les données sont intactes : c'est à l'opérateur de trancher, sauvegarde en main.
+    const relu = new Database(fichier);
+    expect((relu.prepare(`SELECT COUNT(*) AS c FROM "groups"`).get() as { c: number }).c).toBe(1);
+    expect(Number(relu.pragma('user_version', { simple: true }))).toBe(0);
+    relu.close();
+  });
+
+  it('refuse de démarrer sur le mur de messages plat plutôt que de le supprimer', () => {
+    const db = new Database(fichier);
+    db.exec(`
+      CREATE TABLE messages (id TEXT PRIMARY KEY, equipment_id TEXT NOT NULL, body TEXT NOT NULL);
+      INSERT INTO messages VALUES ('msg1', 'e1', 'Bonjour');
+    `);
+    db.close();
+
+    expect(() => openDatabase(fichier)).toThrow(/messages/);
+
+    const relu = new Database(fichier);
+    expect((relu.prepare(`SELECT COUNT(*) AS c FROM messages`).get() as { c: number }).c).toBe(1);
+    relu.close();
   });
 });
