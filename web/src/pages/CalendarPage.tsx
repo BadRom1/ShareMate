@@ -1,7 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { api } from '../api';
-import type { Equipment, Member, RecurrenceFrequency, Reservation, ReservationStatus } from '../api';
+import type { Member, Reservation } from '../api';
 import { formatDay, formatTime, formatDateTime } from '../format';
+import { errorMessage, useApiResource } from '../useApiResource';
+import {
+  dateKey,
+  hasPriorityOver,
+  monthGridDays,
+  placeDayEvents,
+  reservationsByDay,
+  reservationsByStartDay,
+  startOfWeek,
+  timeKey,
+  weekDays,
+} from './calendar/grid';
+import { EMPTY_DRAFT, REPEAT_LABELS, STATUS_LABELS, ReservationForm, draftRange } from './calendar/ReservationForm';
 
 interface Props {
   members: Member[];
@@ -10,62 +23,13 @@ interface Props {
   onRecordUsage: (equipmentId: string) => void;
 }
 
-const STATUS_LABELS: Record<ReservationStatus, string> = {
-  PLANNED: 'Prévisionnel',
-  REQUIRED: 'Obligatoire',
-};
-
-const REPEAT_LABELS: Record<RecurrenceFrequency, string> = {
-  WEEKLY: 'Chaque semaine',
-  BIWEEKLY: 'Toutes les 2 semaines',
-  MONTHLY: 'Chaque mois',
-};
-
 /** Couleurs attribuées aux équipements dans le calendrier (cycle). */
 const EQUIPMENT_COLORS = ['#1f6f54', '#2b5e8c', '#8c5e2b', '#6d3f8c', '#8c2b4e', '#3d7a7a', '#5e6d1f', '#994f1f'];
 
 /** Plage horaire affichée dans la vue semaine. */
-const WEEK_HOUR_START = 6;
-const WEEK_HOUR_END = 22;
+const WEEK_HOURS = { start: 6, end: 22 };
 
 const DISMISSED_KEY = 'sharemate.usageReminders.dismissed';
-
-/** Priorité en cas de conflit : l'obligatoire prime sur le prévisionnel, sinon le premier créé. */
-function hasPriorityOver(a: Reservation, b: Reservation): boolean {
-  if (a.status !== b.status) return a.status === 'REQUIRED';
-  return a.createdAt < b.createdAt;
-}
-
-function dateKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function timeKey(d: Date): string {
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-function startOfWeek(d: Date): Date {
-  const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
-  return monday;
-}
-
-/** Premier créneau libre de même durée à partir du créneau demandé. */
-function findNextFreeSlot(start: Date, end: Date, others: Reservation[]): { start: Date; end: Date } | null {
-  const duration = end.getTime() - start.getTime();
-  let candidateStart = start.getTime();
-  for (let i = 0; i < 200; i += 1) {
-    const candidateEnd = candidateStart + duration;
-    const blocking = others.filter(
-      (r) => new Date(r.start).getTime() < candidateEnd && candidateStart < new Date(r.end).getTime(),
-    );
-    if (blocking.length === 0) {
-      return { start: new Date(candidateStart), end: new Date(candidateEnd) };
-    }
-    candidateStart = Math.max(...blocking.map((r) => new Date(r.end).getTime()));
-  }
-  return null;
-}
 
 function loadDismissed(): string[] {
   try {
@@ -76,22 +40,8 @@ function loadDismissed(): string[] {
   }
 }
 
-const EMPTY_FORM = {
-  equipmentId: '',
-  startDate: '',
-  startTime: '08:00',
-  endDate: '',
-  endTime: '18:00',
-  status: 'REQUIRED' as ReservationStatus,
-  notes: '',
-  repeat: '' as '' | RecurrenceFrequency,
-  until: '',
-};
-
 export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props) {
-  const [equipments, setEquipments] = useState<Equipment[]>([]);
-  const [reservations, setReservations] = useState<Reservation[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [equipmentFilter, setEquipmentFilter] = useState('all');
   const [view, setView] = useState<'month' | 'week' | 'list'>('month');
@@ -103,18 +53,19 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
   });
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
 
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [draft, setDraft] = useState(EMPTY_DRAFT);
 
-  const load = useCallback(async () => {
-    const [eqs, cal] = await Promise.all([api.listEquipments(), api.calendar()]);
-    setEquipments(eqs);
-    setReservations(cal);
-    setForm((f) => (f.equipmentId === '' && eqs.length > 0 ? { ...f, equipmentId: eqs[0].id } : f));
-  }, []);
+  const resource = useApiResource(
+    useCallback(async () => {
+      const [equipments, reservations] = await Promise.all([api.listEquipments(), api.calendar()]);
+      setDraft((d) => (d.equipmentId === '' && equipments.length > 0 ? { ...d, equipmentId: equipments[0].id } : d));
+      return { equipments, reservations };
+    }, []),
+  );
 
-  useEffect(() => {
-    load().catch((e: Error) => setError(e.message));
-  }, [load]);
+  const equipments = useMemo(() => resource.data?.equipments ?? [], [resource.data]);
+  const reservations = useMemo(() => resource.data?.reservations ?? [], [resource.data]);
+  const error = actionError ?? resource.error;
 
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;
@@ -129,32 +80,11 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
     return EQUIPMENT_COLORS[(index + EQUIPMENT_COLORS.length) % EQUIPMENT_COLORS.length];
   }
 
-  const formStart = useMemo(
-    () => (form.startDate && form.startTime ? new Date(`${form.startDate}T${form.startTime}`) : null),
-    [form.startDate, form.startTime],
-  );
-  const formEnd = useMemo(
-    () => (form.endDate && form.endTime ? new Date(`${form.endDate}T${form.endTime}`) : null),
-    [form.endDate, form.endTime],
-  );
-
   /** Réservations de l'équipement du formulaire, hors réservation en cours d'édition. */
-  const sameEquipment = useMemo(
-    () => reservations.filter((r) => r.equipmentId === form.equipmentId && r.id !== editingId),
-    [reservations, form.equipmentId, editingId],
+  const siblings = useMemo(
+    () => reservations.filter((r) => r.equipmentId === draft.equipmentId && r.id !== editingId),
+    [reservations, draft.equipmentId, editingId],
   );
-
-  /** Conflits détectés en direct pendant la saisie, avant soumission. */
-  const liveConflicts = useMemo(() => {
-    if (!formStart || !formEnd || formEnd <= formStart) return [];
-    return sameEquipment.filter((r) => new Date(r.start) < formEnd && formStart < new Date(r.end));
-  }, [sameEquipment, formStart, formEnd]);
-
-  /** Suggestion : premier créneau libre de même durée après le créneau demandé. */
-  const nextFreeSlot = useMemo(() => {
-    if (liveConflicts.length === 0 || !formStart || !formEnd) return null;
-    return findNextFreeSlot(formStart, formEnd, sameEquipment);
-  }, [liveConflicts, sameEquipment, formStart, formEnd]);
 
   const byId = useMemo(() => new Map(reservations.map((r) => [r.id, r])), [reservations]);
 
@@ -202,7 +132,7 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
 
   function resetForm() {
     setEditingId(null);
-    setForm((f) => ({ ...EMPTY_FORM, equipmentId: f.equipmentId }));
+    setDraft((d) => ({ ...EMPTY_DRAFT, equipmentId: d.equipmentId }));
   }
 
   function startEdit(r: Reservation) {
@@ -210,8 +140,8 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
     const end = new Date(r.end);
     setEditingId(r.id);
     setInfo(null);
-    setError(null);
-    setForm({
+    setActionError(null);
+    setDraft({
       equipmentId: r.equipmentId,
       startDate: dateKey(start),
       startTime: timeKey(start),
@@ -225,32 +155,25 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  function applySlot(slot: { start: Date; end: Date }) {
-    setForm((f) => ({
-      ...f,
-      startDate: dateKey(slot.start),
-      startTime: timeKey(slot.start),
-      endDate: dateKey(slot.end),
-      endTime: timeKey(slot.end),
-    }));
-  }
-
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    setError(null);
+    setActionError(null);
     setInfo(null);
-    if (!formStart || !formEnd) return;
-    if (formEnd <= formStart) {
-      setError('La fin du créneau doit être après le début.');
+    const range = draftRange(draft);
+    if (!range) return;
+    if (range.end <= range.start) {
+      setActionError('La fin du créneau doit être après le début.');
       return;
     }
+    const start = range.start.toISOString();
+    const end = range.end.toISOString();
     try {
       if (editingId) {
         const updated = await api.updateReservation(editingId, {
-          start: formStart.toISOString(),
-          end: formEnd.toISOString(),
-          status: form.status,
-          notes: form.notes || null,
+          start,
+          end,
+          status: draft.status,
+          notes: draft.notes || null,
         });
         setInfo(
           updated.conflictIds.length > 0
@@ -258,33 +181,33 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
             : 'Réservation modifiée.',
         );
         resetForm();
-      } else if (form.repeat) {
-        if (!form.until) {
-          setError('Indiquez la date de fin de répétition.');
+      } else if (draft.repeat) {
+        if (!draft.until) {
+          setActionError('Indiquez la date de fin de répétition.');
           return;
         }
         const created = await api.reserveRecurring({
-          equipmentId: form.equipmentId,
-          start: formStart.toISOString(),
-          end: formEnd.toISOString(),
-          status: form.status,
-          notes: form.notes || undefined,
-          frequency: form.repeat,
-          until: form.until,
+          equipmentId: draft.equipmentId,
+          start,
+          end,
+          status: draft.status,
+          notes: draft.notes || undefined,
+          frequency: draft.repeat,
+          until: draft.until,
         });
         const conflicting = created.filter((r) => r.conflictIds.length > 0).length;
         setInfo(
-          `${created.length} réservation(s) créée(s) (${REPEAT_LABELS[form.repeat].toLowerCase()})` +
+          `${created.length} réservation(s) créée(s) (${REPEAT_LABELS[draft.repeat].toLowerCase()})` +
             (conflicting > 0 ? `, dont ${conflicting} en conflit — voir le calendrier.` : '.'),
         );
         resetForm();
       } else {
         const created = await api.reserve({
-          equipmentId: form.equipmentId,
-          start: formStart.toISOString(),
-          end: formEnd.toISOString(),
-          status: form.status,
-          notes: form.notes || undefined,
+          equipmentId: draft.equipmentId,
+          start,
+          end,
+          status: draft.status,
+          notes: draft.notes || undefined,
         });
         if (created.conflictIds.length > 0) {
           setInfo(
@@ -292,11 +215,11 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
               'Les créneaux concernés sont signalés dans le calendrier — voyez ensemble qui est prioritaire.',
           );
         }
-        setForm({ ...form, startDate: '', endDate: '', notes: '' });
+        setDraft((d) => ({ ...d, startDate: '', endDate: '', notes: '' }));
       }
-      await load();
+      await resource.reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur.');
+      setActionError(errorMessage(e));
     }
   }
 
@@ -304,7 +227,7 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
     if (!confirm('Annuler cette réservation ?')) return;
     await api.cancelReservation(r.id);
     if (editingId === r.id) resetForm();
-    await load();
+    await resource.reload();
   }
 
   const visible = useMemo(() => {
@@ -313,98 +236,23 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
     return [...filtered].sort((a, b) => a.start.localeCompare(b.start));
   }, [reservations, equipmentFilter]);
 
-  // --- Vue mois ---
+  const monthDays = useMemo(() => monthGridDays(month), [month]);
+  const eventsByDay = useMemo(() => reservationsByDay(visible), [visible]);
+  const days = useMemo(() => weekDays(weekStart), [weekStart]);
+  const byDay = useMemo(() => reservationsByStartDay(visible), [visible]);
 
-  const monthDays = useMemo(() => {
-    const firstDay = new Date(month.getFullYear(), month.getMonth(), 1);
-    const gridStart = startOfWeek(firstDay);
-    const lastNeeded = new Date(month.getFullYear(), month.getMonth() + 1, 0);
-    const weeksNeeded = Math.ceil((((firstDay.getDay() + 6) % 7) + lastNeeded.getDate()) / 7);
-    const days: Date[] = [];
-    const d = new Date(gridStart);
-    while (days.length < weeksNeeded * 7) {
-      days.push(new Date(d));
-      d.setDate(d.getDate() + 1);
-    }
-    return days;
-  }, [month]);
-
-  const eventsByDay = useMemo(() => {
-    const map = new Map<string, Reservation[]>();
-    for (const r of visible) {
-      const start = new Date(r.start);
-      const end = new Date(r.end);
-      const cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
-      while (cursor < end) {
-        const key = dateKey(cursor);
-        map.set(key, [...(map.get(key) ?? []), r]);
-        cursor.setDate(cursor.getDate() + 1);
-      }
-    }
-    return map;
-  }, [visible]);
-
+  /** Jour cliqué dans la grille : pré-remplit le formulaire, sauf en cours de modification. */
   function pickDay(d: Date) {
     if (editingId) return;
     const key = dateKey(d);
-    setForm((f) => ({ ...f, startDate: key, endDate: f.endDate && f.endDate >= key ? f.endDate : key }));
+    setDraft((f) => ({ ...f, startDate: key, endDate: f.endDate && f.endDate >= key ? f.endDate : key }));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
-
-  // --- Vue semaine ---
-
-  const weekDays = useMemo(() => {
-    const days: Date[] = [];
-    for (let i = 0; i < 7; i += 1) {
-      const d = new Date(weekStart);
-      d.setDate(d.getDate() + i);
-      days.push(d);
-    }
-    return days;
-  }, [weekStart]);
-
-  /** Événements positionnés pour un jour de la vue semaine (top/height en %, colonnes si chevauchement). */
-  function weekEventsFor(day: Date) {
-    const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate(), WEEK_HOUR_START);
-    const dayEnd = new Date(day.getFullYear(), day.getMonth(), day.getDate(), WEEK_HOUR_END);
-    const events = visible
-      .filter((r) => new Date(r.start) < dayEnd && dayStart < new Date(r.end))
-      .sort((a, b) => a.start.localeCompare(b.start));
-    const laneEnds: number[] = [];
-    const placed = events.map((r) => {
-      const start = Math.max(new Date(r.start).getTime(), dayStart.getTime());
-      const end = Math.min(new Date(r.end).getTime(), dayEnd.getTime());
-      let lane = laneEnds.findIndex((e) => e <= start);
-      if (lane === -1) {
-        lane = laneEnds.length;
-        laneEnds.push(end);
-      } else {
-        laneEnds[lane] = end;
-      }
-      const total = dayEnd.getTime() - dayStart.getTime();
-      return {
-        reservation: r,
-        lane,
-        top: ((start - dayStart.getTime()) / total) * 100,
-        height: Math.max(((end - start) / total) * 100, 4),
-      };
-    });
-    return { placed, laneCount: Math.max(laneEnds.length, 1) };
-  }
-
-  const byDay = useMemo(() => {
-    const map = new Map<string, Reservation[]>();
-    for (const r of visible) {
-      const day = dateKey(new Date(r.start));
-      map.set(day, [...(map.get(day) ?? []), r]);
-    }
-    return [...map.entries()];
-  }, [visible]);
 
   const accessibleEquipments = equipments.filter((e) => e.memberIds.includes(currentMemberId));
   const todayKey = dateKey(new Date());
   const monthLabel = month.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
-  const weekLabel = `${weekDays[0].toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} – ${weekDays[6].toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+  const weekLabel = `${days[0].toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} – ${days[6].toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}`;
 
   function eventTitle(r: Reservation): string {
     return [
@@ -456,147 +304,16 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
         {accessibleEquipments.length === 0 ? (
           <p className="muted">Vous ne faites partie du cercle d'aucun équipement.</p>
         ) : (
-          <form className="stack" onSubmit={submit}>
-            <div className="row">
-              <label className="field">
-                Équipement
-                <select
-                  value={form.equipmentId}
-                  disabled={Boolean(editingId)}
-                  onChange={(e) => setForm({ ...form, equipmentId: e.target.value })}
-                >
-                  {(editingId ? equipments : accessibleEquipments).map((e) => (
-                    <option key={e.id} value={e.id}>
-                      {e.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                Type de réservation
-                <select
-                  value={form.status}
-                  onChange={(e) => setForm({ ...form, status: e.target.value as ReservationStatus })}
-                >
-                  <option value="REQUIRED">Obligatoire (besoin ferme)</option>
-                  <option value="PLANNED">Prévisionnel (souple)</option>
-                </select>
-              </label>
-            </div>
-            <div className="row">
-              <label className="field">
-                Date de début
-                <input
-                  type="date"
-                  value={form.startDate}
-                  onChange={(e) => {
-                    const startDate = e.target.value;
-                    setForm((f) => ({
-                      ...f,
-                      startDate,
-                      endDate: !f.endDate || f.endDate < startDate ? startDate : f.endDate,
-                    }));
-                  }}
-                  required
-                />
-              </label>
-              <label className="field">
-                Heure de début
-                <input
-                  type="time"
-                  value={form.startTime}
-                  onChange={(e) => setForm({ ...form, startTime: e.target.value })}
-                  required
-                />
-              </label>
-              <label className="field">
-                Date de fin
-                <input
-                  type="date"
-                  value={form.endDate}
-                  min={form.startDate || undefined}
-                  onChange={(e) => setForm({ ...form, endDate: e.target.value })}
-                  required
-                />
-              </label>
-              <label className="field">
-                Heure de fin
-                <input
-                  type="time"
-                  value={form.endTime}
-                  onChange={(e) => setForm({ ...form, endTime: e.target.value })}
-                  required
-                />
-              </label>
-            </div>
-            {!editingId && (
-              <div className="row">
-                <label className="field">
-                  Répéter
-                  <select
-                    value={form.repeat}
-                    onChange={(e) => setForm({ ...form, repeat: e.target.value as '' | RecurrenceFrequency })}
-                  >
-                    <option value="">Ne pas répéter</option>
-                    <option value="WEEKLY">{REPEAT_LABELS.WEEKLY}</option>
-                    <option value="BIWEEKLY">{REPEAT_LABELS.BIWEEKLY}</option>
-                    <option value="MONTHLY">{REPEAT_LABELS.MONTHLY}</option>
-                  </select>
-                </label>
-                {form.repeat && (
-                  <label className="field">
-                    Jusqu'au (inclus)
-                    <input
-                      type="date"
-                      value={form.until}
-                      min={form.startDate || undefined}
-                      onChange={(e) => setForm({ ...form, until: e.target.value })}
-                      required
-                    />
-                  </label>
-                )}
-              </div>
-            )}
-            {liveConflicts.length > 0 && (
-              <div className="notice" style={{ marginBottom: 0 }}>
-                ⚠️ Ce créneau chevauche {liveConflicts.length} réservation(s) :{' '}
-                {liveConflicts
-                  .map(
-                    (c) =>
-                      `${memberName(c.memberId)} (${formatDateTime(c.start)} → ${formatDateTime(c.end)}, ${STATUS_LABELS[c.status].toLowerCase()})`,
-                  )
-                  .join(' ; ')}
-                . Vous pouvez quand même réserver : le conflit sera signalé à tout le monde.
-                {nextFreeSlot && (
-                  <>
-                    {' '}
-                    <button type="button" className="ghost" onClick={() => applySlot(nextFreeSlot)}>
-                      👉 Décaler au prochain créneau libre : {formatDateTime(nextFreeSlot.start.toISOString())} →{' '}
-                      {formatDateTime(nextFreeSlot.end.toISOString())}
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
-            <label className="field">
-              Remarque (optionnel)
-              <input
-                value={form.notes}
-                onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                placeholder="Tranchée jardin, déménagement…"
-              />
-            </label>
-            <div className="row" style={{ alignItems: 'center' }}>
-              <button className="primary" style={{ flex: '0 0 auto' }}>
-                {editingId ? 'Enregistrer les modifications' : 'Réserver'}
-              </button>
-              {editingId && (
-                <button type="button" className="ghost" style={{ flex: '0 0 auto' }} onClick={resetForm}>
-                  Abandonner la modification
-                </button>
-              )}
-            </div>
-          </form>
+          <ReservationForm
+            equipments={editingId ? equipments : accessibleEquipments}
+            members={members}
+            siblings={siblings}
+            editing={Boolean(editingId)}
+            draft={draft}
+            onChange={setDraft}
+            onSubmit={submit}
+            onCancelEdit={resetForm}
+          />
         )}
       </div>
 
@@ -735,19 +452,19 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
               <div className="week-hours-col">
                 <div className="week-head" />
                 <div className="week-hours">
-                  {Array.from({ length: (WEEK_HOUR_END - WEEK_HOUR_START) / 2 }, (_, i) => (
+                  {Array.from({ length: (WEEK_HOURS.end - WEEK_HOURS.start) / 2 }, (_, i) => (
                     <span
                       className="week-hour-label"
                       key={i}
-                      style={{ top: `${(i * 2 * 100) / (WEEK_HOUR_END - WEEK_HOUR_START)}%` }}
+                      style={{ top: `${(i * 2 * 100) / (WEEK_HOURS.end - WEEK_HOURS.start)}%` }}
                     >
-                      {WEEK_HOUR_START + i * 2} h
+                      {WEEK_HOURS.start + i * 2} h
                     </span>
                   ))}
                 </div>
               </div>
-              {weekDays.map((day) => {
-                const { placed, laneCount } = weekEventsFor(day);
+              {days.map((day) => {
+                const { placed, laneCount } = placeDayEvents(day, visible, WEEK_HOURS);
                 const key = dateKey(day);
                 return (
                   <div className="week-day-col" key={key}>
@@ -785,7 +502,7 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
               })}
             </div>
             <p className="muted" style={{ marginBottom: 0 }}>
-              Plage affichée : {WEEK_HOUR_START} h – {WEEK_HOUR_END} h. Les réservations en conflit s'affichent côte à
+              Plage affichée : {WEEK_HOURS.start} h – {WEEK_HOURS.end} h. Les réservations en conflit s'affichent côte à
               côte. Cliquez sur une de vos réservations pour la modifier.
             </p>
           </>
