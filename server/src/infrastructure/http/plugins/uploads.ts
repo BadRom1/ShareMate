@@ -15,7 +15,7 @@ export interface UploadRoutesOptions {
 
 export const uploadRoutes: FastifyPluginAsync<UploadRoutesOptions> = async (app, { uploadsDir }) => {
   fs.mkdirSync(uploadsDir, { recursive: true });
-  app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });
+  await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });
 
   app.post('/api/uploads/receipts', async (request, reply) => {
     const file = await request.file();
@@ -32,7 +32,7 @@ export const uploadRoutes: FastifyPluginAsync<UploadRoutesOptions> = async (app,
   });
 
   // decorateReply: false — `reply.sendFile` est réservé au second @fastify/static, celui du front.
-  app.register(fastifyStatic, {
+  await app.register(fastifyStatic, {
     root: uploadsDir,
     prefix: '/uploads/',
     decorateReply: false,

@@ -279,7 +279,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   // Reste ici : le repli SPA s'appuie sur `reply.sendFile`, décoré par ce @fastify/static
   // sur la racine — un plugin encapsulé ne l'exposerait pas au gestionnaire 404.
   if (deps.webDistDir && fs.existsSync(deps.webDistDir)) {
-    app.register(fastifyStatic, {
+    await app.register(fastifyStatic, {
       root: deps.webDistDir,
       prefix: '/',
     });
