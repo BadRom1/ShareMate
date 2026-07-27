@@ -43,7 +43,7 @@ Ajouté après coup. Le diagnostic ci-dessous n'a pas été retouché : il reste
 qu'il était, et chaque constat porte désormais sa ligne **Résolution**. Deux constats restent
 ouverts, un troisième est partiel ; ils sont dits tels quels.
 
-La suite de tests est passée de 236 à 394 (323 serveur, 71 front, 36 fichiers), tous verts.
+La suite de tests est passée de 236 à 410 (339 serveur, 71 front, 37 fichiers), tous verts.
 
 | Constat | Statut                | Commit                              |
 | ------- | --------------------- | ----------------------------------- |
@@ -85,6 +85,17 @@ La suite de tests est passée de 236 à 394 (323 serveur, 71 front, 36 fichiers)
 - **Q3, partiellement** — les filtres de périmètre sont descendus en SQL et les N+1 supprimés, mais
   les soldes et le plan de règlement sont toujours recalculés à chaque appel, sans cache. C'est
   assumé : le calcul est désormais cadré sur un seul équipement, pas sur l'instance.
+
+**Constat ajouté à la relecture d'ensemble — doubles de test infidèles**
+
+Les doubles en mémoire (`application/testing/in-memory.ts`), sur lesquels tourne toute la suite
+unitaire de la couche application, rendaient leurs listes dans l'ordre d'insertion là où l'adapter
+SQLite les trie (annuaire et équipements par nom, réservations par début, relevés par date,
+dépenses et remboursements du plus récent au plus ancien) et sans le plafond de 100 notifications
+appliqué en base. Aucun test n'échouait — les fixtures étaient déjà dans le bon ordre — mais la
+suite n'attestait pas de ce que fait la production. L'ordre fait désormais partie du contrat écrit
+dans `ports.ts`, et `infrastructure/persistence/sqlite/port-contract.test.ts` le joue à l'identique
+sur les deux implémentations.
 
 ---
 
@@ -767,7 +778,7 @@ protégé).
 
 > **Résolution — corrigé (`2d25524`).** Le README a été relu en entier, pas seulement sur les
 > quatre écarts listés : arborescence remise en face des dossiers réels (`member/`, `auth/`,
-> `notification/`, `http/plugins/`), 394 tests au lieu de 232, authentification et validation par
+> `notification/`, `http/plugins/`), le compte de tests remis à jour au lieu de 232, authentification et validation par
 > schéma parmi les choix notables, discussions et notifications ajoutées aux fonctionnalités,
 > roadmap reprise point par point. La section « Sécurité » est réécrite en modèle de menace
 > explicite : qui peut entrer, qui voit qui, ce qui est protégé, et **ce qui ne l'est pas** —

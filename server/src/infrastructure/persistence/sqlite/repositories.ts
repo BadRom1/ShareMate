@@ -19,6 +19,7 @@ import { Notification } from '../../../domain/notification/notification.js';
 import { NotificationPreference } from '../../../domain/notification/preference.js';
 import { NOTIFICATION_TYPES } from '../../../domain/notification/notification-type.js';
 import type { NotificationType } from '../../../domain/notification/notification-type.js';
+import { NOTIFICATION_PAGE_SIZE } from '../../../application/ports.js';
 import type {
   ChecklistItemRepository,
   ChecklistRepository,
@@ -855,7 +856,7 @@ export class SqliteNotificationRepository implements NotificationRepository {
     options?: { unreadOnly?: boolean; limit?: number },
   ): Promise<Notification[]> {
     const clause = options?.unreadOnly ? 'AND read_at IS NULL' : '';
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? NOTIFICATION_PAGE_SIZE;
     const rows = this.db
       .prepare(`SELECT * FROM notifications WHERE recipient_id = ? ${clause} ORDER BY created_at DESC LIMIT ?`)
       .all(recipientId, limit) as NotificationRow[];

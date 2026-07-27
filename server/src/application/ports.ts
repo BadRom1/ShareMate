@@ -14,15 +14,27 @@ import type { Notification } from '../domain/notification/notification.js';
 import type { NotificationPreference } from '../domain/notification/preference.js';
 import type { NotificationType } from '../domain/notification/notification-type.js';
 
-/** Ports de persistance — implémentés par la couche infrastructure. */
+/**
+ * Ports de persistance — implémentés par la couche infrastructure.
+ *
+ * L'ordre de restitution des listes fait partie du contrat, au même titre que leur contenu :
+ * ce que le port ne promet pas, la couche application ne doit pas en dépendre, et ce qu'il
+ * promet doit valoir aussi bien pour l'adapter SQLite que pour son double en mémoire — sinon
+ * la suite unitaire atteste d'un comportement que la production n'a pas. Le contrat est vérifié
+ * pour les deux implémentations dans `infrastructure/persistence/sqlite/port-contract.test.ts`.
+ *
+ * Le tri par nom suit l'ordre des points de code (`<` en JavaScript, `ORDER BY` sur du texte
+ * en SQLite) et non l'ordre alphabétique d'une locale : « Émile » se range donc après « Zoé ».
+ */
 
 export interface MemberRepository {
   findById(id: string): Promise<Member | null>;
+  /** Tous les membres de l'instance, triés par nom. */
   findAll(): Promise<Member[]>;
   /**
-   * Membres dont le nom ou l'email vaut `identifier`, à la casse près (et aux espaces de bord).
-   * Le port doit répondre sans charger l'annuaire : une tentative de connexion ne se paie pas
-   * la table entière. Renvoie une liste — rien n'impose l'unicité des noms.
+   * Membres dont le nom ou l'email vaut `identifier`, à la casse près (et aux espaces de bord),
+   * triés par nom. Le port doit répondre sans charger l'annuaire : une tentative de connexion ne
+   * se paie pas la table entière. Renvoie une liste — rien n'impose l'unicité des noms.
    */
   findByNameOrEmail(identifier: string): Promise<Member[]>;
   save(member: Member): Promise<void>;
@@ -31,9 +43,9 @@ export interface MemberRepository {
 export interface EquipmentRepository {
   findById(id: string): Promise<Equipment | null>;
   /**
-   * Équipements dont `memberId` fait partie du cercle. C'est le seul point d'entrée des vues
-   * globales : le filtre appartient au port pour que le coût d'une page suive la taille du cercle
-   * du demandeur, et non celle de l'instance.
+   * Équipements dont `memberId` fait partie du cercle, triés par nom. C'est le seul point d'entrée
+   * des vues globales : le filtre appartient au port pour que le coût d'une page suive la taille du
+   * cercle du demandeur, et non celle de l'instance.
    */
   findByMemberId(memberId: string): Promise<Equipment[]>;
   save(equipment: Equipment): Promise<void>;
@@ -42,23 +54,33 @@ export interface EquipmentRepository {
 
 export interface ReservationRepository {
   findById(id: string): Promise<Reservation | null>;
+  /** Réservations de l'équipement, triées par début croissant. */
   findByEquipmentId(equipmentId: string): Promise<Reservation[]>;
-  /** Réservations de plusieurs équipements, en une seule interrogation (vue calendrier). */
+  /**
+   * Réservations de plusieurs équipements, en une seule interrogation (vue calendrier),
+   * triées par début croissant tous équipements confondus.
+   */
   findByEquipmentIds(equipmentIds: readonly string[]): Promise<Reservation[]>;
   save(reservation: Reservation): Promise<void>;
   delete(id: string): Promise<void>;
 }
 
 export interface UsageRecordRepository {
+  /** Relevés de l'équipement, du plus ancien au plus récent. */
   findByEquipmentId(equipmentId: string): Promise<UsageRecord[]>;
-  /** Relevés de plusieurs équipements, en une seule interrogation (durées, alertes d'entretien). */
+  /**
+   * Relevés de plusieurs équipements, en une seule interrogation (durées, alertes d'entretien),
+   * du plus ancien au plus récent tous équipements confondus.
+   */
   findByEquipmentIds(equipmentIds: readonly string[]): Promise<UsageRecord[]>;
+  /** Relevés saisis par le membre, du plus ancien au plus récent. */
   findByMemberId(memberId: string): Promise<UsageRecord[]>;
   save(record: UsageRecord): Promise<void>;
 }
 
 export interface ExpenseRepository {
   findById(id: string): Promise<Expense | null>;
+  /** Dépenses de l'équipement, de la plus récente à la plus ancienne. */
   findByEquipmentId(equipmentId: string): Promise<Expense[]>;
   /**
    * Dépenses portant ce justificatif. Renvoie une liste et non une dépense : les données
@@ -71,6 +93,7 @@ export interface ExpenseRepository {
 }
 
 export interface ReimbursementRepository {
+  /** Remboursements de l'équipement, du plus récent au plus ancien. */
   findByEquipmentId(equipmentId: string): Promise<Reimbursement[]>;
   save(reimbursement: Reimbursement): Promise<void>;
 }
@@ -108,8 +131,12 @@ export interface ChecklistItemRepository {
   delete(id: string): Promise<void>;
 }
 
+/** Plafond du centre de notifications, faute de `limit` : la cloche pagine, la base non. */
+export const NOTIFICATION_PAGE_SIZE = 100;
+
 export interface NotificationRepository {
   findById(id: string): Promise<Notification | null>;
+  /** Notifications du destinataire, de la plus récente à la plus ancienne, `NOTIFICATION_PAGE_SIZE` au plus. */
   findByRecipient(recipientId: string, options?: { unreadOnly?: boolean; limit?: number }): Promise<Notification[]>;
   countUnread(recipientId: string): Promise<number>;
   save(notification: Notification): Promise<void>;

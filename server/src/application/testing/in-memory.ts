@@ -28,6 +28,7 @@ import type {
   UsageRecordRepository,
   WebPushSubscription,
 } from '../ports.js';
+import { NOTIFICATION_PAGE_SIZE } from '../ports.js';
 import type { Member } from '../../domain/member/member.js';
 import type { MemberCredential } from '../../domain/auth/credential.js';
 import type { Session } from '../../domain/auth/session.js';
@@ -43,7 +44,18 @@ import type { ChecklistItem } from '../../domain/checklist/checklist-item.js';
 import type { Notification } from '../../domain/notification/notification.js';
 import type { NotificationPreference } from '../../domain/notification/preference.js';
 
-/** Adapters in-memory pour les tests (doubles des ports de persistance). */
+/**
+ * Adapters in-memory pour les tests (doubles des ports de persistance).
+ *
+ * Ces doubles n'ont d'intérêt que s'ils rendent exactement ce que rendrait l'adapter SQLite,
+ * ordre des listes compris (voir la tête de `ports.js`) : une divergence ferait passer au vert
+ * des services qui échoueraient en production. `port-contract.test.ts` confronte les deux.
+ */
+
+/** Ordre de `ORDER BY <texte>` en SQLite : comparaison des points de code, pas de la locale. */
+function parPointsDeCode(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
 
 export class InMemoryMemberRepository implements MemberRepository {
   private items = new Map<string, Member>();
@@ -51,13 +63,13 @@ export class InMemoryMemberRepository implements MemberRepository {
     return this.items.get(id) ?? null;
   }
   async findAll() {
-    return [...this.items.values()];
+    return [...this.items.values()].sort((a, b) => parPointsDeCode(a.name, b.name));
   }
   async findByNameOrEmail(identifier: string) {
     const recherché = identifier.trim().toLowerCase();
-    return [...this.items.values()].filter(
-      (m) => m.name.toLowerCase() === recherché || m.email?.toLowerCase() === recherché,
-    );
+    return [...this.items.values()]
+      .filter((m) => m.name.toLowerCase() === recherché || m.email?.toLowerCase() === recherché)
+      .sort((a, b) => parPointsDeCode(a.name, b.name));
   }
   async save(member: Member) {
     this.items.set(member.id, member);
@@ -70,7 +82,9 @@ export class InMemoryEquipmentRepository implements EquipmentRepository {
     return this.items.get(id) ?? null;
   }
   async findByMemberId(memberId: string) {
-    return [...this.items.values()].filter((e) => e.canBeUsedBy(memberId));
+    return [...this.items.values()]
+      .filter((e) => e.canBeUsedBy(memberId))
+      .sort((a, b) => parPointsDeCode(a.name, b.name));
   }
   async save(equipment: Equipment) {
     this.items.set(equipment.id, equipment);
@@ -86,11 +100,15 @@ export class InMemoryReservationRepository implements ReservationRepository {
     return this.items.get(id) ?? null;
   }
   async findByEquipmentId(equipmentId: string) {
-    return [...this.items.values()].filter((r) => r.equipmentId === equipmentId);
+    return [...this.items.values()]
+      .filter((r) => r.equipmentId === equipmentId)
+      .sort((a, b) => a.range.start.getTime() - b.range.start.getTime());
   }
   async findByEquipmentIds(equipmentIds: readonly string[]) {
     const cherchés = new Set(equipmentIds);
-    return [...this.items.values()].filter((r) => cherchés.has(r.equipmentId));
+    return [...this.items.values()]
+      .filter((r) => cherchés.has(r.equipmentId))
+      .sort((a, b) => a.range.start.getTime() - b.range.start.getTime());
   }
   async save(reservation: Reservation) {
     this.items.set(reservation.id, reservation);
@@ -100,17 +118,22 @@ export class InMemoryReservationRepository implements ReservationRepository {
   }
 }
 
+/** `ORDER BY recorded_at` : les dates sont stockées en ISO 8601 UTC, dont l'ordre est chronologique. */
+function parRelevé(a: UsageRecord, b: UsageRecord): number {
+  return a.recordedAt.getTime() - b.recordedAt.getTime();
+}
+
 export class InMemoryUsageRecordRepository implements UsageRecordRepository {
   private items = new Map<string, UsageRecord>();
   async findByEquipmentId(equipmentId: string) {
-    return [...this.items.values()].filter((u) => u.equipmentId === equipmentId);
+    return [...this.items.values()].filter((u) => u.equipmentId === equipmentId).sort(parRelevé);
   }
   async findByEquipmentIds(equipmentIds: readonly string[]) {
     const cherchés = new Set(equipmentIds);
-    return [...this.items.values()].filter((u) => cherchés.has(u.equipmentId));
+    return [...this.items.values()].filter((u) => cherchés.has(u.equipmentId)).sort(parRelevé);
   }
   async findByMemberId(memberId: string) {
-    return [...this.items.values()].filter((u) => u.memberId === memberId);
+    return [...this.items.values()].filter((u) => u.memberId === memberId).sort(parRelevé);
   }
   async save(record: UsageRecord) {
     this.items.set(record.id, record);
@@ -123,7 +146,9 @@ export class InMemoryExpenseRepository implements ExpenseRepository {
     return this.items.get(id) ?? null;
   }
   async findByEquipmentId(equipmentId: string) {
-    return [...this.items.values()].filter((x) => x.equipmentId === equipmentId);
+    return [...this.items.values()]
+      .filter((x) => x.equipmentId === equipmentId)
+      .sort((a, b) => b.date.getTime() - a.date.getTime());
   }
   async findByReceiptPath(receiptPath: string) {
     return [...this.items.values()].filter((x) => x.receiptPath === receiptPath);
@@ -139,7 +164,9 @@ export class InMemoryExpenseRepository implements ExpenseRepository {
 export class InMemoryReimbursementRepository implements ReimbursementRepository {
   private items = new Map<string, Reimbursement>();
   async findByEquipmentId(equipmentId: string) {
-    return [...this.items.values()].filter((r) => r.equipmentId === equipmentId);
+    return [...this.items.values()]
+      .filter((r) => r.equipmentId === equipmentId)
+      .sort((a, b) => b.date.getTime() - a.date.getTime());
   }
   async save(reimbursement: Reimbursement) {
     this.items.set(reimbursement.id, reimbursement);
@@ -231,7 +258,7 @@ export class InMemoryNotificationRepository implements NotificationRepository {
       .filter((n) => n.recipientId === recipientId)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     if (options?.unreadOnly) list = list.filter((n) => !n.isRead);
-    return options?.limit ? list.slice(0, options.limit) : list;
+    return list.slice(0, options?.limit ?? NOTIFICATION_PAGE_SIZE);
   }
   async countUnread(recipientId: string) {
     return [...this.items.values()].filter((n) => n.recipientId === recipientId && !n.isRead).length;

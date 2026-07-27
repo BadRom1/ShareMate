@@ -85,7 +85,7 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 
 ```bash
 npm install
-npm test              # 394 tests : 323 serveur (Node) + 71 front (jsdom)
+npm test              # 410 tests : 339 serveur (Node) + 71 front (jsdom)
 npm run test:coverage # Tests + seuils de couverture (90 % lignes/fonctions, 85 % branches)
 npm run lint          # ESLint (frontières hexagonales + règles React hooks)
 npm run format        # Prettier (format:check en CI)
