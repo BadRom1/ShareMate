@@ -1456,6 +1456,27 @@ describe('API — cloisonnement des comptes (annuaire, invitations, sessions)', 
     expect(redeem.statusCode).toBe(404);
     await daté.close();
   });
+
+  it('la prolongation glissante de la session repose le cookie à sa nouvelle échéance', async () => {
+    // Sans repose, le cookie garde l'échéance de la connexion : le navigateur l'oublie au bout de
+    // 30 jours alors que la session serveur, elle, vient d'être repoussée d'autant.
+    const horloge = new FixedClock(new Date('2026-07-02T10:00:00Z'));
+    const daté = await buildTestApp({ clock: horloge });
+    const alice = await bootstrapAlice(daté);
+
+    // J+2 : l'échéance est lointaine (TTL 30 jours, seuil de prolongation à 10), rien ne bouge.
+    horloge.set(new Date('2026-07-04T10:00:00Z'));
+    expect((await get('/api/equipments', alice.cookies, daté)).cookies).toEqual([]);
+
+    // J+25 : il reste 5 jours, la session est repoussée — et le cookie avec elle.
+    horloge.set(new Date('2026-07-27T10:00:00Z'));
+    const posé = (await get('/api/equipments', alice.cookies, daté)).cookies.find(
+      (c) => c.name === 'sharemate_session',
+    ) as { value: string; expires?: Date } | undefined;
+    expect(posé?.value).toBe(alice.cookies.sharemate_session);
+    expect(posé?.expires?.toISOString()).toBe('2026-08-26T10:00:00.000Z');
+    await daté.close();
+  });
 });
 
 describe('API — notifications', () => {

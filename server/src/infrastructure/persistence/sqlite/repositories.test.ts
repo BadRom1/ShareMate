@@ -8,6 +8,7 @@ import {
   SqliteEquipmentRepository,
   SqliteExpenseRepository,
   SqliteMemberRepository,
+  SqliteNotificationPreferenceRepository,
   SqliteReimbursementRepository,
   SqliteReservationRepository,
   SqliteSessionRepository,
@@ -461,5 +462,21 @@ describe('SQLite — migration des bases antérieures', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('SqliteNotificationPreferenceRepository', () => {
+  it('ignore les rangées portant un type retiré du domaine', async () => {
+    await seedBase();
+    const preferences = new SqliteNotificationPreferenceRepository(db);
+    db.exec(`
+      INSERT INTO notification_preferences VALUES ('m1', 'MESSAGE_POSTED', 0, 1);
+      INSERT INTO notification_preferences VALUES ('m1', 'PIGEON_VOYAGEUR', 1, 1);
+    `);
+
+    // Sans le filtre, `NotificationPreference.create` lèverait sur la rangée orpheline et
+    // rendrait toutes les préférences du membre illisibles.
+    const lues = await preferences.findByMember('m1');
+    expect(lues.map((p) => p.type)).toEqual(['MESSAGE_POSTED']);
   });
 });

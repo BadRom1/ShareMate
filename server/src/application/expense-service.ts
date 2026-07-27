@@ -71,14 +71,6 @@ export class ExpenseService {
     return euros.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' });
   }
 
-  private async getEquipment(equipmentId: string) {
-    const equipment = await this.equipments.findById(equipmentId);
-    if (!equipment) {
-      throw new NotFoundError(`Équipement introuvable : ${equipmentId}`);
-    }
-    return equipment;
-  }
-
   async addExpense(input: AddExpenseInput, requesterId: string): Promise<Expense> {
     const equipment = await equipmentForMember(this.equipments, input.equipmentId, requesterId);
     if (!equipment.canBeUsedBy(input.payerId)) {

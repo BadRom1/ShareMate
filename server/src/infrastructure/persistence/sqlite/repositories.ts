@@ -17,6 +17,7 @@ import { Checklist } from '../../../domain/checklist/checklist.js';
 import { ChecklistItem } from '../../../domain/checklist/checklist-item.js';
 import { Notification } from '../../../domain/notification/notification.js';
 import { NotificationPreference } from '../../../domain/notification/preference.js';
+import { NOTIFICATION_TYPES } from '../../../domain/notification/notification-type.js';
 import type { NotificationType } from '../../../domain/notification/notification-type.js';
 import type {
   ChecklistItemRepository,
@@ -913,13 +914,19 @@ export class SqliteNotificationPreferenceRepository implements NotificationPrefe
     const rows = this.db
       .prepare('SELECT * FROM notification_preferences WHERE member_id = ?')
       .all(memberId) as PreferenceRow[];
-    return rows.map((r) =>
-      NotificationPreference.create({
-        memberId: r.member_id,
-        type: r.type as NotificationType,
-        inApp: r.in_app === 1,
-        push: r.push === 1,
-      }),
+    return (
+      rows
+        // Un type retiré du domaine laisse ses rangées derrière lui : elles ne correspondent plus
+        // à aucune préférence lisible, et `NotificationPreference.create` les rejetterait.
+        .filter((r) => NOTIFICATION_TYPES.includes(r.type as NotificationType))
+        .map((r) =>
+          NotificationPreference.create({
+            memberId: r.member_id,
+            type: r.type as NotificationType,
+            inApp: r.in_app === 1,
+            push: r.push === 1,
+          }),
+        )
     );
   }
 

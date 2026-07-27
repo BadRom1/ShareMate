@@ -2,7 +2,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { Member } from '../../../domain/member/member.js';
 import type { AuthService, AuthSession } from '../../../application/auth-service.js';
 import { memberDto } from '../dto.js';
-import { SESSION_COOKIE, isNativeClient, sessionToken } from '../session.js';
+import { SESSION_COOKIE, isNativeClient, sessionToken, setSessionCookie } from '../session.js';
 import { nullableText, object, params, text } from '../schema.js';
 import { limit } from '../rate-limit.js';
 import type { RateLimits } from '../rate-limit.js';
@@ -30,22 +30,12 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
   /** Limite anti force-brute des routes d'authentification publiques. */
   const AUTH_RATE_LIMIT = limit(rateLimits.auth);
 
-  function setSessionCookie(reply: FastifyReply, session: AuthSession): void {
-    reply.setCookie(SESSION_COOKIE, session.token, {
-      path: '/',
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: cookieSecure,
-      expires: session.expiresAt,
-    });
-  }
-
   /**
    * Établit la session : cookie (web) et, pour l'app native, le token dans le corps pour
    * qu'elle le stocke et le renvoie ensuite en `Authorization: Bearer`.
    */
   function authenticated(request: FastifyRequest, reply: FastifyReply, member: Member, session: AuthSession) {
-    setSessionCookie(reply, session);
+    setSessionCookie(reply, session.token, session.expiresAt, cookieSecure);
     const body: { member: ReturnType<typeof memberDto>; token?: string } = { member: memberDto(member) };
     if (isNativeClient(request)) {
       body.token = session.token;
@@ -55,9 +45,9 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
 
   app.get('/api/auth/me', { config: { public: true } }, async (request) => {
     const token = sessionToken(request);
-    const member = token ? await authService.authenticate(token) : null;
+    const session = token ? await authService.authenticate(token) : null;
     return {
-      member: member ? memberDto(member) : null,
+      member: session ? memberDto(session.member) : null,
       needsBootstrap: await authService.needsBootstrap(),
     };
   });

@@ -1,3 +1,5 @@
+import { DomainError } from '../shared/domain-error.js';
+import { NOTIFICATION_TYPES } from './notification-type.js';
 import type { NotificationType } from './notification-type.js';
 
 export interface NotificationPreferenceProps {
@@ -20,6 +22,11 @@ export class NotificationPreference {
   ) {}
 
   static create(props: NotificationPreferenceProps): NotificationPreference {
+    // Une préférence portant un type inconnu ne serait jamais relue (`getPreferences` parcourt
+    // NOTIFICATION_TYPES) : elle n'encombrerait la table que pour donner l'illusion d'un réglage.
+    if (!NOTIFICATION_TYPES.includes(props.type)) {
+      throw new DomainError(`Type de notification inconnu : ${props.type}`);
+    }
     return new NotificationPreference(props.memberId, props.type, props.inApp, props.push);
   }
 

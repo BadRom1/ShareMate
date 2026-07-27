@@ -48,7 +48,7 @@ import type {
   TokenGenerator,
   UsageRecordRepository,
 } from '../../application/ports.js';
-import { CLIENT_HEADER, sessionToken } from './session.js';
+import { CLIENT_HEADER, SESSION_COOKIE, sessionToken, setSessionCookie } from './session.js';
 import { AJV_OPTIONS, schemaErrorFormatter } from './schema.js';
 import { DEFAULT_RATE_LIMITS, RATE_WINDOW, tooManyRequests } from './rate-limit.js';
 import type { RateLimits } from './rate-limit.js';
@@ -186,7 +186,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.idGenerator,
     deps.clock,
   );
-  const memberService = new MemberService(deps.members, deps.equipments, deps.credentials, deps.idGenerator);
+  const memberService = new MemberService(deps.members, deps.equipments, deps.credentials);
   // Sans répertoire d'upload, il n'y a ni justificatif à servir ni fichier à purger.
   const receiptStorage = deps.uploadsDir ? new FileSystemReceiptStorage(deps.uploadsDir) : undefined;
   // Le journal des gestes sensibles part dans les logs du serveur : hors de portée des membres
@@ -257,11 +257,17 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       return;
     }
     const token = sessionToken(request);
-    const member = token ? await authService.authenticate(token) : null;
-    if (!member) {
+    const session = token ? await authService.authenticate(token) : null;
+    if (!session) {
       return reply.status(401).send({ error: 'Authentification requise.' });
     }
-    request.authMember = member;
+    // Prolongation glissante rendue au navigateur : sans cette repose, le cookie garderait
+    // l'échéance de la connexion et disparaîtrait pendant que la session serveur court encore.
+    // L'app native, elle, porte son jeton en Bearer et n'a pas de cookie à rafraîchir.
+    if (session.renewed && request.cookies[SESSION_COOKIE]) {
+      setSessionCookie(reply, token!, session.expiresAt, deps.cookieSecure ?? false);
+    }
+    request.authMember = session.member;
   });
 
   app.setErrorHandler((error, request, reply) => {

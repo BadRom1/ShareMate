@@ -30,6 +30,13 @@ export interface AuthResult {
   session: AuthSession;
 }
 
+/** Session reconnue par `authenticate` : `renewed` signale une échéance repoussée à rendre au client. */
+export interface AuthenticatedSession {
+  member: Member;
+  expiresAt: Date;
+  renewed: boolean;
+}
+
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 jours, expiration glissante
 const SESSION_RENEWAL_THRESHOLD_MS = SESSION_TTL_MS / 3; // en deçà, la session est repoussée
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 jours : un code circule hors bande (SMS, WhatsApp)
@@ -70,6 +77,7 @@ export class AuthService {
     }
     validatePassword(input.password);
     const member = Member.create({ id: this.idGenerator.next(), name: input.name, email: input.email ?? null });
+    await this.assertEmailAvailable(member);
     await this.members.save(member);
     // `needsBootstrap` ci-dessus n'est qu'un raccourci : entre sa lecture et l'écriture, une autre
     // requête peut avoir créé le premier compte. Seul `saveFirst` tranche, atomiquement. Le membre
@@ -95,6 +103,7 @@ export class AuthService {
       email: input.email ?? null,
       invitedById: requesterId,
     });
+    await this.assertEmailAvailable(member);
     await this.members.save(member);
     const inviteCode = this.tokens.inviteCode();
     await this.credentials.save(
@@ -178,8 +187,8 @@ export class AuthService {
     throw new UnauthorizedError('Identifiants invalides.');
   }
 
-  /** Membre de la session portée par ce jeton, avec prolongation glissante ; null sinon. */
-  async authenticate(token: string): Promise<Member | null> {
+  /** Session portée par ce jeton, avec prolongation glissante ; null si elle n'est plus valable. */
+  async authenticate(token: string): Promise<AuthenticatedSession | null> {
     const tokenHash = this.tokens.hash(token);
     const session = await this.sessions.findByTokenHash(tokenHash);
     const now = this.clock.now();
@@ -194,9 +203,11 @@ export class AuthService {
     // SQLite — sur un volume réseau, c'est le point de contention de toute l'application. Repousser
     // l'échéance dans le dernier tiers du TTL suffit : un usage même épisodique la maintient ouverte.
     if (session.expiresAt.getTime() - now.getTime() < SESSION_RENEWAL_THRESHOLD_MS) {
-      await this.sessions.save({ ...session, expiresAt: new Date(now.getTime() + SESSION_TTL_MS) });
+      const expiresAt = new Date(now.getTime() + SESSION_TTL_MS);
+      await this.sessions.save({ ...session, expiresAt });
+      return { member, expiresAt, renewed: true };
     }
-    return member;
+    return { member, expiresAt: session.expiresAt, renewed: false };
   }
 
   async logout(token: string): Promise<void> {
@@ -217,6 +228,23 @@ export class AuthService {
     await this.credentials.save(credential.withPassword(await this.hasher.hash(newPassword)));
     await this.sessions.deleteByMemberId(memberId);
     return this.openSession(memberId);
+  }
+
+  /**
+   * L'email est un identifiant de connexion : partagé par deux membres, `login` retiendrait
+   * arbitrairement le premier des deux dont le mot de passe correspond. La garde reste applicative
+   * — le schéma ne porte pas d'index unique, la comparaison devant suivre `String.toLowerCase`
+   * (voir `minuscule` dans database.ts) et non le repli ASCII de SQLite.
+   */
+  private async assertEmailAvailable(member: Member): Promise<void> {
+    if (member.email === null) {
+      return;
+    }
+    // Le port répond aussi sur le nom : seul un email réellement identique compte comme collision.
+    const cherché = member.email.toLowerCase();
+    if ((await this.members.findByNameOrEmail(member.email)).some((autre) => autre.email?.toLowerCase() === cherché)) {
+      throw new ConflictError('Cette adresse email est déjà utilisée par un autre membre.');
+    }
   }
 
   private inviteDeadline(): Date {

@@ -1,12 +1,6 @@
-import { Member } from '../domain/member/member.js';
-import { NotFoundError } from '../domain/shared/domain-error.js';
+import type { Member } from '../domain/member/member.js';
 import { circleMemberIds } from './equipment-access.js';
-import type { CredentialRepository, EquipmentRepository, IdGenerator, MemberRepository } from './ports.js';
-
-export interface CreateMemberInput {
-  name: string;
-  email?: string | null;
-}
+import type { CredentialRepository, EquipmentRepository, MemberRepository } from './ports.js';
 
 /** Membre de l'annuaire, vu par un demandeur donné. */
 export interface DirectoryEntry {
@@ -20,22 +14,7 @@ export class MemberService {
     private readonly members: MemberRepository,
     private readonly equipments: EquipmentRepository,
     private readonly credentials: CredentialRepository,
-    private readonly idGenerator: IdGenerator,
   ) {}
-
-  async createMember(input: CreateMemberInput): Promise<Member> {
-    const member = Member.create({ id: this.idGenerator.next(), name: input.name, email: input.email ?? null });
-    await this.members.save(member);
-    return member;
-  }
-
-  async getMember(id: string): Promise<Member> {
-    const member = await this.members.findById(id);
-    if (!member) {
-      throw new NotFoundError(`Membre introuvable : ${id}`);
-    }
-    return member;
-  }
 
   /**
    * Annuaire cadré sur le périmètre du demandeur : lui-même, les membres des cercles qu'il partage,

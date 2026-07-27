@@ -7,6 +7,18 @@ export interface MemberProps {
   invitedById?: string | null;
 }
 
+/**
+ * Forme minimale d'une adresse : une part locale, une arobase, un domaine pointé, aucun espace.
+ * Volontairement grossier — l'email sert d'identifiant de connexion, pas de canal d'envoi : ce qui
+ * compte est qu'il soit comparable sans ambiguïté, pas qu'il soit délivrable.
+ */
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Un email vide, mal formé ou dupliqué ne peut pas servir d'identifiant de connexion. */
+export function estEmailValide(email: string): boolean {
+  return EMAIL.test(email.trim());
+}
+
 /** Personne susceptible de partager des équipements. */
 export class Member {
   private constructor(
@@ -26,6 +38,11 @@ export class Member {
     if (name.length === 0) {
       throw new DomainError('Le nom du membre est requis.');
     }
-    return new Member(props.id, name, props.email ?? null, props.invitedById ?? null);
+    // Champ facultatif laissé vide par un formulaire : absence d'email, pas email invalide.
+    const email = props.email?.trim() ? props.email.trim() : null;
+    if (email !== null && !estEmailValide(email)) {
+      throw new DomainError(`Adresse email invalide : ${email}`);
+    }
+    return new Member(props.id, name, email, props.invitedById ?? null);
   }
 }

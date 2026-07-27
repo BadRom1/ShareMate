@@ -1,4 +1,4 @@
-import type { FastifyRequest } from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { Member } from '../../domain/member/member.js';
 
 declare module 'fastify' {
@@ -30,6 +30,21 @@ export function sessionToken(request: FastifyRequest): string | undefined {
     if (token) return token;
   }
   return undefined;
+}
+
+/**
+ * Pose le cookie de session à l'échéance donnée. Repartagé entre l'ouverture de session et sa
+ * prolongation glissante : sans repose, le cookie garde l'échéance initiale et le navigateur
+ * l'oublie alors que la session serveur, elle, court toujours.
+ */
+export function setSessionCookie(reply: FastifyReply, token: string, expiresAt: Date, secure: boolean): void {
+  reply.setCookie(SESSION_COOKIE, token, {
+    path: '/',
+    httpOnly: true,
+    sameSite: 'lax',
+    secure,
+    expires: expiresAt,
+  });
 }
 
 /** L'app native s'annonce pour recevoir le token de session (le web reste sur cookie httpOnly). */

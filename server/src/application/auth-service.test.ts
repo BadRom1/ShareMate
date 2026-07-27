@@ -50,7 +50,7 @@ describe('AuthService — bootstrap', () => {
     expect(await service.needsBootstrap()).toBe(true);
     const { member, session } = await service.bootstrap({ name: 'Romain', password: 'motdepasse' });
     expect(await service.needsBootstrap()).toBe(false);
-    expect((await service.authenticate(session.token))?.id).toBe(member.id);
+    expect((await service.authenticate(session.token))?.member.id).toBe(member.id);
   });
 
   it('refuse un second bootstrap', async () => {
@@ -77,6 +77,17 @@ describe('AuthService — bootstrap', () => {
     expect(connexions.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
   });
 
+  it('refuse un email déjà porté par un autre membre', async () => {
+    await service.bootstrap({ name: 'Romain', email: 'romain@example.org', password: 'motdepasse' });
+    // L'email est un identifiant de connexion : deux titulaires, et `login` en choisit un au hasard.
+    await expect(service.createMemberWithInvite({ name: 'Autre', email: 'ROMAIN@example.org' }, 'm1')).rejects.toThrow(
+      ConflictError,
+    );
+    await expect(
+      service.createMemberWithInvite({ name: 'Autre', email: 'autre@example.org' }, 'm1'),
+    ).resolves.toBeDefined();
+  });
+
   it('refuse un mot de passe trop court', async () => {
     await expect(service.bootstrap({ name: 'Romain', password: 'court' })).rejects.toThrow(DomainError);
   });
@@ -88,7 +99,7 @@ describe('AuthService — invitations', () => {
     expect((await service.inviteInfo(inviteCode)).id).toBe(member.id);
 
     const { session } = await service.redeemInvite(inviteCode, 'secretbruno');
-    expect((await service.authenticate(session.token))?.id).toBe(member.id);
+    expect((await service.authenticate(session.token))?.member.id).toBe(member.id);
 
     // Le code est consommé
     await expect(service.inviteInfo(inviteCode)).rejects.toThrow(NotFoundError);
@@ -265,7 +276,7 @@ describe('AuthService — login et sessions', () => {
 
     expect(await service.authenticate(ancienne.token)).toBeNull();
     expect(await service.authenticate(autreAppareil.token)).toBeNull();
-    expect((await service.authenticate(nouvelle.token))?.id).toBe(member.id);
+    expect((await service.authenticate(nouvelle.token))?.member.id).toBe(member.id);
   });
 
   it('consommer une invitation révoque les sessions antérieures du compte', async () => {
@@ -280,6 +291,6 @@ describe('AuthService — login et sessions', () => {
     const { session } = await service.redeemInvite(inviteCode, 'secretchloe');
 
     expect(await service.authenticate('vieux-jeton')).toBeNull();
-    expect((await service.authenticate(session.token))?.id).toBe(member.id);
+    expect((await service.authenticate(session.token))?.member.id).toBe(member.id);
   });
 });

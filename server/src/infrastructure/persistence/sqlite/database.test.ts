@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { openDatabase, SCHEMA_VERSION } from './database.js';
+import { SqliteMemberRepository } from './repositories.js';
 
 let répertoire: string;
 let fichier: string;
@@ -84,6 +85,51 @@ describe('Migration du schéma', () => {
       invite_code: string | null;
     };
     expect(bruno.invite_code).toBe('code-bruno');
+    db.close();
+  });
+});
+
+describe('Migration des emails de membres', () => {
+  /** Base portant les emails que les versions antérieures acceptaient sans les valider. */
+  function baseAvecEmailsLibres(): void {
+    const db = openDatabase(fichier);
+    db.exec(`
+      INSERT INTO members (id, name, email) VALUES
+        ('m1', 'Alice', ' alice@example.org '),
+        ('m2', 'Bruno', 'pas une adresse'),
+        ('m3', 'Chloé', 'ALICE@example.org'),
+        ('m4', 'Denis', ''),
+        ('m5', 'Emma', 'emma@example.org');
+    `);
+    db.pragma('user_version = 5'); // avant la migration des emails
+    db.close();
+  }
+
+  function emails(): Record<string, string | null> {
+    const db = new Database(fichier);
+    const rows = db.prepare('SELECT id, email FROM members').all() as { id: string; email: string | null }[];
+    db.close();
+    return Object.fromEntries(rows.map((r) => [r.id, r.email]));
+  }
+
+  it('rogne, oublie les adresses mal formées et dédoublonne, sans toucher aux membres', () => {
+    baseAvecEmailsLibres();
+    openDatabase(fichier).close();
+
+    expect(emails()).toEqual({
+      m1: 'alice@example.org', // rogné
+      m2: null, // mal formé : Member.create la refuserait, le membre serait illisible
+      m3: null, // doublon d'Alice à la casse près : le premier venu garde l'adresse
+      m4: null, // champ laissé vide
+      m5: 'emma@example.org',
+    });
+  });
+
+  it('laisse tous les membres chargeables par le domaine après migration', async () => {
+    baseAvecEmailsLibres();
+    const db = openDatabase(fichier);
+    // C'est l'enjeu : une seule adresse survivante mal formée rendrait `findAll` impossible.
+    expect((await new SqliteMemberRepository(db).findAll()).map((m) => m.name)).toHaveLength(5);
     db.close();
   });
 });

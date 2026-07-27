@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
+import { estEmailValide } from '../../../domain/member/member.js';
 
 export type SqliteDb = Database.Database;
 
@@ -258,6 +259,34 @@ const MIGRATIONS: Migration[] = [
     description: 'index equipment_members(member_id)',
     apply(db) {
       db.exec(`CREATE INDEX IF NOT EXISTS idx_equipment_members_member ON equipment_members(member_id);`);
+    },
+  },
+  {
+    // `Member.create` valide désormais l'email, qui sert d'identifiant de connexion : sans cette
+    // étape, une rangée antérieure mal formée rendrait son membre impossible à charger — et donc
+    // l'application inutilisable pour tout son cercle. Le tri se fait ici, une fois, à froid.
+    description: 'emails de membres normalisés, dédoublonnés',
+    apply(db) {
+      const rows = db.prepare('SELECT id, email FROM members WHERE email IS NOT NULL').all() as {
+        id: string;
+        email: string;
+      }[];
+      const oublier = db.prepare('UPDATE members SET email = NULL WHERE id = ?');
+      const normaliser = db.prepare('UPDATE members SET email = ? WHERE id = ?');
+      const vus = new Set<string>();
+      for (const row of rows) {
+        const email = row.email.trim();
+        // Doublon : le premier venu garde l'adresse, les suivants se connectent par leur nom.
+        // Les départager autrement supposerait de savoir lequel est le titulaire — on ne le sait pas.
+        if (!estEmailValide(email) || vus.has(email.toLowerCase())) {
+          oublier.run(row.id);
+          continue;
+        }
+        vus.add(email.toLowerCase());
+        if (email !== row.email) {
+          normaliser.run(email, row.id);
+        }
+      }
     },
   },
 ];
