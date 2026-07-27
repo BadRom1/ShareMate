@@ -70,8 +70,12 @@ const app = await buildApp({
   idGenerator: new UuidGenerator(),
   clock: new SystemClock(),
   cookieSecure: isProduction,
-  // Le token de session ne doit jamais apparaître dans les logs.
-  logger: { level: isProduction ? 'info' : 'debug', redact: ['req.headers.cookie', 'req.headers["set-cookie"]'] },
+  // Le token de session ne doit jamais apparaître dans les logs : cookie (web) et
+  // `Authorization: Bearer` (app native) portent tous deux le jeton.
+  logger: {
+    level: isProduction ? 'info' : 'debug',
+    redact: ['req.headers.cookie', 'req.headers["set-cookie"]', 'req.headers.authorization'],
+  },
   trustProxy: isProduction,
   uploadsDir,
   webDistDir,
