@@ -41,9 +41,12 @@ export async function equipmentForMember(
 /**
  * Équipements dont le membre partage le cercle. Sert à cadrer les vues globales
  * (calendrier, alertes d'entretien, liste des équipements) sur son périmètre.
+ *
+ * Le cadrage est délégué au port : c'est la persistance qui sait le faire sans relire tout
+ * l'inventaire de l'instance. La couche application garde la règle, pas le balayage.
  */
 export async function equipmentsForMember(equipments: EquipmentRepository, memberId: string): Promise<Equipment[]> {
-  return (await equipments.findAll()).filter((e) => e.canBeUsedBy(memberId));
+  return equipments.findByMemberId(memberId);
 }
 
 /**

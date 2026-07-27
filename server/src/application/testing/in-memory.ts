@@ -49,6 +49,12 @@ export class InMemoryMemberRepository implements MemberRepository {
   async findAll() {
     return [...this.items.values()];
   }
+  async findByNameOrEmail(identifier: string) {
+    const recherché = identifier.trim().toLowerCase();
+    return [...this.items.values()].filter(
+      (m) => m.name.toLowerCase() === recherché || m.email?.toLowerCase() === recherché,
+    );
+  }
   async save(member: Member) {
     this.items.set(member.id, member);
   }
@@ -59,8 +65,8 @@ export class InMemoryEquipmentRepository implements EquipmentRepository {
   async findById(id: string) {
     return this.items.get(id) ?? null;
   }
-  async findAll() {
-    return [...this.items.values()];
+  async findByMemberId(memberId: string) {
+    return [...this.items.values()].filter((e) => e.canBeUsedBy(memberId));
   }
   async save(equipment: Equipment) {
     this.items.set(equipment.id, equipment);
@@ -78,8 +84,9 @@ export class InMemoryReservationRepository implements ReservationRepository {
   async findByEquipmentId(equipmentId: string) {
     return [...this.items.values()].filter((r) => r.equipmentId === equipmentId);
   }
-  async findAll() {
-    return [...this.items.values()];
+  async findByEquipmentIds(equipmentIds: readonly string[]) {
+    const cherchés = new Set(equipmentIds);
+    return [...this.items.values()].filter((r) => cherchés.has(r.equipmentId));
   }
   async save(reservation: Reservation) {
     this.items.set(reservation.id, reservation);
@@ -93,6 +100,10 @@ export class InMemoryUsageRecordRepository implements UsageRecordRepository {
   private items = new Map<string, UsageRecord>();
   async findByEquipmentId(equipmentId: string) {
     return [...this.items.values()].filter((u) => u.equipmentId === equipmentId);
+  }
+  async findByEquipmentIds(equipmentIds: readonly string[]) {
+    const cherchés = new Set(equipmentIds);
+    return [...this.items.values()].filter((u) => cherchés.has(u.equipmentId));
   }
   async findByMemberId(memberId: string) {
     return [...this.items.values()].filter((u) => u.memberId === memberId);

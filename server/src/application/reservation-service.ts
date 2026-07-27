@@ -148,7 +148,7 @@ export class ReservationService {
   /** Vue calendrier partagée, cadrée sur les équipements du cercle du demandeur. */
   async calendar(requesterId: string): Promise<Reservation[]> {
     const accessible = await accessibleEquipmentIds(this.equipments, requesterId);
-    return (await this.reservations.findAll()).filter((r) => accessible.has(r.equipmentId));
+    return this.reservations.findByEquipmentIds([...accessible]);
   }
 
   /**

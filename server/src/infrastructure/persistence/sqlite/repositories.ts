@@ -39,6 +39,11 @@ import type {
   WebPushSubscription,
 } from '../../../application/ports.js';
 
+/** `IN (?, ?, …)` : better-sqlite3 ne lie pas un tableau à un seul paramètre. */
+function jokers(nombre: number): string {
+  return new Array(nombre).fill('?').join(', ');
+}
+
 interface MemberRow {
   id: string;
   name: string;
@@ -60,6 +65,16 @@ export class SqliteMemberRepository implements MemberRepository {
 
   async findAll(): Promise<Member[]> {
     const rows = this.db.prepare('SELECT * FROM members ORDER BY name').all() as MemberRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
+  async findByNameOrEmail(identifier: string): Promise<Member[]> {
+    // `minuscule` (déclarée à l'ouverture de la base) et non `lower` : cette dernière ne replie
+    // que l'ASCII et écarterait « JOSÉ » de « josé ».
+    const recherché = identifier.trim().toLowerCase();
+    const rows = this.db
+      .prepare('SELECT * FROM members WHERE minuscule(name) = ? OR minuscule(email) = ? ORDER BY name')
+      .all(recherché, recherché) as MemberRow[];
     return rows.map((r) => this.toEntity(r));
   }
 
@@ -182,30 +197,58 @@ interface EquipmentRow {
 export class SqliteEquipmentRepository implements EquipmentRepository {
   constructor(private readonly db: SqliteDb) {}
 
-  private toEntity(row: EquipmentRow): Equipment {
-    const circle = this.db
-      .prepare('SELECT member_id FROM equipment_members WHERE equipment_id = ? ORDER BY position')
-      .all(row.id) as { member_id: string }[];
-    return Equipment.create({
-      id: row.id,
-      name: row.name,
-      category: row.category,
-      acquisitionDate: new Date(row.acquisition_date),
-      purchaseValue: Money.fromCents(row.purchase_value_cents),
-      meterUnit: row.meter_unit as MeterUnit,
-      memberIds: circle.map((a) => a.member_id),
-      maintenanceThreshold: row.maintenance_threshold,
-    });
+  /**
+   * Cercles de plusieurs équipements en une interrogation : les charger un par un rendait le coût
+   * d'une liste proportionnel au nombre d'équipements qu'elle contient.
+   */
+  private cercles(ids: string[]): Map<string, string[]> {
+    const cercles = new Map<string, string[]>(ids.map((id) => [id, []]));
+    if (ids.length === 0) {
+      return cercles;
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT equipment_id, member_id FROM equipment_members
+         WHERE equipment_id IN (${jokers(ids.length)}) ORDER BY equipment_id, position`,
+      )
+      .all(...ids) as { equipment_id: string; member_id: string }[];
+    for (const row of rows) {
+      cercles.get(row.equipment_id)?.push(row.member_id);
+    }
+    return cercles;
+  }
+
+  private toEntities(rows: EquipmentRow[]): Equipment[] {
+    const cercles = this.cercles(rows.map((r) => r.id));
+    return rows.map((row) =>
+      Equipment.create({
+        id: row.id,
+        name: row.name,
+        category: row.category,
+        acquisitionDate: new Date(row.acquisition_date),
+        purchaseValue: Money.fromCents(row.purchase_value_cents),
+        meterUnit: row.meter_unit as MeterUnit,
+        memberIds: cercles.get(row.id) ?? [],
+        maintenanceThreshold: row.maintenance_threshold,
+      }),
+    );
   }
 
   async findById(id: string): Promise<Equipment | null> {
     const row = this.db.prepare('SELECT * FROM equipments WHERE id = ?').get(id) as EquipmentRow | undefined;
-    return row ? this.toEntity(row) : null;
+    return row ? (this.toEntities([row])[0] ?? null) : null;
   }
 
-  async findAll(): Promise<Equipment[]> {
-    const rows = this.db.prepare('SELECT * FROM equipments ORDER BY name').all() as EquipmentRow[];
-    return rows.map((r) => this.toEntity(r));
+  async findByMemberId(memberId: string): Promise<Equipment[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT e.* FROM equipments e
+           JOIN equipment_members em ON em.equipment_id = e.id
+          WHERE em.member_id = ?
+          ORDER BY e.name`,
+      )
+      .all(memberId) as EquipmentRow[];
+    return this.toEntities(rows);
   }
 
   async save(equipment: Equipment): Promise<void> {
@@ -280,8 +323,13 @@ export class SqliteReservationRepository implements ReservationRepository {
     return rows.map((r) => this.toEntity(r));
   }
 
-  async findAll(): Promise<Reservation[]> {
-    const rows = this.db.prepare('SELECT * FROM reservations ORDER BY start_at').all() as ReservationRow[];
+  async findByEquipmentIds(equipmentIds: readonly string[]): Promise<Reservation[]> {
+    if (equipmentIds.length === 0) {
+      return [];
+    }
+    const rows = this.db
+      .prepare(`SELECT * FROM reservations WHERE equipment_id IN (${jokers(equipmentIds.length)}) ORDER BY start_at`)
+      .all(...equipmentIds) as ReservationRow[];
     return rows.map((r) => this.toEntity(r));
   }
 
@@ -341,6 +389,18 @@ export class SqliteUsageRecordRepository implements UsageRecordRepository {
     const rows = this.db
       .prepare('SELECT * FROM usage_records WHERE equipment_id = ? ORDER BY recorded_at')
       .all(equipmentId) as UsageRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
+  async findByEquipmentIds(equipmentIds: readonly string[]): Promise<UsageRecord[]> {
+    if (equipmentIds.length === 0) {
+      return [];
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM usage_records WHERE equipment_id IN (${jokers(equipmentIds.length)}) ORDER BY recorded_at`,
+      )
+      .all(...equipmentIds) as UsageRow[];
     return rows.map((r) => this.toEntity(r));
   }
 

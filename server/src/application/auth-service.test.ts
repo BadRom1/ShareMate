@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AuthService } from './auth-service.js';
 import { makeFixture } from './testing/fixture.js';
+import { FakePasswordHasher } from './testing/in-memory.js';
 import {
   ConflictError,
   DomainError,
@@ -9,17 +10,35 @@ import {
   UnauthorizedError,
 } from '../domain/shared/domain-error.js';
 
+/**
+ * Compte les dérivations de clé. `hash` et `verify` coûtent la même chose en scrypt : le nombre
+ * de dérivations est donc une mesure fidèle du temps de réponse observable de l'extérieur.
+ */
+class HasherCompteur extends FakePasswordHasher {
+  dérivations = 0;
+  override async hash(password: string) {
+    this.dérivations += 1;
+    return super.hash(password);
+  }
+  override async verify(password: string, hash: string) {
+    this.dérivations += 1;
+    return super.verify(password, hash);
+  }
+}
+
 let service: AuthService;
+let hasher: HasherCompteur;
 let fixture: Awaited<ReturnType<typeof makeFixture>>;
 
 beforeEach(async () => {
   fixture = await makeFixture();
+  hasher = new HasherCompteur();
   service = new AuthService(
     fixture.members,
     fixture.credentials,
     fixture.sessions,
     fixture.equipments,
-    fixture.hasher,
+    hasher,
     fixture.tokens,
     fixture.idGenerator,
     fixture.clock,
@@ -152,6 +171,24 @@ describe('AuthService — login et sessions', () => {
   it('un membre sans mot de passe (invitation en attente) ne peut pas se connecter', async () => {
     await service.createMemberWithInvite({ name: 'Chloé' }, 'm1');
     await expect(service.login('Chloé', 'nimporte')).rejects.toThrow(UnauthorizedError);
+  });
+
+  it('un échec coûte une dérivation de clé, que l’identifiant existe ou non', async () => {
+    // Sans ce leurre, un refus instantané signalerait « ce compte n'existe pas » quel que soit
+    // le message renvoyé : le temps de réponse suffirait à énumérer les comptes.
+    hasher.dérivations = 0;
+    await expect(service.login('Bruno', 'mauvais')).rejects.toThrow(UnauthorizedError);
+    expect(hasher.dérivations).toBe(1);
+
+    hasher.dérivations = 0;
+    await expect(service.login('Personne', 'mauvais')).rejects.toThrow(UnauthorizedError);
+    expect(hasher.dérivations).toBe(1);
+
+    // Invitation en attente : le compte existe mais n'a pas de hachage à comparer.
+    hasher.dérivations = 0;
+    await service.createMemberWithInvite({ name: 'Chloé' }, 'm1');
+    await expect(service.login('Chloé', 'mauvais')).rejects.toThrow(UnauthorizedError);
+    expect(hasher.dérivations).toBe(1);
   });
 
   it('logout invalide la session', async () => {

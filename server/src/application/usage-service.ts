@@ -103,11 +103,10 @@ export class UsageService {
     const accessible = await accessibleEquipmentIds(this.equipments, requesterId);
     const records = (await this.usageRecords.findByMemberId(memberId)).filter((r) => accessible.has(r.equipmentId));
     // La durée dépend du relevé précédent sur l'équipement, quel qu'en soit l'auteur :
-    // on recalcule donc sur l'historique complet de chaque équipement concerné.
+    // on recalcule donc sur l'historique complet des équipements concernés, chargé d'un seul coup.
     const durations = new Map<string, number | null>();
-    for (const equipmentId of new Set(records.map((r) => r.equipmentId))) {
-      const all = await this.usageRecords.findByEquipmentId(equipmentId);
-      for (const [id, duration] of computeDurations(all)) {
+    for (const historique of (await this.historiques([...new Set(records.map((r) => r.equipmentId))])).values()) {
+      for (const [id, duration] of computeDurations(historique)) {
         durations.set(id, duration);
       }
     }
@@ -125,9 +124,16 @@ export class UsageService {
   /** Statuts en alerte, pour les seuls équipements du cercle du demandeur. */
   async alerts(requesterId: string): Promise<MaintenanceStatus[]> {
     const equipments = await equipmentsForMember(this.equipments, requesterId);
-    const statuses = await Promise.all(
-      equipments.map(async (e) => computeMaintenanceStatus(e, await this.usageRecords.findByEquipmentId(e.id))),
-    );
-    return statuses.filter((s) => s.alert);
+    const historiques = await this.historiques(equipments.map((e) => e.id));
+    return equipments.map((e) => computeMaintenanceStatus(e, historiques.get(e.id) ?? [])).filter((s) => s.alert);
+  }
+
+  /** Relevés de plusieurs équipements, indexés par équipement, en une seule interrogation. */
+  private async historiques(equipmentIds: string[]): Promise<Map<string, UsageRecord[]>> {
+    const historiques = new Map<string, UsageRecord[]>(equipmentIds.map((id) => [id, []]));
+    for (const record of await this.usageRecords.findByEquipmentIds(equipmentIds)) {
+      historiques.get(record.equipmentId)?.push(record);
+    }
+    return historiques;
   }
 }

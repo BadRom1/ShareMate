@@ -64,6 +64,20 @@ describe('SQLite — membres', () => {
     expect((await members.findAll()).map((m) => m.name)).toEqual(['Alice', 'Bruno']);
   });
 
+  it('retrouve par nom ou email, insensible à la casse, accents compris', async () => {
+    const { members } = await seedBase();
+    await members.save(Member.create({ id: 'm3', name: 'Chloé', email: 'Chloe@Example.FR' }));
+
+    expect((await members.findByNameOrEmail('bruno')).map((m) => m.id)).toEqual(['m2']);
+    expect((await members.findByNameOrEmail('  B@EX.FR ')).map((m) => m.id)).toEqual(['m2']);
+    // `lower()` de SQLite laisserait « CHLOÉ » distinct de « chloé » : la casse Unicode compte.
+    expect((await members.findByNameOrEmail('CHLOÉ')).map((m) => m.id)).toEqual(['m3']);
+    expect((await members.findByNameOrEmail('chloe@example.fr')).map((m) => m.id)).toEqual(['m3']);
+    expect(await members.findByNameOrEmail('personne')).toEqual([]);
+    // Un membre sans email ne doit pas être ramené par une recherche à vide.
+    expect(await members.findByNameOrEmail('')).toEqual([]);
+  });
+
   it('conserve l’invitant, qui cadre l’annuaire avant tout cercle commun', async () => {
     const { members } = await seedBase();
     await members.save(Member.create({ id: 'm3', name: 'Chloé', invitedById: 'm1' }));
@@ -177,11 +191,31 @@ describe('SQLite — équipements', () => {
     expect((await equipments.findById('e1'))?.memberIds).toEqual(['m1', 'm2', 'm3']);
   });
 
-  it('liste tout et supprime', async () => {
-    const { equipments } = await seedBase();
-    expect(await equipments.findAll()).toHaveLength(1);
+  it('liste les équipements du cercle d’un membre, et eux seuls', async () => {
+    const { members, equipments } = await seedBase();
+    await members.save(Member.create({ id: 'm3', name: 'Chloé' }));
+    await equipments.save(
+      Equipment.create({
+        id: 'e2',
+        name: 'Broyeur',
+        category: 'Jardin',
+        acquisitionDate: new Date('2025-02-01T00:00:00Z'),
+        purchaseValue: Money.fromEuros(800),
+        meterUnit: 'HOURS',
+        memberIds: ['m3'],
+        maintenanceThreshold: null,
+      }),
+    );
+
+    const pourM1 = await equipments.findByMemberId('m1');
+    expect(pourM1.map((e) => e.id)).toEqual(['e1']);
+    // Le cercle complet remonte avec chaque équipement, dans l'ordre des positions.
+    expect(pourM1[0]?.memberIds).toEqual(['m1', 'm2']);
+    expect((await equipments.findByMemberId('m3')).map((e) => e.id)).toEqual(['e2']);
+    expect(await equipments.findByMemberId('inconnu')).toEqual([]);
+
     await equipments.delete('e1');
-    expect(await equipments.findAll()).toHaveLength(0);
+    expect(await equipments.findByMemberId('m1')).toHaveLength(0);
   });
 });
 
@@ -202,7 +236,9 @@ describe('SQLite — réservations', () => {
     expect(r?.range.start.toISOString()).toBe('2026-07-10T08:00:00.000Z');
     expect(r?.notes).toBe('tranchée');
     expect(await repo.findByEquipmentId('e1')).toHaveLength(1);
-    expect(await repo.findAll()).toHaveLength(1);
+    expect(await repo.findByEquipmentIds(['e1', 'e2'])).toHaveLength(1);
+    // Aucun équipement accessible : pas de requête à faire, et surtout pas un « tout lire ».
+    expect(await repo.findByEquipmentIds([])).toEqual([]);
     await repo.delete('r1');
     expect(await repo.findById('r1')).toBeNull();
   });
@@ -228,6 +264,8 @@ describe("SQLite — relevés d'usage", () => {
     expect(byEq[0]?.meterReading).toBe(120.5);
     expect(byEq[0]?.isMaintenance).toBe(true);
     expect(await repo.findByMemberId('m1')).toHaveLength(1);
+    expect(await repo.findByEquipmentIds(['e1', 'e2'])).toHaveLength(1);
+    expect(await repo.findByEquipmentIds([])).toEqual([]);
   });
 });
 

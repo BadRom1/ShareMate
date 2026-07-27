@@ -19,12 +19,23 @@ import type { NotificationType } from '../domain/notification/notification-type.
 export interface MemberRepository {
   findById(id: string): Promise<Member | null>;
   findAll(): Promise<Member[]>;
+  /**
+   * Membres dont le nom ou l'email vaut `identifier`, à la casse près (et aux espaces de bord).
+   * Le port doit répondre sans charger l'annuaire : une tentative de connexion ne se paie pas
+   * la table entière. Renvoie une liste — rien n'impose l'unicité des noms.
+   */
+  findByNameOrEmail(identifier: string): Promise<Member[]>;
   save(member: Member): Promise<void>;
 }
 
 export interface EquipmentRepository {
   findById(id: string): Promise<Equipment | null>;
-  findAll(): Promise<Equipment[]>;
+  /**
+   * Équipements dont `memberId` fait partie du cercle. C'est le seul point d'entrée des vues
+   * globales : le filtre appartient au port pour que le coût d'une page suive la taille du cercle
+   * du demandeur, et non celle de l'instance.
+   */
+  findByMemberId(memberId: string): Promise<Equipment[]>;
   save(equipment: Equipment): Promise<void>;
   delete(id: string): Promise<void>;
 }
@@ -32,13 +43,16 @@ export interface EquipmentRepository {
 export interface ReservationRepository {
   findById(id: string): Promise<Reservation | null>;
   findByEquipmentId(equipmentId: string): Promise<Reservation[]>;
-  findAll(): Promise<Reservation[]>;
+  /** Réservations de plusieurs équipements, en une seule interrogation (vue calendrier). */
+  findByEquipmentIds(equipmentIds: readonly string[]): Promise<Reservation[]>;
   save(reservation: Reservation): Promise<void>;
   delete(id: string): Promise<void>;
 }
 
 export interface UsageRecordRepository {
   findByEquipmentId(equipmentId: string): Promise<UsageRecord[]>;
+  /** Relevés de plusieurs équipements, en une seule interrogation (durées, alertes d'entretien). */
+  findByEquipmentIds(equipmentIds: readonly string[]): Promise<UsageRecord[]>;
   findByMemberId(memberId: string): Promise<UsageRecord[]>;
   save(record: UsageRecord): Promise<void>;
 }

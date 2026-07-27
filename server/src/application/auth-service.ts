@@ -151,15 +151,23 @@ export class AuthService {
 
   /** Connexion par nom ou email (insensible à la casse). */
   async login(identifier: string, password: string): Promise<AuthResult> {
-    const needle = identifier.trim().toLowerCase();
-    const candidates = (await this.members.findAll()).filter(
-      (m) => m.name.toLowerCase() === needle || m.email?.toLowerCase() === needle,
-    );
+    const candidates = await this.members.findByNameOrEmail(identifier);
+    let dérivationFaite = false;
     for (const member of candidates) {
       const credential = await this.credentials.findByMemberId(member.id);
-      if (credential?.passwordHash && (await this.hasher.verify(password, credential.passwordHash))) {
+      if (!credential?.passwordHash) {
+        continue;
+      }
+      dérivationFaite = true;
+      if (await this.hasher.verify(password, credential.passwordHash)) {
         return { member, session: await this.openSession(member.id) };
       }
+    }
+    // Sans candidat vérifiable (identifiant inconnu, ou invitation jamais consommée), le refus
+    // reviendrait sans aucune dérivation de clé : le temps de réponse trahirait alors l'existence
+    // du compte, malgré le message générique. Un hachage leurre, de coût identique, referme ce canal.
+    if (!dérivationFaite) {
+      await this.hasher.hash(password);
     }
     throw new UnauthorizedError('Identifiants invalides.');
   }
