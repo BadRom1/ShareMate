@@ -1,14 +1,11 @@
 import Fastify from 'fastify';
-import type { FastifyInstance, FastifyReply, FastifyRequest, FastifyServerOptions } from 'fastify';
+import type { FastifyInstance, FastifyServerOptions } from 'fastify';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
-import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
-import path from 'node:path';
 import {
   ConflictError,
   DomainError,
@@ -17,22 +14,15 @@ import {
   UnauthorizedError,
 } from '../../domain/shared/domain-error.js';
 import type { Member } from '../../domain/member/member.js';
-import type { ExpenseCategory } from '../../domain/expense/expense.js';
-import type { ReservationStatus } from '../../domain/reservation/reservation.js';
-import type { RecurrenceFrequency } from '../../domain/reservation/recurrence.js';
 import { MemberService } from '../../application/member-service.js';
 import { AuthService } from '../../application/auth-service.js';
-import type { AuthSession } from '../../application/auth-service.js';
 import { EquipmentService } from '../../application/equipment-service.js';
 import { ReservationService } from '../../application/reservation-service.js';
 import { UsageService } from '../../application/usage-service.js';
 import { ExpenseService } from '../../application/expense-service.js';
-import type { SplitInput } from '../../application/expense-service.js';
 import { DiscussionService } from '../../application/discussion-service.js';
 import { ChecklistService } from '../../application/checklist-service.js';
 import { NotificationService } from '../../application/notification-service.js';
-import type { PreferenceUpdate } from '../../application/notification-service.js';
-import type { NotificationType } from '../../domain/notification/notification-type.js';
 import type {
   ChecklistItemRepository,
   ChecklistRepository,
@@ -56,24 +46,17 @@ import type {
   TokenGenerator,
   UsageRecordRepository,
 } from '../../application/ports.js';
-import {
-  checklistDto,
-  checklistItemDto,
-  checklistSummaryDto,
-  directoryMemberDto,
-  equipmentDto,
-  expenseDto,
-  memberDto,
-  messageDto,
-  threadDto,
-  threadSummaryDto,
-  notificationDto,
-  preferenceDto,
-  reimbursementDto,
-  reservationDto,
-  reservationListDto,
-  usageRecordDto,
-} from './dto.js';
+import { CLIENT_HEADER, sessionToken } from './session.js';
+import { authRoutes } from './plugins/auth.js';
+import { memberRoutes } from './plugins/members.js';
+import { equipmentRoutes } from './plugins/equipments.js';
+import { reservationRoutes } from './plugins/reservations.js';
+import { usageRoutes } from './plugins/usage.js';
+import { expenseRoutes } from './plugins/expenses.js';
+import { discussionRoutes } from './plugins/discussions.js';
+import { checklistRoutes } from './plugins/checklists.js';
+import { notificationRoutes } from './plugins/notifications.js';
+import { uploadRoutes } from './plugins/uploads.js';
 
 export interface AppDependencies {
   members: MemberRepository;
@@ -115,45 +98,6 @@ export interface AppDependencies {
   pushSender?: PushSender;
   /** Clé publique VAPID exposée au client pour l'abonnement Web Push (null si non configurée). */
   vapidPublicKey?: string | null;
-}
-
-declare module 'fastify' {
-  interface FastifyRequest {
-    /** Membre authentifié, posé par le hook de session sur les routes protégées. */
-    authMember: Member;
-  }
-  interface FastifyContextConfig {
-    /** Route accessible sans session (login, invitation, santé…). */
-    public?: boolean;
-  }
-}
-
-const SESSION_COOKIE = 'sharemate_session';
-
-/** En-tête posé par l'app native pour recevoir le token de session dans le corps. */
-const CLIENT_HEADER = 'x-sharemate-client';
-
-/** Limite anti force-brute des routes d'authentification publiques. */
-const AUTH_RATE_LIMIT = { max: 10, timeWindow: '1 minute' };
-
-/**
- * Token de session, depuis le cookie (web) ou l'en-tête `Authorization: Bearer` (app native,
- * où les cookies cross-origin ne sont pas fiables en WebView).
- */
-function sessionToken(request: FastifyRequest): string | undefined {
-  const cookieToken = request.cookies[SESSION_COOKIE];
-  if (cookieToken) return cookieToken;
-  const header = request.headers.authorization;
-  if (header?.startsWith('Bearer ')) {
-    const token = header.slice('Bearer '.length).trim();
-    if (token) return token;
-  }
-  return undefined;
-}
-
-/** L'app native s'annonce pour recevoir le token de session (le web reste sur cookie httpOnly). */
-function isNativeClient(request: FastifyRequest): boolean {
-  return request.headers[CLIENT_HEADER] === 'native';
 }
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
@@ -265,30 +209,8 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.clock,
   );
 
-  function setSessionCookie(reply: FastifyReply, session: AuthSession): void {
-    reply.setCookie(SESSION_COOKIE, session.token, {
-      path: '/',
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: deps.cookieSecure ?? false,
-      expires: session.expiresAt,
-    });
-  }
-
-  /**
-   * Établit la session : cookie (web) et, pour l'app native, le token dans le corps pour
-   * qu'elle le stocke et le renvoie ensuite en `Authorization: Bearer`.
-   */
-  function authenticated(request: FastifyRequest, reply: FastifyReply, member: Member, session: AuthSession) {
-    setSessionCookie(reply, session);
-    const body: { member: ReturnType<typeof memberDto>; token?: string } = { member: memberDto(member) };
-    if (isNativeClient(request)) {
-      body.token = session.token;
-    }
-    return body;
-  }
-
   // Toute route /api/* ou /uploads/* exige une session, sauf celles marquées `config.public`.
+  // Posé sur la racine : les plugins de domaine, enregistrés ensuite, en héritent.
   app.decorateRequest('authMember', null as unknown as Member);
   app.addHook('onRequest', async (request, reply) => {
     const url = request.raw.url ?? '';
@@ -339,566 +261,23 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
 
   app.get('/api/health', { config: { public: true } }, async () => ({ status: 'ok' }));
 
-  // --- Authentification ---
-
-  app.get('/api/auth/me', { config: { public: true } }, async (request) => {
-    const token = sessionToken(request);
-    const member = token ? await authService.authenticate(token) : null;
-    return {
-      member: member ? memberDto(member) : null,
-      needsBootstrap: await authService.needsBootstrap(),
-    };
-  });
-
-  app.post<{ Body: { name: string; email?: string | null; password: string } }>(
-    '/api/auth/bootstrap',
-    { config: { public: true, rateLimit: AUTH_RATE_LIMIT } },
-    async (request, reply) => {
-      const { member, session } = await authService.bootstrap(request.body);
-      return reply.status(201).send(authenticated(request, reply, member, session));
-    },
-  );
-
-  app.post<{ Body: { identifier: string; password: string } }>(
-    '/api/auth/login',
-    { config: { public: true, rateLimit: AUTH_RATE_LIMIT } },
-    async (request, reply) => {
-      const { member, session } = await authService.login(request.body.identifier, request.body.password);
-      return reply.send(authenticated(request, reply, member, session));
-    },
-  );
-
-  app.post('/api/auth/logout', async (request, reply) => {
-    const token = sessionToken(request);
-    if (token) {
-      await authService.logout(token);
-    }
-    reply.clearCookie(SESSION_COOKIE, { path: '/' });
-    return reply.status(204).send();
-  });
-
-  app.get<{ Params: { code: string } }>(
-    '/api/auth/invites/:code',
-    { config: { public: true, rateLimit: AUTH_RATE_LIMIT } },
-    async (request) => {
-      const member = await authService.inviteInfo(request.params.code);
-      return { memberName: member.name };
-    },
-  );
-
-  app.post<{ Params: { code: string }; Body: { password: string } }>(
-    '/api/auth/invites/:code/redeem',
-    { config: { public: true, rateLimit: AUTH_RATE_LIMIT } },
-    async (request, reply) => {
-      const { member, session } = await authService.redeemInvite(request.params.code, request.body.password);
-      return reply.send(authenticated(request, reply, member, session));
-    },
-  );
-
-  app.post<{ Body: { currentPassword: string; newPassword: string } }>('/api/auth/password', async (request, reply) => {
-    const session = await authService.changePassword(
-      request.authMember.id,
-      request.body.currentPassword,
-      request.body.newPassword,
-    );
-    // Le changement révoque toutes les sessions du membre, celle-ci comprise : on repose le cookie
-    // (et on rend le jeton à l'app native) pour ne pas déconnecter l'auteur de son propre geste.
-    return reply.send(authenticated(request, reply, request.authMember, session));
-  });
-
-  // --- Membres (utilisateurs globaux, portés par les équipements) ---
-
-  app.post<{ Body: { name: string; email?: string | null } }>('/api/members', async (request, reply) => {
-    const { member, inviteCode } = await authService.createMemberWithInvite(request.body, request.authMember.id);
-    return reply.status(201).send({ ...memberDto(member), hasPassword: false, inviteCode });
-  });
-
-  app.post<{ Params: { id: string } }>('/api/members/:id/invite', async (request, reply) => {
-    const inviteCode = await authService.regenerateInvite(request.params.id, request.authMember.id);
-    if (request.params.id !== request.authMember.id) {
-      // Geste sensible : le lien produit ouvre un compte qui n'est pas celui du demandeur.
-      app.log.warn(
-        { requesterId: request.authMember.id, targetId: request.params.id },
-        'invitation régénérée pour un autre membre',
-      );
-    }
-    return reply.status(201).send({ inviteCode });
-  });
-
-  app.get('/api/members', async (request) => {
-    const entries = await memberService.listVisibleMembers(request.authMember.id);
-    return entries.map(directoryMemberDto);
-  });
-
-  // --- Équipements ---
-
-  app.post<{
-    Body: {
-      name: string;
-      category: string;
-      acquisitionDate: string;
-      purchaseValueEuros: number;
-      meterUnit: 'HOURS' | 'KILOMETERS';
-      memberIds: string[];
-      maintenanceThreshold?: number | null;
-    };
-  }>('/api/equipments', async (request, reply) => {
-    const equipment = await equipmentService.create(
-      { ...request.body, maintenanceThreshold: request.body.maintenanceThreshold ?? null },
-      request.authMember.id,
-    );
-    return reply.status(201).send(equipmentDto(equipment));
-  });
-
-  app.get('/api/equipments', async (request) => {
-    const list = await equipmentService.list(request.authMember.id);
-    return list.map(equipmentDto);
-  });
-
-  app.get<{ Params: { id: string } }>('/api/equipments/:id', async (request) => {
-    return equipmentDto(await equipmentService.getById(request.params.id, request.authMember.id));
-  });
-
-  app.put<{
-    Params: { id: string };
-    Body: Partial<{
-      name: string;
-      category: string;
-      acquisitionDate: string;
-      purchaseValueEuros: number;
-      meterUnit: 'HOURS' | 'KILOMETERS';
-      memberIds: string[];
-      maintenanceThreshold: number | null;
-    }>;
-  }>('/api/equipments/:id', async (request) => {
-    return equipmentDto(await equipmentService.update(request.params.id, request.body, request.authMember.id));
-  });
-
-  app.delete<{ Params: { id: string } }>('/api/equipments/:id', async (request, reply) => {
-    await equipmentService.delete(request.params.id, request.authMember.id);
-    return reply.status(204).send();
-  });
-
-  // --- Réservations ---
-
-  app.post<{
-    Body: {
-      equipmentId: string;
-      start: string;
-      end: string;
-      status?: ReservationStatus;
-      notes?: string | null;
-    };
-  }>('/api/reservations', async (request, reply) => {
-    const { reservation, conflicts } = await reservationService.reserve({
-      ...request.body,
-      memberId: request.authMember.id,
-    });
-    return reply.status(201).send(
-      reservationDto(
-        reservation,
-        conflicts.map((c) => c.id),
-      ),
-    );
-  });
-
-  app.post<{
-    Body: {
-      equipmentId: string;
-      start: string;
-      end: string;
-      status?: ReservationStatus;
-      notes?: string | null;
-      frequency: RecurrenceFrequency;
-      until: string;
-    };
-  }>('/api/reservations/recurring', async (request, reply) => {
-    const { frequency, until, ...input } = request.body;
-    const results = await reservationService.reserveRecurring(
-      { ...input, memberId: request.authMember.id },
-      { frequency, until },
-    );
-    return reply.status(201).send(
-      results.map(({ reservation, conflicts }) =>
-        reservationDto(
-          reservation,
-          conflicts.map((c) => c.id),
-        ),
-      ),
-    );
-  });
-
-  app.put<{
-    Params: { id: string };
-    Body: { start?: string; end?: string; status?: ReservationStatus; notes?: string | null };
-  }>('/api/reservations/:id', async (request) => {
-    const { reservation, conflicts } = await reservationService.update(
-      request.params.id,
-      request.body,
-      request.authMember.id,
-    );
-    return reservationDto(
-      reservation,
-      conflicts.map((c) => c.id),
-    );
-  });
-
-  app.delete<{ Params: { id: string } }>('/api/reservations/:id', async (request, reply) => {
-    await reservationService.cancel(request.params.id, request.authMember.id);
-    return reply.status(204).send();
-  });
-
-  app.get<{ Params: { id: string } }>('/api/equipments/:id/reservations', async (request) => {
-    return reservationListDto(await reservationService.listByEquipment(request.params.id, request.authMember.id));
-  });
-
-  app.get('/api/calendar', async (request) => {
-    return reservationListDto(await reservationService.calendar(request.authMember.id));
-  });
-
-  // --- Suivi d'usage et maintenance ---
-
-  app.post<{
-    Body: {
-      equipmentId: string;
-      meterReading?: number | null;
-      duration?: number | null;
-      fuelAddedLiters?: number | null;
-      notes?: string | null;
-      isMaintenance?: boolean;
-    };
-  }>('/api/usage', async (request, reply) => {
-    const entry = await usageService.recordUsage({ ...request.body, memberId: request.authMember.id });
-    return reply.status(201).send(usageRecordDto(entry.record, entry.duration));
-  });
-
-  app.get<{ Params: { id: string } }>('/api/equipments/:id/usage', async (request) => {
-    const list = await usageService.historyByEquipment(request.params.id, request.authMember.id);
-    return list.map((e) => usageRecordDto(e.record, e.duration));
-  });
-
-  app.get<{ Params: { id: string } }>('/api/members/:id/usage', async (request) => {
-    const list = await usageService.historyByMember(request.params.id, request.authMember.id);
-    return list.map((e) => usageRecordDto(e.record, e.duration));
-  });
-
-  app.get<{ Params: { id: string } }>('/api/equipments/:id/maintenance', async (request) => {
-    return usageService.maintenanceStatus(request.params.id, request.authMember.id);
-  });
-
-  app.get('/api/alerts', async (request) => {
-    return usageService.alerts(request.authMember.id);
-  });
-
-  // --- Dépenses, soldes, remboursements ---
-
-  app.post<{
-    Body: {
-      equipmentId: string;
-      label: string;
-      amountEuros: number;
-      payerId: string;
-      date: string;
-      category: ExpenseCategory;
-      split: SplitInput;
-      receiptPath?: string | null;
-    };
-  }>('/api/expenses', async (request, reply) => {
-    const expense = await expenseService.addExpense(request.body, request.authMember.id);
-    return reply.status(201).send(expenseDto(expense));
-  });
-
-  app.get<{ Params: { id: string } }>('/api/equipments/:id/expenses', async (request) => {
-    const list = await expenseService.listExpenses(request.params.id, request.authMember.id);
-    return list.map(expenseDto);
-  });
-
-  app.delete<{ Params: { id: string } }>('/api/expenses/:id', async (request, reply) => {
-    await expenseService.deleteExpense(request.params.id, request.authMember.id);
-    return reply.status(204).send();
-  });
-
-  app.post<{
-    Body: {
-      equipmentId: string;
-      fromMemberId: string;
-      toMemberId: string;
-      amountEuros: number;
-      date: string;
-      notes?: string | null;
-    };
-  }>('/api/reimbursements', async (request, reply) => {
-    const reimbursement = await expenseService.recordReimbursement(request.body, request.authMember.id);
-    return reply.status(201).send(reimbursementDto(reimbursement));
-  });
-
-  app.get<{ Params: { id: string } }>('/api/equipments/:id/reimbursements', async (request) => {
-    const list = await expenseService.listReimbursements(request.params.id, request.authMember.id);
-    return list.map(reimbursementDto);
-  });
-
-  app.get<{ Params: { id: string } }>('/api/equipments/:id/balances', async (request) => {
-    const balances = await expenseService.equipmentBalances(request.params.id, request.authMember.id);
-    return balances.map((b) => ({ memberId: b.memberId, balanceEuros: b.balanceCents / 100 }));
-  });
-
-  app.get<{ Params: { id: string } }>('/api/equipments/:id/settlement', async (request) => {
-    const plan = await expenseService.settlementPlan(request.params.id, request.authMember.id);
-    return plan.map((t) => ({
-      fromMemberId: t.fromMemberId,
-      toMemberId: t.toMemberId,
-      amountEuros: t.amountCents / 100,
-    }));
-  });
-
-  // --- Discussions par équipement (fils + messages) ---
-
-  app.get<{ Params: { id: string } }>('/api/equipments/:id/threads', async (request) => {
-    const list = await discussionService.listThreads(request.params.id, request.authMember.id);
-    return list.map(threadSummaryDto);
-  });
-
-  app.post<{ Body: { equipmentId: string; title: string; body?: string | null } }>(
-    '/api/threads',
-    async (request, reply) => {
-      const thread = await discussionService.createThread({
-        equipmentId: request.body.equipmentId,
-        authorId: request.authMember.id,
-        title: request.body.title,
-        body: request.body.body ?? null,
-      });
-      return reply.status(201).send(threadDto(thread));
-    },
-  );
-
-  app.put<{ Params: { id: string }; Body: { title: string } }>('/api/threads/:id', async (request) => {
-    const thread = await discussionService.renameThread(request.params.id, request.authMember.id, request.body.title);
-    return threadDto(thread);
-  });
-
-  app.delete<{ Params: { id: string } }>('/api/threads/:id', async (request, reply) => {
-    await discussionService.deleteThread(request.params.id, request.authMember.id);
-    return reply.status(204).send();
-  });
-
-  app.get<{ Params: { id: string } }>('/api/threads/:id/messages', async (request) => {
-    const list = await discussionService.listMessages(request.params.id, request.authMember.id);
-    return list.map(messageDto);
-  });
-
-  app.post<{ Body: { threadId: string; body: string; parentId?: string | null } }>(
-    '/api/messages',
-    async (request, reply) => {
-      const message = await discussionService.postMessage({
-        threadId: request.body.threadId,
-        authorId: request.authMember.id,
-        body: request.body.body,
-        parentId: request.body.parentId ?? null,
-      });
-      return reply.status(201).send(messageDto(message));
-    },
-  );
-
-  app.put<{ Params: { id: string }; Body: { body: string } }>('/api/messages/:id', async (request) => {
-    const message = await discussionService.editMessage(request.params.id, request.authMember.id, request.body.body);
-    return messageDto(message);
-  });
-
-  app.delete<{ Params: { id: string } }>('/api/messages/:id', async (request, reply) => {
-    await discussionService.deleteMessage(request.params.id, request.authMember.id);
-    return reply.status(204).send();
-  });
-
-  // --- Checklists par équipement (checklists + points de contrôle) ---
-
-  app.get<{ Params: { id: string } }>('/api/equipments/:id/checklists', async (request) => {
-    const list = await checklistService.listChecklists(request.params.id, request.authMember.id);
-    return list.map(checklistSummaryDto);
-  });
-
-  app.post<{ Body: { equipmentId: string; title: string; itemLabels?: string[] | null } }>(
-    '/api/checklists',
-    async (request, reply) => {
-      const checklist = await checklistService.createChecklist({
-        equipmentId: request.body.equipmentId,
-        authorId: request.authMember.id,
-        title: request.body.title,
-        itemLabels: request.body.itemLabels ?? [],
-      });
-      return reply.status(201).send(checklistDto(checklist));
-    },
-  );
-
-  app.put<{ Params: { id: string }; Body: { title: string } }>('/api/checklists/:id', async (request) => {
-    const checklist = await checklistService.renameChecklist(
-      request.params.id,
-      request.authMember.id,
-      request.body.title,
-    );
-    return checklistDto(checklist);
-  });
-
-  app.delete<{ Params: { id: string } }>('/api/checklists/:id', async (request, reply) => {
-    await checklistService.deleteChecklist(request.params.id, request.authMember.id);
-    return reply.status(204).send();
-  });
-
-  app.post<{ Params: { id: string } }>('/api/checklists/:id/reset', async (request, reply) => {
-    await checklistService.resetChecklist(request.params.id, request.authMember.id);
-    return reply.status(204).send();
-  });
-
-  app.get<{ Params: { id: string } }>('/api/checklists/:id/items', async (request) => {
-    const list = await checklistService.listItems(request.params.id, request.authMember.id);
-    return list.map(checklistItemDto);
-  });
-
-  app.post<{ Body: { checklistId: string; label: string } }>('/api/checklist-items', async (request, reply) => {
-    const item = await checklistService.addItem({
-      checklistId: request.body.checklistId,
-      requesterId: request.authMember.id,
-      label: request.body.label,
-    });
-    return reply.status(201).send(checklistItemDto(item));
-  });
-
-  app.put<{ Params: { id: string }; Body: { label?: string; checked?: boolean } }>(
-    '/api/checklist-items/:id',
-    async (request) => {
-      // Deux gestes distincts sur la même ressource, avec des droits différents :
-      // renommer le point (auteur de la checklist) ou le cocher/décocher (tout le cercle).
-      const { label, checked } = request.body;
-      if (label !== undefined) {
-        return checklistItemDto(await checklistService.renameItem(request.params.id, request.authMember.id, label));
-      }
-      if (checked !== undefined) {
-        return checklistItemDto(
-          await checklistService.setItemChecked(request.params.id, request.authMember.id, checked),
-        );
-      }
-      throw new DomainError('Indiquez le libellé à modifier ou l’état de la coche.');
-    },
-  );
-
-  app.delete<{ Params: { id: string } }>('/api/checklist-items/:id', async (request, reply) => {
-    await checklistService.deleteItem(request.params.id, request.authMember.id);
-    return reply.status(204).send();
-  });
-
-  // --- Notifications ---
-
-  app.get<{ Querystring: { unread?: string } }>('/api/notifications', async (request) => {
-    const list = await notificationService.list(request.authMember.id, {
-      unreadOnly: request.query.unread === '1',
-    });
-    return list.map(notificationDto);
-  });
-
-  app.get('/api/notifications/unread-count', async (request) => {
-    return { count: await notificationService.unreadCount(request.authMember.id) };
-  });
-
-  app.post<{ Params: { id: string } }>('/api/notifications/:id/read', async (request, reply) => {
-    await notificationService.markRead(request.params.id, request.authMember.id);
-    return reply.status(204).send();
-  });
-
-  app.post('/api/notifications/read-all', async (request, reply) => {
-    await notificationService.markAllRead(request.authMember.id);
-    return reply.status(204).send();
-  });
-
-  app.get('/api/notifications/preferences', async (request) => {
-    const prefs = await notificationService.getPreferences(request.authMember.id);
-    return prefs.map(preferenceDto);
-  });
-
-  app.put<{ Body: { preferences: { type: NotificationType; inApp: boolean; push: boolean }[] } }>(
-    '/api/notifications/preferences',
-    async (request, reply) => {
-      const updates: PreferenceUpdate[] = request.body.preferences ?? [];
-      await notificationService.updatePreferences(request.authMember.id, updates);
-      const prefs = await notificationService.getPreferences(request.authMember.id);
-      return reply.send(prefs.map(preferenceDto));
-    },
-  );
-
-  app.get('/api/notifications/vapid-public-key', async () => {
-    return { publicKey: deps.vapidPublicKey ?? null };
-  });
-
-  app.post<{ Body: { endpoint: string; keys: { p256dh: string; auth: string } } }>(
-    '/api/notifications/subscriptions',
-    async (request, reply) => {
-      const { endpoint, keys } = request.body;
-      if (!endpoint || !keys?.p256dh || !keys?.auth) {
-        return reply.status(400).send({ error: 'Abonnement Web Push incomplet.' });
-      }
-      await notificationService.subscribeWebPush(request.authMember.id, {
-        endpoint,
-        p256dh: keys.p256dh,
-        auth: keys.auth,
-      });
-      return reply.status(201).send({ status: 'ok' });
-    },
-  );
-
-  app.delete<{ Body: { endpoint: string } }>('/api/notifications/subscriptions', async (request, reply) => {
-    await notificationService.unsubscribeWebPush(request.body.endpoint);
-    return reply.status(204).send();
-  });
-
-  app.post<{ Body: { token: string; platform?: string } }>(
-    '/api/notifications/device-tokens',
-    async (request, reply) => {
-      if (!request.body.token) {
-        return reply.status(400).send({ error: 'Jeton d’appareil manquant.' });
-      }
-      await notificationService.registerDeviceToken(
-        request.authMember.id,
-        request.body.token,
-        request.body.platform ?? 'android',
-      );
-      return reply.status(201).send({ status: 'ok' });
-    },
-  );
-
-  app.delete<{ Body: { token: string } }>('/api/notifications/device-tokens', async (request, reply) => {
-    await notificationService.unregisterDeviceToken(request.body.token);
-    return reply.status(204).send();
-  });
-
-  // --- Upload de justificatifs ---
-
+  // Composition : chaque plugin reçoit explicitement les services dont il a besoin.
+  await app.register(authRoutes, { authService, cookieSecure: deps.cookieSecure ?? false });
+  await app.register(memberRoutes, { authService, memberService });
+  await app.register(equipmentRoutes, { equipmentService });
+  await app.register(reservationRoutes, { reservationService });
+  await app.register(usageRoutes, { usageService });
+  await app.register(expenseRoutes, { expenseService });
+  await app.register(discussionRoutes, { discussionService });
+  await app.register(checklistRoutes, { checklistService });
+  await app.register(notificationRoutes, { notificationService, vapidPublicKey: deps.vapidPublicKey ?? null });
   if (deps.uploadsDir) {
-    const uploadsDir = deps.uploadsDir;
-    fs.mkdirSync(uploadsDir, { recursive: true });
-    app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });
-
-    const ALLOWED_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.pdf']);
-    app.post('/api/uploads/receipts', async (request, reply) => {
-      const file = await request.file();
-      if (!file) {
-        return reply.status(400).send({ error: 'Aucun fichier reçu.' });
-      }
-      const extension = path.extname(file.filename).toLowerCase();
-      if (!ALLOWED_EXTENSIONS.has(extension)) {
-        return reply.status(400).send({ error: 'Format accepté : image (png, jpg, webp) ou PDF.' });
-      }
-      const name = `${crypto.randomUUID()}${extension}`;
-      await fs.promises.writeFile(path.join(uploadsDir, name), await file.toBuffer());
-      return reply.status(201).send({ path: `/uploads/${name}` });
-    });
-
-    app.register(fastifyStatic, {
-      root: uploadsDir,
-      prefix: '/uploads/',
-      decorateReply: false,
-    });
+    await app.register(uploadRoutes, { uploadsDir: deps.uploadsDir });
   }
 
   // --- Front statique (production) ---
-
+  // Reste ici : le repli SPA s'appuie sur `reply.sendFile`, décoré par ce @fastify/static
+  // sur la racine — un plugin encapsulé ne l'exposerait pas au gestionnaire 404.
   if (deps.webDistDir && fs.existsSync(deps.webDistDir)) {
     app.register(fastifyStatic, {
       root: deps.webDistDir,
