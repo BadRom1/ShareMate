@@ -21,6 +21,9 @@ import {
 } from '../persistence/sqlite/repositories.js';
 import { CryptoTokenGenerator, ScryptPasswordHasher, SystemClock, UuidGenerator } from '../tech/adapters.js';
 import { buildApp } from './app.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const PASSWORD = 'motdepasse';
 type Cookies = Record<string, string>;
@@ -109,6 +112,155 @@ async function setupMembersAndEquipment() {
   const equipment = equipmentRes.json() as { id: string; memberIds: string[] };
   return { equipment, alice, bruno, chloe };
 }
+
+describe('API — justificatifs et front statique (@fastify/static)', () => {
+  let staticApp: FastifyInstance;
+  let uploadsDir: string;
+  let webDistDir: string;
+  let tmpRoot: string;
+
+  /** Corps multipart minimal : `app.inject` n'a pas de constructeur de formulaire. */
+  function filePayload(filename: string, content: Buffer, contentType = 'image/png') {
+    const boundary = '----sharemateTestBoundary';
+    const head =
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+      `Content-Type: ${contentType}\r\n\r\n`;
+    return {
+      payload: Buffer.concat([Buffer.from(head), content, Buffer.from(`\r\n--${boundary}--\r\n`)]),
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    };
+  }
+
+  beforeEach(async () => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-static-'));
+    uploadsDir = path.join(tmpRoot, 'uploads');
+    webDistDir = path.join(tmpRoot, 'dist');
+    fs.mkdirSync(webDistDir, { recursive: true });
+    fs.writeFileSync(path.join(webDistDir, 'index.html'), '<!doctype html><title>ShareMate</title>');
+    // Un fichier à l'extérieur du répertoire servi, cible d'une éventuelle traversée.
+    fs.writeFileSync(path.join(tmpRoot, 'secret.txt'), 'SECRET-HORS-RACINE');
+
+    const db = openDatabase(':memory:');
+    staticApp = await buildApp({
+      members: new SqliteMemberRepository(db),
+      equipments: new SqliteEquipmentRepository(db),
+      reservations: new SqliteReservationRepository(db),
+      usageRecords: new SqliteUsageRecordRepository(db),
+      expenses: new SqliteExpenseRepository(db),
+      reimbursements: new SqliteReimbursementRepository(db),
+      threads: new SqliteThreadRepository(db),
+      messages: new SqliteMessageRepository(db),
+      checklists: new SqliteChecklistRepository(db),
+      checklistItems: new SqliteChecklistItemRepository(db),
+      notifications: new SqliteNotificationRepository(db),
+      notificationPreferences: new SqliteNotificationPreferenceRepository(db),
+      pushSubscriptions: new SqlitePushSubscriptionRepository(db),
+      deviceTokens: new SqliteDeviceTokenRepository(db),
+      credentials: new SqliteCredentialRepository(db),
+      sessions: new SqliteSessionRepository(db),
+      passwordHasher: new ScryptPasswordHasher(),
+      tokenGenerator: new CryptoTokenGenerator(),
+      idGenerator: new UuidGenerator(),
+      clock: new SystemClock(),
+      uploadsDir,
+      webDistDir,
+    });
+  });
+
+  afterEach(async () => {
+    await staticApp.close();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  /** Session du premier compte sur cette app dédiée. */
+  async function session(): Promise<Cookies> {
+    const res = await staticApp.inject({
+      method: 'POST',
+      url: '/api/auth/bootstrap',
+      payload: { name: 'Alice', password: PASSWORD },
+    });
+    expect(res.statusCode).toBe(201);
+    return sessionCookie(res);
+  }
+
+  it('téléverse un justificatif, puis ne le sert qu’avec une session', async () => {
+    const cookies = await session();
+    const contenu = Buffer.from('image-factice');
+    const { payload, headers } = filePayload('recu.png', contenu);
+    const upload = await staticApp.inject({ method: 'POST', url: '/api/uploads/receipts', payload, headers, cookies });
+    expect(upload.statusCode).toBe(201);
+    const { path: servedPath } = upload.json() as { path: string };
+    expect(servedPath).toMatch(/^\/uploads\/[\w-]+\.png$/);
+
+    const authentifié = await staticApp.inject({ method: 'GET', url: servedPath, cookies });
+    expect(authentifié.statusCode).toBe(200);
+    expect(authentifié.rawPayload.equals(contenu)).toBe(true);
+
+    // Sans session, le justificatif reste inaccessible.
+    const anonyme = await staticApp.inject({ method: 'GET', url: servedPath });
+    expect(anonyme.statusCode).toBe(401);
+  });
+
+  it('refuse les formats non autorisés', async () => {
+    const cookies = await session();
+    const { payload, headers } = filePayload('charge.svg', Buffer.from('<svg/>'), 'image/svg+xml');
+    const res = await staticApp.inject({ method: 'POST', url: '/api/uploads/receipts', payload, headers, cookies });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('ne sert aucun justificatif via un chemin non canonique ou une traversée (GHSA-8pvw / GHSA-83w8)', async () => {
+    const cookies = await session();
+    const contenu = Buffer.from('justificatif-confidentiel');
+    const { payload, headers } = filePayload('recu.png', contenu);
+    const upload = await staticApp.inject({ method: 'POST', url: '/api/uploads/receipts', payload, headers, cookies });
+    const nom = (upload.json() as { path: string }).path.split('/').pop() as string;
+
+    // Variantes non canoniques du chemin : aucune ne doit livrer le fichier sans session.
+    const sondages = [
+      `//uploads/${nom}`,
+      `/uploads//${nom}`,
+      `/./uploads/${nom}`,
+      `/uploads/./${nom}`,
+      `/uploads/%2e%2f${nom}`,
+      `/UPLOADS/${nom}`,
+    ];
+    for (const url of sondages) {
+      const res = await staticApp.inject({ method: 'GET', url });
+      expect(res.rawPayload.includes(contenu), `${url} a livré le justificatif sans session`).toBe(false);
+    }
+
+    // Traversée de répertoire : le fichier hors racine ne doit jamais sortir, même authentifié.
+    const traversées = [
+      '/uploads/../secret.txt',
+      '/uploads/..%2fsecret.txt',
+      '/uploads/%2e%2e%2fsecret.txt',
+      '/uploads/....//secret.txt',
+    ];
+    for (const url of traversées) {
+      const res = await staticApp.inject({ method: 'GET', url, cookies });
+      expect(res.payload.includes('SECRET-HORS-RACINE'), `${url} a livré un fichier hors racine`).toBe(false);
+    }
+  });
+
+  it('sert le front et retombe sur index.html pour les routes SPA', async () => {
+    const cookies = await session();
+    const index = await staticApp.inject({ method: 'GET', url: '/' });
+    expect(index.statusCode).toBe(200);
+    expect(index.payload).toContain('ShareMate');
+
+    // Route front inconnue : index.html (rendu côté client), pas un 404.
+    const spa = await staticApp.inject({ method: 'GET', url: '/invite/abc123' });
+    expect(spa.statusCode).toBe(200);
+    expect(spa.payload).toContain('ShareMate');
+
+    // Une route d'API inconnue reste un 404 JSON (401 sans session : le hook passe avant).
+    expect((await staticApp.inject({ method: 'GET', url: '/api/inconnu' })).statusCode).toBe(401);
+    const api = await staticApp.inject({ method: 'GET', url: '/api/inconnu', cookies });
+    expect(api.statusCode).toBe(404);
+    expect((api.json() as { error: string }).error).toBeTruthy();
+  });
+});
 
 describe('API — santé', () => {
   it('GET /api/health répond ok sans session', async () => {
