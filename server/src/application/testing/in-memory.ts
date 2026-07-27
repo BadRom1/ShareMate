@@ -350,13 +350,16 @@ export class InMemorySessionRepository implements SessionRepository {
   }
 }
 
-/** Hachage réversible à l'œil nu, réservé aux tests. */
+/** Hachage réversible à l'œil nu, réservé aux tests. `ancien:` simule un coût périmé. */
 export class FakePasswordHasher implements PasswordHasher {
   async hash(password: string) {
     return `plain:${password}`;
   }
   async verify(password: string, hash: string) {
-    return hash === `plain:${password}`;
+    return hash === `plain:${password}` || hash === `ancien:${password}`;
+  }
+  needsRehash(hash: string) {
+    return hash.startsWith('ancien:');
   }
 }
 

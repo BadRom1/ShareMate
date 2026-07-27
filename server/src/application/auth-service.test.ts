@@ -163,6 +163,32 @@ describe('AuthService — login et sessions', () => {
     await service.login('BRUNO@example.org', 'secretbruno');
   });
 
+  it('un hachage au coût périmé est refait à la connexion, sans changer le mot de passe', async () => {
+    const bruno = (await fixture.members.findByNameOrEmail('bruno@example.org'))[0]!;
+    const périmé = await fixture.credentials.findByMemberId(bruno.id);
+    await fixture.credentials.save(périmé!.withPassword('ancien:secretbruno'));
+
+    await service.login('Bruno', 'secretbruno');
+
+    expect((await fixture.credentials.findByMemberId(bruno.id))?.passwordHash).toBe('plain:secretbruno');
+    await service.login('Bruno', 'secretbruno'); // le mot de passe reste le même
+  });
+
+  it('un hachage au coût courant n’est pas réécrit à la connexion', async () => {
+    const bruno = (await fixture.members.findByNameOrEmail('bruno@example.org'))[0]!;
+    let écritures = 0;
+    const save = fixture.credentials.save.bind(fixture.credentials);
+    fixture.credentials.save = async (credential) => {
+      écritures += 1;
+      return save(credential);
+    };
+
+    await service.login('Bruno', 'secretbruno');
+
+    expect(écritures).toBe(0);
+    expect((await fixture.credentials.findByMemberId(bruno.id))?.passwordHash).toBe('plain:secretbruno');
+  });
+
   it('mauvais mot de passe ou inconnu → UnauthorizedError', async () => {
     await expect(service.login('Bruno', 'mauvais')).rejects.toThrow(UnauthorizedError);
     await expect(service.login('Personne', 'secretbruno')).rejects.toThrow(UnauthorizedError);

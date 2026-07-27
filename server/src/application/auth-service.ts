@@ -161,6 +161,11 @@ export class AuthService {
       }
       dérivationFaite = true;
       if (await this.hasher.verify(password, credential.passwordHash)) {
+        // Migration progressive du coût de hachage : durcir les paramètres n'invalide rien, chaque
+        // membre est repassé au coût courant à sa première connexion suivante, sans le savoir.
+        if (this.hasher.needsRehash(credential.passwordHash)) {
+          await this.credentials.save(credential.withPassword(await this.hasher.hash(password)));
+        }
         return { member, session: await this.openSession(member.id) };
       }
     }

@@ -54,7 +54,10 @@ async function buildTestApp(overrides: Partial<AppDependencies> = {}): Promise<F
     deviceTokens: new SqliteDeviceTokenRepository(db),
     credentials: new SqliteCredentialRepository(db),
     sessions: new SqliteSessionRepository(db),
-    passwordHasher: new ScryptPasswordHasher(),
+    // Coût de dérivation réduit : ces parcours ouvrent des dizaines de sessions, et au coût de
+    // production (N = 2¹⁷, ~0,3 s par hachage) la suite se paierait plusieurs minutes de scrypt.
+    // Le coût réel est testé pour lui-même dans tech/adapters.test.ts.
+    passwordHasher: new ScryptPasswordHasher({ N: 2 ** 12, r: 8, p: 1 }),
     tokenGenerator: new CryptoTokenGenerator(),
     idGenerator: new UuidGenerator(),
     clock: new SystemClock(),

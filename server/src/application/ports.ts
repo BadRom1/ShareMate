@@ -194,6 +194,11 @@ export interface Clock {
 export interface PasswordHasher {
   hash(password: string): Promise<string>;
   verify(password: string, hash: string): Promise<boolean>;
+  /**
+   * Ce hachage a-t-il été produit sous des paramètres périmés ? La connexion est le seul instant
+   * où le mot de passe est en clair, donc le seul où durcir le coût sans le redemander au membre.
+   */
+  needsRehash(hash: string): boolean;
 }
 
 export interface TokenGenerator {
