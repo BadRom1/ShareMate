@@ -22,6 +22,7 @@ import {
 import { CryptoTokenGenerator, ScryptPasswordHasher, SystemClock, UuidGenerator } from '../tech/adapters.js';
 import { FixedClock } from '../../application/testing/in-memory.js';
 import { buildApp } from './app.js';
+import { DEFAULT_RATE_LIMITS } from './rate-limit.js';
 import type { AppDependencies } from './app.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -57,6 +58,9 @@ async function buildTestApp(overrides: Partial<AppDependencies> = {}): Promise<F
     tokenGenerator: new CryptoTokenGenerator(),
     idGenerator: new UuidGenerator(),
     clock: new SystemClock(),
+    // Les parcours d'intégration enchaînent des dizaines de requêtes depuis la même « IP » :
+    // les plafonds sont relevés ici, et testés pour eux-mêmes sur une app dédiée (voir plus bas).
+    rateLimits: { global: 10_000, auth: 10_000, sensitive: 10_000 },
     ...overrides,
   });
 }
@@ -122,24 +126,24 @@ async function setupMembersAndEquipment() {
   return { equipment, alice, bruno, chloe };
 }
 
+/** Corps multipart minimal : `app.inject` n'a pas de constructeur de formulaire. */
+function filePayload(filename: string, content: Buffer, contentType = 'image/png') {
+  const boundary = '----sharemateTestBoundary';
+  const head =
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+    `Content-Type: ${contentType}\r\n\r\n`;
+  return {
+    payload: Buffer.concat([Buffer.from(head), content, Buffer.from(`\r\n--${boundary}--\r\n`)]),
+    headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+  };
+}
+
 describe('API — justificatifs et front statique (@fastify/static)', () => {
   let staticApp: FastifyInstance;
   let uploadsDir: string;
   let webDistDir: string;
   let tmpRoot: string;
-
-  /** Corps multipart minimal : `app.inject` n'a pas de constructeur de formulaire. */
-  function filePayload(filename: string, content: Buffer, contentType = 'image/png') {
-    const boundary = '----sharemateTestBoundary';
-    const head =
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
-      `Content-Type: ${contentType}\r\n\r\n`;
-    return {
-      payload: Buffer.concat([Buffer.from(head), content, Buffer.from(`\r\n--${boundary}--\r\n`)]),
-      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
-    };
-  }
 
   beforeEach(async () => {
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-static-'));
@@ -319,11 +323,24 @@ describe('API — authentification', () => {
   });
 
   it('le login est limité contre le force brute (429 au-delà de 10/min)', async () => {
-    await bootstrapAlice();
-    for (let i = 0; i < 10; i++) {
-      expect((await post('/api/auth/login', { identifier: 'Personne', password: 'xxxxxxxx' })).statusCode).toBe(401);
+    // Plafonds de production : ceux de `buildTestApp` sont relevés pour les parcours d'intégration.
+    const bridée = await buildTestApp({ rateLimits: DEFAULT_RATE_LIMITS });
+    const tentative = () =>
+      bridée.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        payload: { identifier: 'Personne', password: 'xxxxxxxx' },
+      });
+    try {
+      for (let i = 0; i < DEFAULT_RATE_LIMITS.auth; i++) {
+        expect((await tentative()).statusCode).toBe(401);
+      }
+      const coupée = await tentative();
+      expect(coupée.statusCode).toBe(429);
+      expect((coupée.json() as { error: string }).error).toMatch(/^Trop de requêtes\./);
+    } finally {
+      await bridée.close();
     }
-    expect((await post('/api/auth/login', { identifier: 'Personne', password: 'xxxxxxxx' })).statusCode).toBe(429);
   });
 
   it('logout invalide la session', async () => {
@@ -1558,5 +1575,60 @@ describe('API — validation des requêtes (schémas)', () => {
     expect(filtreInconnu.statusCode).toBe(400);
     expect(erreur(filtreInconnu)).toMatch(/^Paramètre de requête invalide/);
     expect((await get('/api/notifications?unread=1', alice.cookies)).statusCode).toBe(200);
+  });
+});
+
+describe('API — plafonds de requêtes (rate-limit)', () => {
+  let tmpRoot: string;
+  let bridée: FastifyInstance;
+
+  beforeEach(async () => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-quota-'));
+    bridée = await buildTestApp({
+      rateLimits: { global: 3, sensitive: 1 },
+      uploadsDir: path.join(tmpRoot, 'uploads'),
+    });
+  });
+
+  afterEach(async () => {
+    await bridée.close();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  /** Session sur l'app bridée : le bootstrap est public et hors quota « sensible ». */
+  async function session(): Promise<Cookies> {
+    const res = await bridée.inject({
+      method: 'POST',
+      url: '/api/auth/bootstrap',
+      payload: { name: 'Alice', password: PASSWORD },
+    });
+    expect(res.statusCode).toBe(201);
+    return sessionCookie(res);
+  }
+
+  it('plafonne par défaut toute route, y compris celles sans limite propre', async () => {
+    for (let i = 0; i < 3; i++) {
+      expect((await bridée.inject({ method: 'GET', url: '/api/health' })).statusCode).toBe(200);
+    }
+    const coupée = await bridée.inject({ method: 'GET', url: '/api/health' });
+    expect(coupée.statusCode).toBe(429);
+    expect((coupée.json() as { error: string }).error).toMatch(/^Trop de requêtes\./);
+  });
+
+  it('plafonne plus bas la création de compte et le téléversement', async () => {
+    const cookies = await session();
+
+    // Création de compte : chaque appel ouvre un compte et émet un lien d'invitation.
+    const membre = (name: string) => bridée.inject({ method: 'POST', url: '/api/members', payload: { name }, cookies });
+    expect((await membre('Bruno')).statusCode).toBe(201);
+    expect((await membre('Chloé')).statusCode).toBe(429);
+
+    // Téléversement : 10 Mo par fichier, jamais supprimé — le plafond global serait trop haut.
+    const envoi = () => {
+      const { payload, headers } = filePayload('recu.png', Buffer.from('image-factice'));
+      return bridée.inject({ method: 'POST', url: '/api/uploads/receipts', payload, headers, cookies });
+    };
+    expect((await envoi()).statusCode).toBe(201);
+    expect((await envoi()).statusCode).toBe(429);
   });
 });

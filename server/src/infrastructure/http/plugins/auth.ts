@@ -4,9 +4,8 @@ import type { AuthService, AuthSession } from '../../../application/auth-service
 import { memberDto } from '../dto.js';
 import { SESSION_COOKIE, isNativeClient, sessionToken } from '../session.js';
 import { nullableText, object, params, text } from '../schema.js';
-
-/** Limite anti force-brute des routes d'authentification publiques. */
-const AUTH_RATE_LIMIT = { max: 10, timeWindow: '1 minute' };
+import { limit } from '../rate-limit.js';
+import type { RateLimits } from '../rate-limit.js';
 
 /**
  * Mot de passe : borné haut pour ne pas offrir un scrypt de plusieurs mégaoctets à un anonyme.
@@ -21,9 +20,16 @@ export interface AuthRoutesOptions {
   authService: AuthService;
   /** Cookie de session en `Secure` (obligatoire derrière HTTPS en production). */
   cookieSecure: boolean;
+  rateLimits: RateLimits;
 }
 
-export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (app, { authService, cookieSecure }) => {
+export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
+  app,
+  { authService, cookieSecure, rateLimits },
+) => {
+  /** Limite anti force-brute des routes d'authentification publiques. */
+  const AUTH_RATE_LIMIT = limit(rateLimits.auth);
+
   function setSessionCookie(reply: FastifyReply, session: AuthSession): void {
     reply.setCookie(SESSION_COOKIE, session.token, {
       path: '/',

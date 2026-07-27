@@ -4,6 +4,8 @@ import fastifyStatic from '@fastify/static';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { limit } from '../rate-limit.js';
+import type { RateLimits } from '../rate-limit.js';
 import '../session.js'; // augmentation de type : request.authMember
 
 const ALLOWED_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.pdf']);
@@ -11,13 +13,15 @@ const ALLOWED_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.pdf']);
 export interface UploadRoutesOptions {
   /** Répertoire de stockage des justificatifs, créé au besoin. */
   uploadsDir: string;
+  rateLimits: RateLimits;
 }
 
-export const uploadRoutes: FastifyPluginAsync<UploadRoutesOptions> = async (app, { uploadsDir }) => {
+export const uploadRoutes: FastifyPluginAsync<UploadRoutesOptions> = async (app, { uploadsDir, rateLimits }) => {
   fs.mkdirSync(uploadsDir, { recursive: true });
   await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });
 
-  app.post('/api/uploads/receipts', async (request, reply) => {
+  // 10 Mo par fichier, jamais supprimés : plafond serré, sinon le disque se remplit à volonté.
+  app.post('/api/uploads/receipts', { config: { rateLimit: limit(rateLimits.sensitive) } }, async (request, reply) => {
     const file = await request.file();
     if (!file) {
       return reply.status(400).send({ error: 'Aucun fichier reçu.' });

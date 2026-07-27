@@ -49,6 +49,8 @@ import type {
 } from '../../application/ports.js';
 import { CLIENT_HEADER, sessionToken } from './session.js';
 import { AJV_OPTIONS, schemaErrorFormatter } from './schema.js';
+import { DEFAULT_RATE_LIMITS, RATE_WINDOW, tooManyRequests } from './rate-limit.js';
+import type { RateLimits } from './rate-limit.js';
 import { authRoutes } from './plugins/auth.js';
 import { memberRoutes } from './plugins/members.js';
 import { equipmentRoutes } from './plugins/equipments.js';
@@ -100,6 +102,8 @@ export interface AppDependencies {
   pushSender?: PushSender;
   /** Clé publique VAPID exposée au client pour l'abonnement Web Push (null si non configurée). */
   vapidPublicKey?: string | null;
+  /** Plafonds de requêtes par IP (voir DEFAULT_RATE_LIMITS) : relevés dans les tests d'intégration. */
+  rateLimits?: Partial<RateLimits>;
 }
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
@@ -143,7 +147,14 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     });
   }
   // Chargé avant la déclaration des routes, sinon son hook onRoute ne s'applique pas.
-  await app.register(rateLimit, { global: false });
+  // Global : chaque route est plafonnée par défaut, les plus exposées le sont plus bas
+  // via `config.rateLimit` (voir rate-limit.ts).
+  const rateLimits = { ...DEFAULT_RATE_LIMITS, ...deps.rateLimits };
+  await app.register(rateLimit, {
+    max: rateLimits.global,
+    timeWindow: RATE_WINDOW,
+    errorResponseBuilder: tooManyRequests,
+  });
 
   const noopPushSender: PushSender = {
     async sendWebPush() {
@@ -278,8 +289,8 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   app.get('/api/health', { config: { public: true } }, async () => ({ status: 'ok' }));
 
   // Composition : chaque plugin reçoit explicitement les services dont il a besoin.
-  await app.register(authRoutes, { authService, cookieSecure: deps.cookieSecure ?? false });
-  await app.register(memberRoutes, { authService, memberService });
+  await app.register(authRoutes, { authService, cookieSecure: deps.cookieSecure ?? false, rateLimits });
+  await app.register(memberRoutes, { authService, memberService, rateLimits });
   await app.register(equipmentRoutes, { equipmentService });
   await app.register(reservationRoutes, { reservationService });
   await app.register(usageRoutes, { usageService });
@@ -288,7 +299,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   await app.register(checklistRoutes, { checklistService });
   await app.register(notificationRoutes, { notificationService, vapidPublicKey: deps.vapidPublicKey ?? null });
   if (deps.uploadsDir) {
-    await app.register(uploadRoutes, { uploadsDir: deps.uploadsDir });
+    await app.register(uploadRoutes, { uploadsDir: deps.uploadsDir, rateLimits });
   }
 
   // --- Front statique (production) ---

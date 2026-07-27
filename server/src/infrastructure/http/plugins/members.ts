@@ -3,18 +3,28 @@ import type { AuthService } from '../../../application/auth-service.js';
 import type { MemberService } from '../../../application/member-service.js';
 import { directoryMemberDto, memberDto } from '../dto.js';
 import { idParams, nullableText, object, text } from '../schema.js';
+import { limit } from '../rate-limit.js';
+import type { RateLimits } from '../rate-limit.js';
 import '../session.js'; // augmentation de type : request.authMember
 
 /** Membres : utilisateurs globaux, dont le cercle est porté par les équipements. */
 export interface MemberRoutesOptions {
   authService: AuthService;
   memberService: MemberService;
+  rateLimits: RateLimits;
 }
 
-export const memberRoutes: FastifyPluginAsync<MemberRoutesOptions> = async (app, { authService, memberService }) => {
+export const memberRoutes: FastifyPluginAsync<MemberRoutesOptions> = async (
+  app,
+  { authService, memberService, rateLimits },
+) => {
   app.post<{ Body: { name: string; email?: string | null } }>(
     '/api/members',
-    { schema: { body: object({ name: text(120), email: nullableText(254) }, ['name']) } },
+    {
+      // Chaque appel ouvre un compte et émet un lien d'invitation : plafond serré.
+      config: { rateLimit: limit(rateLimits.sensitive) },
+      schema: { body: object({ name: text(120), email: nullableText(254) }, ['name']) },
+    },
     async (request, reply) => {
       const { member, inviteCode } = await authService.createMemberWithInvite(request.body, request.authMember.id);
       return reply.status(201).send({ ...memberDto(member), hasPassword: false, inviteCode });
