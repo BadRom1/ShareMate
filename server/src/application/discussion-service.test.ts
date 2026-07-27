@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { DiscussionService } from './discussion-service.js';
-import { DomainError, UnauthorizedError } from '../domain/shared/domain-error.js';
+import { DomainError, ForbiddenError, UnauthorizedError } from '../domain/shared/domain-error.js';
 import type { NotifyEvent, Notifier } from './ports.js';
 import { makeFixture } from './testing/fixture.js';
 import { InMemoryMessageRepository, InMemoryThreadRepository } from './testing/in-memory.js';
@@ -37,7 +37,7 @@ describe('DiscussionService', () => {
 
   it('crée un fil (avec 1er message) et le liste avec son compteur', async () => {
     await ctx.service.createThread({ equipmentId: 'e1', authorId: 'm1', title: 'Panne', body: 'Détails' });
-    const list = await ctx.service.listThreads('e1');
+    const list = await ctx.service.listThreads('e1', 'm1');
     expect(list).toHaveLength(1);
     expect(list[0]!.thread.title).toBe('Panne');
     expect(list[0]!.messageCount).toBe(1);
@@ -45,7 +45,7 @@ describe('DiscussionService', () => {
 
   it("refuse un membre hors du cercle de l'équipement", async () => {
     await expect(ctx.service.createThread({ equipmentId: 'e1', authorId: 'm3', title: 'X' })).rejects.toThrow(
-      DomainError,
+      ForbiddenError,
     );
   });
 
@@ -55,6 +55,18 @@ describe('DiscussionService', () => {
     expect(ctx.notifier.events).toHaveLength(2);
     expect(ctx.notifier.events.every((e) => e.type === 'MESSAGE_POSTED')).toBe(true);
     expect(ctx.notifier.events.every((e) => e.recipientIds.join() === 'm2')).toBe(true);
+  });
+
+  it('hors du cercle, ni les fils ni les messages ne sont visibles', async () => {
+    const thread = await ctx.service.createThread({
+      equipmentId: 'e1',
+      authorId: 'm1',
+      title: 'Panne',
+      body: 'Détails',
+    });
+    await expect(ctx.service.listThreads('e1', 'm3')).rejects.toThrow(ForbiddenError);
+    await expect(ctx.service.listMessages(thread.id, 'm3')).rejects.toThrow(ForbiddenError);
+    expect(await ctx.service.listThreads('e1', 'm2')).toHaveLength(1);
   });
 
   it('édite un message (auteur uniquement)', async () => {
@@ -76,7 +88,7 @@ describe('DiscussionService', () => {
       parentId: parent.id,
     });
     expect(reply.parentId).toBe(parent.id);
-    const all = await ctx.service.listMessages(thread.id);
+    const all = await ctx.service.listMessages(thread.id, 'm1');
     expect(all).toHaveLength(2);
   });
 
@@ -100,7 +112,7 @@ describe('DiscussionService', () => {
     });
     await ctx.service.postMessage({ threadId: thread.id, authorId: 'm1', body: 'sous-réponse', parentId: reply.id });
     await ctx.service.deleteMessage(parent.id, 'm1');
-    expect(await ctx.service.listMessages(thread.id)).toHaveLength(0);
+    expect(await ctx.service.listMessages(thread.id, 'm1')).toHaveLength(0);
   });
 
   it('supprime un fil (auteur uniquement) et ses messages en cascade', async () => {
@@ -108,7 +120,8 @@ describe('DiscussionService', () => {
     await ctx.service.postMessage({ threadId: thread.id, authorId: 'm2', body: 'y' });
     await expect(ctx.service.deleteThread(thread.id, 'm2')).rejects.toThrow(UnauthorizedError);
     await ctx.service.deleteThread(thread.id, 'm1');
-    expect(await ctx.service.listThreads('e1')).toHaveLength(0);
-    expect(await ctx.service.listMessages(thread.id)).toHaveLength(0);
+    expect(await ctx.service.listThreads('e1', 'm1')).toHaveLength(0);
+    // Le fil n'existe plus : on constate la cascade directement sur le dépôt.
+    expect(await ctx.messages.findByThreadId(thread.id)).toHaveLength(0);
   });
 });

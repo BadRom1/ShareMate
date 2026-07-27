@@ -9,7 +9,13 @@ import fastifyStatic from '@fastify/static';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ConflictError, DomainError, NotFoundError, UnauthorizedError } from '../../domain/shared/domain-error.js';
+import {
+  ConflictError,
+  DomainError,
+  ForbiddenError,
+  NotFoundError,
+  UnauthorizedError,
+} from '../../domain/shared/domain-error.js';
 import type { Member } from '../../domain/member/member.js';
 import type { ExpenseCategory } from '../../domain/expense/expense.js';
 import type { ReservationStatus } from '../../domain/reservation/reservation.js';
@@ -298,9 +304,19 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     request.authMember = member;
   });
 
-  app.setErrorHandler((error, _request, reply) => {
+  app.setErrorHandler((error, request, reply) => {
     if (error instanceof UnauthorizedError) {
       return reply.status(401).send({ error: error.message });
+    }
+    // Accès refusé rendu en 404 : la réponse est identique à celle d'une ressource
+    // inexistante (même code, même message), ce qui interdit d'énumérer les
+    // ressources des autres cercles. La trace serveur, elle, dit la vérité.
+    if (error instanceof ForbiddenError) {
+      app.log.warn(
+        { memberId: request.authMember?.id, method: request.method, url: request.url },
+        'accès hors cercle refusé (masqué en 404)',
+      );
+      return reply.status(404).send({ error: error.message });
     }
     if (error instanceof ConflictError) {
       return reply.status(409).send({ error: error.message });
@@ -412,20 +428,20 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       maintenanceThreshold?: number | null;
     };
   }>('/api/equipments', async (request, reply) => {
-    const equipment = await equipmentService.create({
-      ...request.body,
-      maintenanceThreshold: request.body.maintenanceThreshold ?? null,
-    });
+    const equipment = await equipmentService.create(
+      { ...request.body, maintenanceThreshold: request.body.maintenanceThreshold ?? null },
+      request.authMember.id,
+    );
     return reply.status(201).send(equipmentDto(equipment));
   });
 
-  app.get('/api/equipments', async () => {
-    const list = await equipmentService.list();
+  app.get('/api/equipments', async (request) => {
+    const list = await equipmentService.list(request.authMember.id);
     return list.map(equipmentDto);
   });
 
   app.get<{ Params: { id: string } }>('/api/equipments/:id', async (request) => {
-    return equipmentDto(await equipmentService.getById(request.params.id));
+    return equipmentDto(await equipmentService.getById(request.params.id, request.authMember.id));
   });
 
   app.put<{
@@ -440,11 +456,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       maintenanceThreshold: number | null;
     }>;
   }>('/api/equipments/:id', async (request) => {
-    return equipmentDto(await equipmentService.update(request.params.id, request.body));
+    return equipmentDto(await equipmentService.update(request.params.id, request.body, request.authMember.id));
   });
 
   app.delete<{ Params: { id: string } }>('/api/equipments/:id', async (request, reply) => {
-    await equipmentService.delete(request.params.id);
+    await equipmentService.delete(request.params.id, request.authMember.id);
     return reply.status(204).send();
   });
 
@@ -501,7 +517,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     Params: { id: string };
     Body: { start?: string; end?: string; status?: ReservationStatus; notes?: string | null };
   }>('/api/reservations/:id', async (request) => {
-    const { reservation, conflicts } = await reservationService.update(request.params.id, request.body);
+    const { reservation, conflicts } = await reservationService.update(
+      request.params.id,
+      request.body,
+      request.authMember.id,
+    );
     return reservationDto(
       reservation,
       conflicts.map((c) => c.id),
@@ -509,16 +529,16 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   });
 
   app.delete<{ Params: { id: string } }>('/api/reservations/:id', async (request, reply) => {
-    await reservationService.cancel(request.params.id);
+    await reservationService.cancel(request.params.id, request.authMember.id);
     return reply.status(204).send();
   });
 
   app.get<{ Params: { id: string } }>('/api/equipments/:id/reservations', async (request) => {
-    return reservationListDto(await reservationService.listByEquipment(request.params.id));
+    return reservationListDto(await reservationService.listByEquipment(request.params.id, request.authMember.id));
   });
 
-  app.get('/api/calendar', async () => {
-    return reservationListDto(await reservationService.calendar());
+  app.get('/api/calendar', async (request) => {
+    return reservationListDto(await reservationService.calendar(request.authMember.id));
   });
 
   // --- Suivi d'usage et maintenance ---
@@ -538,21 +558,21 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   });
 
   app.get<{ Params: { id: string } }>('/api/equipments/:id/usage', async (request) => {
-    const list = await usageService.historyByEquipment(request.params.id);
+    const list = await usageService.historyByEquipment(request.params.id, request.authMember.id);
     return list.map((e) => usageRecordDto(e.record, e.duration));
   });
 
   app.get<{ Params: { id: string } }>('/api/members/:id/usage', async (request) => {
-    const list = await usageService.historyByMember(request.params.id);
+    const list = await usageService.historyByMember(request.params.id, request.authMember.id);
     return list.map((e) => usageRecordDto(e.record, e.duration));
   });
 
   app.get<{ Params: { id: string } }>('/api/equipments/:id/maintenance', async (request) => {
-    return usageService.maintenanceStatus(request.params.id);
+    return usageService.maintenanceStatus(request.params.id, request.authMember.id);
   });
 
-  app.get('/api/alerts', async () => {
-    return usageService.alerts();
+  app.get('/api/alerts', async (request) => {
+    return usageService.alerts(request.authMember.id);
   });
 
   // --- Dépenses, soldes, remboursements ---
@@ -569,17 +589,17 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       receiptPath?: string | null;
     };
   }>('/api/expenses', async (request, reply) => {
-    const expense = await expenseService.addExpense(request.body);
+    const expense = await expenseService.addExpense(request.body, request.authMember.id);
     return reply.status(201).send(expenseDto(expense));
   });
 
   app.get<{ Params: { id: string } }>('/api/equipments/:id/expenses', async (request) => {
-    const list = await expenseService.listExpenses(request.params.id);
+    const list = await expenseService.listExpenses(request.params.id, request.authMember.id);
     return list.map(expenseDto);
   });
 
   app.delete<{ Params: { id: string } }>('/api/expenses/:id', async (request, reply) => {
-    await expenseService.deleteExpense(request.params.id);
+    await expenseService.deleteExpense(request.params.id, request.authMember.id);
     return reply.status(204).send();
   });
 
@@ -593,22 +613,22 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       notes?: string | null;
     };
   }>('/api/reimbursements', async (request, reply) => {
-    const reimbursement = await expenseService.recordReimbursement(request.body);
+    const reimbursement = await expenseService.recordReimbursement(request.body, request.authMember.id);
     return reply.status(201).send(reimbursementDto(reimbursement));
   });
 
   app.get<{ Params: { id: string } }>('/api/equipments/:id/reimbursements', async (request) => {
-    const list = await expenseService.listReimbursements(request.params.id);
+    const list = await expenseService.listReimbursements(request.params.id, request.authMember.id);
     return list.map(reimbursementDto);
   });
 
   app.get<{ Params: { id: string } }>('/api/equipments/:id/balances', async (request) => {
-    const balances = await expenseService.equipmentBalances(request.params.id);
+    const balances = await expenseService.equipmentBalances(request.params.id, request.authMember.id);
     return balances.map((b) => ({ memberId: b.memberId, balanceEuros: b.balanceCents / 100 }));
   });
 
   app.get<{ Params: { id: string } }>('/api/equipments/:id/settlement', async (request) => {
-    const plan = await expenseService.settlementPlan(request.params.id);
+    const plan = await expenseService.settlementPlan(request.params.id, request.authMember.id);
     return plan.map((t) => ({
       fromMemberId: t.fromMemberId,
       toMemberId: t.toMemberId,
@@ -619,7 +639,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   // --- Discussions par équipement (fils + messages) ---
 
   app.get<{ Params: { id: string } }>('/api/equipments/:id/threads', async (request) => {
-    const list = await discussionService.listThreads(request.params.id);
+    const list = await discussionService.listThreads(request.params.id, request.authMember.id);
     return list.map(threadSummaryDto);
   });
 
@@ -647,7 +667,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   });
 
   app.get<{ Params: { id: string } }>('/api/threads/:id/messages', async (request) => {
-    const list = await discussionService.listMessages(request.params.id);
+    const list = await discussionService.listMessages(request.params.id, request.authMember.id);
     return list.map(messageDto);
   });
 

@@ -22,8 +22,7 @@ partage des frais façon Tricount.
   créateur** : tout membre du cercle peut la cocher, la renommer, ajouter/modifier/supprimer ses
   points et la supprimer entièrement. Chaque coche garde la trace de qui l'a validée et quand, et le
   créateur reste affiché. Avancement affiché (`3/7`) et remise à zéro en un geste pour réutiliser la
-  checklist à la prochaine sortie. **Hors du cercle, rien n'est visible** : l'API refuse la lecture
-  comme l'écriture, et l'onglet ne propose que les équipements partagés avec l'utilisateur.
+  checklist à la prochaine sortie.
 
 ## Architecture
 
@@ -42,6 +41,7 @@ server/src/
 │   ├── discussion/   # Thread + Message (sous-fils de réponses)
 │   └── checklist/    # Checklist + ChecklistItem (points cochés, traçabilité de la coche)
 ├── application/      # Use cases + ports (interfaces des repositories, Clock, IdGenerator)
+│                     # equipment-access.ts : règle d'accès unique (cercle de l'équipement)
 └── infrastructure/   # Adapters : SQLite (better-sqlite3), HTTP (Fastify), uploads
 web/                  # Front React (Vite) — adapter de présentation
 ```
@@ -62,7 +62,7 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 
 ```bash
 npm install
-npm test              # 220 tests (domaine, application, intégration SQLite + HTTP)
+npm test              # 232 tests (domaine, application, intégration SQLite + HTTP)
 npm run test:coverage # Tests + seuils de couverture (90 % lignes/fonctions, 85 % branches)
 npm run lint          # ESLint (frontières hexagonales + règles React hooks)
 npm run format        # Prettier (format:check en CI)
@@ -87,6 +87,16 @@ Variables d'environnement du serveur :
 
 ## Sécurité
 
+- **Cloisonnement par cercle** : tout ce qui pend à un équipement (réservations, usage, dépenses,
+  soldes, discussions, checklists) n'est lisible et modifiable que par les membres de son cercle. Les
+  vues transverses (liste des équipements, calendrier, alertes d'entretien, historique d'un membre)
+  sont cadrées sur le périmètre du demandeur. La règle est unique et vit dans la couche application
+  (`equipment-access.ts`) ; un test d'intégration la vérifie route par route.
+- **Anti-énumération** : hors du cercle, la ressource ne se contente pas d'être refusée, elle est
+  **masquée** — même code (`404`) et même message que si elle n'existait pas. Une réponse ne permet
+  donc pas de distinguer « cet identifiant n'existe pas » de « il existe mais pas pour vous », y
+  compris sur les gestes réservés à l'auteur d'un fil et sur les notifications d'un autre membre. La
+  trace serveur (`warn`) conserve la vérité pour l'exploitant.
 - **Sessions** : cookies `httpOnly` + `SameSite=Lax` (+ `Secure` en production), tokens hachés en
   base, mots de passe en scrypt avec comparaison à temps constant.
 - **Headers** : `@fastify/helmet` (CSP `default-src 'self'`, `frame-ancestors 'none'`,

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { makeFixture } from './testing/fixture.js';
 import { ReservationService } from './reservation-service.js';
+import { ForbiddenError } from '../domain/shared/domain-error.js';
 
 let f: Awaited<ReturnType<typeof makeFixture>>;
 let service: ReservationService;
@@ -60,8 +61,8 @@ describe('ReservationService', () => {
     expect(conflicts).toHaveLength(0);
   });
 
-  it("refuse un membre sans accès à l'équipement", async () => {
-    await expect(service.reserve({ ...input, memberId: 'm3' })).rejects.toThrow(/accès/i);
+  it("refuse un membre hors du cercle de l'équipement", async () => {
+    await expect(service.reserve({ ...input, memberId: 'm3' })).rejects.toThrow(ForbiddenError);
   });
 
   it('refuse un équipement inexistant', async () => {
@@ -70,16 +71,17 @@ describe('ReservationService', () => {
 
   it('annule une réservation', async () => {
     const { reservation } = await service.reserve(input);
-    await service.cancel(reservation.id);
+    await service.cancel(reservation.id, 'm1');
     expect(await f.reservations.findById(reservation.id)).toBeNull();
   });
 
   it('modifie une réservation sans conflit avec elle-même', async () => {
     const { reservation } = await service.reserve(input);
-    const updated = await service.update(reservation.id, {
-      start: '2026-07-10T09:00:00Z',
-      end: '2026-07-10T13:00:00Z',
-    });
+    const updated = await service.update(
+      reservation.id,
+      { start: '2026-07-10T09:00:00Z', end: '2026-07-10T13:00:00Z' },
+      'm1',
+    );
     expect(updated.reservation.range.start.toISOString()).toBe('2026-07-10T09:00:00.000Z');
     expect(updated.conflicts).toHaveLength(0);
   });
@@ -113,10 +115,19 @@ describe('ReservationService', () => {
     );
   });
 
-  it('calendrier partagé : toutes les réservations de tous les équipements', async () => {
+  it('calendrier partagé : les réservations des équipements du cercle du demandeur', async () => {
     await service.reserve(input);
     await service.reserve({ ...input, memberId: 'm2', start: '2026-07-11T08:00:00Z', end: '2026-07-11T10:00:00Z' });
-    const calendar = await service.calendar();
-    expect(calendar).toHaveLength(2);
+    expect(await service.calendar('m1')).toHaveLength(2);
+    // m3 ne partage aucun équipement : son calendrier est vide.
+    expect(await service.calendar('m3')).toHaveLength(0);
+  });
+
+  it('refuse lecture, modification et annulation à un membre hors du cercle', async () => {
+    const { reservation } = await service.reserve(input);
+    await expect(service.listByEquipment('e1', 'm3')).rejects.toThrow(ForbiddenError);
+    await expect(service.update(reservation.id, { notes: 'pirate' }, 'm3')).rejects.toThrow(ForbiddenError);
+    await expect(service.cancel(reservation.id, 'm3')).rejects.toThrow(ForbiddenError);
+    expect(await f.reservations.findById(reservation.id)).not.toBeNull();
   });
 });

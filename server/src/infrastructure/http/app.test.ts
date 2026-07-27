@@ -402,13 +402,13 @@ describe('API — parcours complet du MVP', () => {
   it('erreurs métier correctement mappées', async () => {
     const { equipment, alice, chloe } = await setupMembersAndEquipment();
 
-    // 400 : membre hors du cercle de l'équipement (Chloé agit via sa propre session)
+    // 404 : membre hors du cercle — la ressource est masquée, pas seulement refusée
     const forbidden = await post(
       '/api/reservations',
       { equipmentId: equipment.id, start: '2026-07-10T08:00:00Z', end: '2026-07-10T10:00:00Z' },
       chloe.cookies,
     );
-    expect(forbidden.statusCode).toBe(400);
+    expect(forbidden.statusCode).toBe(404);
 
     // 400 : cercle avec un membre inconnu
     const unknownMember = await post(
@@ -544,7 +544,7 @@ describe('API — discussions (fils + messages)', () => {
 
     // Chloé (hors cercle) ne peut pas ouvrir de fil.
     const refused = await post('/api/threads', { equipmentId: equipment.id, title: 'X' }, chloe.cookies);
-    expect(refused.statusCode).toBe(400);
+    expect(refused.statusCode).toBe(404);
 
     // Liste des fils avec compteur de messages.
     const threads = await get(`/api/equipments/${equipment.id}/threads`, bruno.cookies);
@@ -612,7 +612,7 @@ describe('API — checklists (checklists + points de contrôle)', () => {
 
     // Chloé (hors cercle) ne peut pas créer de checklist.
     const refused = await post('/api/checklists', { equipmentId: equipment.id, title: 'X' }, chloe.cookies);
-    expect(refused.statusCode).toBe(400);
+    expect(refused.statusCode).toBe(404);
 
     // Liste avec avancement.
     const list = await get(`/api/equipments/${equipment.id}/checklists`, bruno.cookies);
@@ -631,9 +631,9 @@ describe('API — checklists (checklists + points de contrôle)', () => {
       { checklistId: checklist.id, label: 'Pirate' },
       chloe.cookies,
     );
-    expect(addedByOutsider.statusCode).toBe(400);
-    expect((await get(`/api/equipments/${equipment.id}/checklists`, chloe.cookies)).statusCode).toBe(400);
-    expect((await get(`/api/checklists/${checklist.id}/items`, chloe.cookies)).statusCode).toBe(400);
+    expect(addedByOutsider.statusCode).toBe(404);
+    expect((await get(`/api/equipments/${equipment.id}/checklists`, chloe.cookies)).statusCode).toBe(404);
+    expect((await get(`/api/checklists/${checklist.id}/items`, chloe.cookies)).statusCode).toBe(404);
 
     // Cocher est également ouvert à tout le cercle.
     const items = (await get(`/api/checklists/${checklist.id}/items`, bruno.cookies)).json() as { id: string }[];
@@ -654,7 +654,7 @@ describe('API — checklists (checklists + points de contrôle)', () => {
       payload: { checked: true },
       cookies: chloe.cookies,
     });
-    expect(checkedByOutsider.statusCode).toBe(400);
+    expect(checkedByOutsider.statusCode).toBe(404);
 
     // Remise à zéro par un membre du cercle.
     expect((await post(`/api/checklists/${checklist.id}/reset`, {}, bruno.cookies)).statusCode).toBe(204);
@@ -704,7 +704,7 @@ describe('API — checklists (checklists + points de contrôle)', () => {
           cookies: chloe.cookies,
         })
       ).statusCode,
-    ).toBe(400);
+    ).toBe(404);
     expect(
       (
         await app.inject({
@@ -714,7 +714,7 @@ describe('API — checklists (checklists + points de contrôle)', () => {
           cookies: chloe.cookies,
         })
       ).statusCode,
-    ).toBe(400);
+    ).toBe(404);
 
     // Un PUT sans libellé ni coche ne veut rien dire.
     const empty = await app.inject({
@@ -729,7 +729,7 @@ describe('API — checklists (checklists + points de contrôle)', () => {
     expect(
       (await app.inject({ method: 'DELETE', url: `/api/checklist-items/${item.id}`, cookies: chloe.cookies }))
         .statusCode,
-    ).toBe(400);
+    ).toBe(404);
     expect(
       (await app.inject({ method: 'DELETE', url: `/api/checklist-items/${item.id}`, cookies: bruno.cookies }))
         .statusCode,
@@ -737,7 +737,7 @@ describe('API — checklists (checklists + points de contrôle)', () => {
     expect(
       (await app.inject({ method: 'DELETE', url: `/api/checklists/${checklist.id}`, cookies: chloe.cookies }))
         .statusCode,
-    ).toBe(400);
+    ).toBe(404);
     expect(
       (await app.inject({ method: 'DELETE', url: `/api/checklists/${checklist.id}`, cookies: bruno.cookies }))
         .statusCode,
@@ -745,6 +745,275 @@ describe('API — checklists (checklists + points de contrôle)', () => {
     expect(((await get(`/api/equipments/${equipment.id}/checklists`, alice.cookies)).json() as unknown[]).length).toBe(
       0,
     );
+  });
+});
+
+describe('API — cloisonnement par cercle (aucune fuite hors du cercle)', () => {
+  /** Un équipement Alice+Bruno garni de données de chaque type ; Chloé reste dehors. */
+  async function fullyLoadedEquipment() {
+    const ctx = await setupMembersAndEquipment();
+    const { equipment, alice } = ctx;
+    const reservation = (
+      await post(
+        '/api/reservations',
+        { equipmentId: equipment.id, start: '2026-07-10T08:00:00Z', end: '2026-07-10T12:00:00Z' },
+        alice.cookies,
+      )
+    ).json() as { id: string };
+    await post('/api/usage', { equipmentId: equipment.id, meterReading: 100, isMaintenance: true }, alice.cookies);
+    await post('/api/usage', { equipmentId: equipment.id, meterReading: 200 }, alice.cookies);
+    const expense = (
+      await post(
+        '/api/expenses',
+        {
+          equipmentId: equipment.id,
+          label: 'Plein',
+          amountEuros: 90,
+          payerId: alice.id,
+          date: '2026-07-01',
+          category: 'FUEL',
+          split: { type: 'EQUAL' },
+        },
+        alice.cookies,
+      )
+    ).json() as { id: string };
+    const thread = (
+      await post('/api/threads', { equipmentId: equipment.id, title: 'Panne', body: 'Détails' }, alice.cookies)
+    ).json() as { id: string };
+    const checklist = (
+      await post(
+        '/api/checklists',
+        { equipmentId: equipment.id, title: 'Avant utilisation', itemLabels: ['Huile'] },
+        alice.cookies,
+      )
+    ).json() as { id: string };
+    const item = ((await get(`/api/checklists/${checklist.id}/items`, alice.cookies)).json() as { id: string }[])[0]!;
+    return { ...ctx, reservation, expense, thread, checklist, item };
+  }
+
+  it('masque en 404 toutes les routes rattachées à un équipement, en lecture comme en écriture', async () => {
+    const f = await fullyLoadedEquipment();
+    const e = f.equipment.id;
+
+    // Chaque route équipement, avec la session d'un membre hors du cercle.
+    const calls: { method: 'GET' | 'POST' | 'PUT' | 'DELETE'; url: string; payload?: unknown }[] = [
+      // Lectures
+      { method: 'GET', url: `/api/equipments/${e}` },
+      { method: 'GET', url: `/api/equipments/${e}/reservations` },
+      { method: 'GET', url: `/api/equipments/${e}/usage` },
+      { method: 'GET', url: `/api/equipments/${e}/maintenance` },
+      { method: 'GET', url: `/api/equipments/${e}/expenses` },
+      { method: 'GET', url: `/api/equipments/${e}/reimbursements` },
+      { method: 'GET', url: `/api/equipments/${e}/balances` },
+      { method: 'GET', url: `/api/equipments/${e}/settlement` },
+      { method: 'GET', url: `/api/equipments/${e}/threads` },
+      { method: 'GET', url: `/api/threads/${f.thread.id}/messages` },
+      { method: 'GET', url: `/api/equipments/${e}/checklists` },
+      { method: 'GET', url: `/api/checklists/${f.checklist.id}/items` },
+      // Écritures
+      { method: 'PUT', url: `/api/equipments/${e}`, payload: { name: 'Pirate' } },
+      { method: 'DELETE', url: `/api/equipments/${e}` },
+      {
+        method: 'POST',
+        url: '/api/reservations',
+        payload: { equipmentId: e, start: '2026-08-01T08:00:00Z', end: '2026-08-01T10:00:00Z' },
+      },
+      {
+        method: 'POST',
+        url: '/api/reservations/recurring',
+        payload: {
+          equipmentId: e,
+          start: '2026-08-01T08:00:00Z',
+          end: '2026-08-01T10:00:00Z',
+          frequency: 'WEEKLY',
+          until: '2026-08-15',
+        },
+      },
+      { method: 'PUT', url: `/api/reservations/${f.reservation.id}`, payload: { notes: 'pirate' } },
+      { method: 'DELETE', url: `/api/reservations/${f.reservation.id}` },
+      { method: 'POST', url: '/api/usage', payload: { equipmentId: e, meterReading: 300 } },
+      {
+        method: 'POST',
+        url: '/api/expenses',
+        payload: {
+          equipmentId: e,
+          label: 'Pirate',
+          amountEuros: 10,
+          payerId: f.alice.id,
+          date: '2026-07-02',
+          category: 'OTHER',
+          split: { type: 'EQUAL' },
+        },
+      },
+      { method: 'DELETE', url: `/api/expenses/${f.expense.id}` },
+      {
+        method: 'POST',
+        url: '/api/reimbursements',
+        payload: {
+          equipmentId: e,
+          fromMemberId: f.bruno.id,
+          toMemberId: f.alice.id,
+          amountEuros: 5,
+          date: '2026-07-02',
+        },
+      },
+      { method: 'POST', url: '/api/threads', payload: { equipmentId: e, title: 'Pirate' } },
+      { method: 'POST', url: '/api/messages', payload: { threadId: f.thread.id, body: 'Pirate' } },
+      { method: 'POST', url: '/api/checklists', payload: { equipmentId: e, title: 'Pirate' } },
+      { method: 'POST', url: `/api/checklists/${f.checklist.id}/reset`, payload: {} },
+      { method: 'POST', url: '/api/checklist-items', payload: { checklistId: f.checklist.id, label: 'Pirate' } },
+      { method: 'PUT', url: `/api/checklist-items/${f.item.id}`, payload: { checked: true } },
+    ];
+
+    for (const call of calls) {
+      const res = await app.inject({
+        method: call.method,
+        url: call.url,
+        payload: call.payload as Record<string, unknown> | undefined,
+        cookies: f.chloe.cookies,
+      });
+      expect(res.statusCode, `${call.method} ${call.url}`).toBe(404);
+      // Aucun indice sur l'existence de la ressource dans le corps.
+      expect((res.json() as { error: string }).error, `${call.method} ${call.url}`).toMatch(/introuvable/i);
+    }
+
+    // Rien n'a été détruit au passage : l'équipement et ses données sont intacts.
+    expect((await get(`/api/equipments/${e}`, f.alice.cookies)).statusCode).toBe(200);
+    expect(((await get(`/api/equipments/${e}/reservations`, f.alice.cookies)).json() as unknown[]).length).toBe(1);
+    expect(((await get(`/api/equipments/${e}/expenses`, f.alice.cookies)).json() as unknown[]).length).toBe(1);
+  });
+
+  it('cadre les vues globales sur le périmètre du demandeur', async () => {
+    const f = await fullyLoadedEquipment();
+
+    // Vues transverses : pas d'erreur, mais rien du cercle des autres.
+    for (const url of ['/api/equipments', '/api/calendar', '/api/alerts', `/api/members/${f.alice.id}/usage`]) {
+      const res = await get(url, f.chloe.cookies);
+      expect(res.statusCode, url).toBe(200);
+      expect(res.json(), url).toEqual([]);
+    }
+
+    // Les membres du cercle, eux, voient tout.
+    expect(((await get('/api/equipments', f.bruno.cookies)).json() as unknown[]).length).toBe(1);
+    expect(((await get('/api/calendar', f.bruno.cookies)).json() as unknown[]).length).toBe(1);
+    expect(((await get('/api/alerts', f.bruno.cookies)).json() as unknown[]).length).toBe(1);
+    expect(((await get(`/api/members/${f.alice.id}/usage`, f.bruno.cookies)).json() as unknown[]).length).toBe(2);
+  });
+
+  it('rend une réponse indiscernable entre ressource inexistante et ressource d’un autre cercle', async () => {
+    const f = await fullyLoadedEquipment();
+    // Un identifiant qui n'existe nulle part, à comparer aux identifiants réels d'un autre cercle.
+    const INCONNU = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+    const paires: { réel: string; inexistant: string }[] = [
+      { réel: `/api/equipments/${f.equipment.id}`, inexistant: `/api/equipments/${INCONNU}` },
+      {
+        réel: `/api/equipments/${f.equipment.id}/checklists`,
+        inexistant: `/api/equipments/${INCONNU}/checklists`,
+      },
+      { réel: `/api/threads/${f.thread.id}/messages`, inexistant: `/api/threads/${INCONNU}/messages` },
+      { réel: `/api/checklists/${f.checklist.id}/items`, inexistant: `/api/checklists/${INCONNU}/items` },
+    ];
+
+    for (const { réel, inexistant } of paires) {
+      const surRéel = await get(réel, f.chloe.cookies);
+      const surInexistant = await get(inexistant, f.chloe.cookies);
+      // Même code et même forme de message : l'identifiant seul change, comme pour un vrai 404.
+      expect(surRéel.statusCode, réel).toBe(surInexistant.statusCode);
+      const attendu = (surInexistant.json() as { error: string }).error.replace(INCONNU, '<id>');
+      const obtenu = (surRéel.json() as { error: string }).error
+        .replace(f.equipment.id, '<id>')
+        .replace(f.thread.id, '<id>')
+        .replace(f.checklist.id, '<id>');
+      expect(obtenu, réel).toBe(attendu);
+    }
+
+    // Écritures : même masquage, y compris sur les gestes réservés à l'auteur (qui répondaient 401).
+    const écritures: { method: 'PUT' | 'DELETE'; réel: string; inexistant: string; payload?: unknown }[] = [
+      {
+        method: 'PUT',
+        réel: `/api/threads/${f.thread.id}`,
+        inexistant: `/api/threads/${INCONNU}`,
+        payload: { title: 'Pirate' },
+      },
+      { method: 'DELETE', réel: `/api/threads/${f.thread.id}`, inexistant: `/api/threads/${INCONNU}` },
+      {
+        method: 'DELETE',
+        réel: `/api/reservations/${f.reservation.id}`,
+        inexistant: `/api/reservations/${INCONNU}`,
+      },
+      { method: 'DELETE', réel: `/api/expenses/${f.expense.id}`, inexistant: `/api/expenses/${INCONNU}` },
+      {
+        method: 'PUT',
+        réel: `/api/checklist-items/${f.item.id}`,
+        inexistant: `/api/checklist-items/${INCONNU}`,
+        payload: { checked: true },
+      },
+    ];
+
+    for (const { method, réel, inexistant, payload } of écritures) {
+      const surRéel = await app.inject({
+        method,
+        url: réel,
+        payload: payload as Record<string, unknown> | undefined,
+        cookies: f.chloe.cookies,
+      });
+      const surInexistant = await app.inject({
+        method,
+        url: inexistant,
+        payload: payload as Record<string, unknown> | undefined,
+        cookies: f.chloe.cookies,
+      });
+      expect(surRéel.statusCode, `${method} ${réel}`).toBe(404);
+      expect(surRéel.statusCode, `${method} ${réel}`).toBe(surInexistant.statusCode);
+      const attendu = (surInexistant.json() as { error: string }).error.replace(INCONNU, '<id>');
+      const obtenu = (surRéel.json() as { error: string }).error
+        .replace(f.thread.id, '<id>')
+        .replace(f.reservation.id, '<id>')
+        .replace(f.expense.id, '<id>')
+        .replace(f.item.id, '<id>');
+      expect(obtenu, `${method} ${réel}`).toBe(attendu);
+    }
+
+    // Rien n'a été modifié ni supprimé par ces sondages.
+    expect((await get(`/api/threads/${f.thread.id}/messages`, f.alice.cookies)).statusCode).toBe(200);
+    expect(
+      ((await get(`/api/equipments/${f.equipment.id}/expenses`, f.alice.cookies)).json() as unknown[]).length,
+    ).toBe(1);
+  });
+
+  it('masque aussi la notification d’un autre membre', async () => {
+    const { equipment, alice, bruno, chloe } = await setupMembersAndEquipment();
+    await post('/api/threads', { equipmentId: equipment.id, title: 'Sujet' }, alice.cookies);
+    const notif = ((await get('/api/notifications', bruno.cookies)).json() as { id: string }[])[0]!;
+    const INCONNU = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+
+    const surRéelle = await post(`/api/notifications/${notif.id}/read`, {}, chloe.cookies);
+    const surInexistante = await post(`/api/notifications/${INCONNU}/read`, {}, chloe.cookies);
+    expect(surRéelle.statusCode).toBe(404);
+    expect(surRéelle.statusCode).toBe(surInexistante.statusCode);
+    expect((surRéelle.json() as { error: string }).error.replace(notif.id, '<id>')).toBe(
+      (surInexistante.json() as { error: string }).error.replace(INCONNU, '<id>'),
+    );
+    // Elle est restée non lue pour son destinataire.
+    expect(((await get('/api/notifications/unread-count', bruno.cookies)).json() as { count: number }).count).toBe(1);
+  });
+
+  it('refuse de créer un équipement dont on ne fait pas partie', async () => {
+    const { alice, bruno } = await setupMembersAndEquipment();
+    const res = await post(
+      '/api/equipments',
+      {
+        name: 'Remorque fantôme',
+        category: 'Transport',
+        acquisitionDate: '2026-01-15',
+        purchaseValueEuros: 1200,
+        meterUnit: 'KILOMETERS',
+        memberIds: [bruno.id],
+        maintenanceThreshold: null,
+      },
+      alice.cookies,
+    );
+    expect(res.statusCode).toBe(400);
   });
 });
 

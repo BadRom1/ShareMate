@@ -202,23 +202,29 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
             </div>
             <span className="muted">Cercle de partage : qui utilise cet équipement ?</span>
             <div className="row">
-              {members.map((m) => (
-                <label key={m.id} className="check">
-                  <input
-                    type="checkbox"
-                    checked={form.memberIds.includes(m.id)}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        memberIds: e.target.checked
-                          ? [...form.memberIds, m.id]
-                          : form.memberIds.filter((id) => id !== m.id),
-                      })
-                    }
-                  />
-                  {m.name}
-                </label>
-              ))}
+              {members.map((m) => {
+                // À la création, le créateur reste dans le cercle : sinon l'équipement lui serait invisible.
+                const locked = !editing && m.id === currentMemberId;
+                return (
+                  <label key={m.id} className="check">
+                    <input
+                      type="checkbox"
+                      checked={form.memberIds.includes(m.id)}
+                      disabled={locked}
+                      title={locked ? 'Vous faites partie du cercle des équipements que vous créez.' : undefined}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          memberIds: e.target.checked
+                            ? [...form.memberIds, m.id]
+                            : form.memberIds.filter((id) => id !== m.id),
+                        })
+                      }
+                    />
+                    {m.name}
+                  </label>
+                );
+              })}
             </div>
             <div className="row" style={{ alignItems: 'flex-end' }}>
               <label className="field">
@@ -283,13 +289,12 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
       )}
 
       {equipments.length === 0 && !showForm && (
-        <p className="empty">Aucun équipement pour le moment. Ajoutez votre minipelle, utilitaire, bétonnière…</p>
+        <p className="empty">Aucun équipement partagé avec vous. Ajoutez votre minipelle, utilitaire, bétonnière…</p>
       )}
 
       <div className="grid">
         {equipments.map((e) => {
           const status = statuses[e.id];
-          const mine = e.memberIds.includes(currentMemberId);
           return (
             <div className="card" key={e.id}>
               <h3>{e.name}</h3>
@@ -308,8 +313,7 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
                   </span>
                 ) : (
                   <span className="badge warn">Aucun relevé</span>
-                )}{' '}
-                {!mine && <span className="badge warn">Je n'en fais pas partie</span>}
+                )}
               </p>
               <p className="muted">Cercle : {e.memberIds.map(memberName).join(', ')}</p>
               <div className="icon-group" style={{ display: 'flex', justifyContent: 'flex-end' }}>

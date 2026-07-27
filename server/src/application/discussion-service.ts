@@ -1,6 +1,7 @@
 import { Message } from '../domain/discussion/message.js';
 import { Thread } from '../domain/discussion/thread.js';
 import { DomainError, NotFoundError, UnauthorizedError } from '../domain/shared/domain-error.js';
+import { equipmentForMember } from './equipment-access.js';
 import type { Equipment } from '../domain/equipment/equipment.js';
 import type {
   Clock,
@@ -81,7 +82,8 @@ export class DiscussionService {
     return thread;
   }
 
-  async listThreads(equipmentId: string): Promise<ThreadSummary[]> {
+  async listThreads(equipmentId: string, requesterId: string): Promise<ThreadSummary[]> {
+    await this.getEquipmentForMember(equipmentId, requesterId);
     const threads = await this.threads.findByEquipmentId(equipmentId);
     return Promise.all(
       threads.map(async (thread) => ({ thread, messageCount: await this.messages.countByThreadId(thread.id) })),
@@ -89,7 +91,7 @@ export class DiscussionService {
   }
 
   async renameThread(id: string, requesterId: string, title: string): Promise<Thread> {
-    const thread = await this.getThread(id);
+    const thread = await this.getThreadForMember(id, requesterId);
     this.assertAuthor(thread.authorId, requesterId, 'Seul l’auteur peut renommer ce fil.');
     const renamed = thread.rename(title, this.clock.now());
     await this.threads.save(renamed);
@@ -97,7 +99,7 @@ export class DiscussionService {
   }
 
   async deleteThread(id: string, requesterId: string): Promise<void> {
-    const thread = await this.getThread(id);
+    const thread = await this.getThreadForMember(id, requesterId);
     this.assertAuthor(thread.authorId, requesterId, 'Seul l’auteur peut supprimer ce fil.');
     // Supprime d'abord les messages (le cascade SQL couvre aussi, mais on reste cohérent en in-memory).
     for (const message of await this.messages.findByThreadId(id)) {
@@ -139,12 +141,13 @@ export class DiscussionService {
     return message;
   }
 
-  async listMessages(threadId: string): Promise<Message[]> {
+  async listMessages(threadId: string, requesterId: string): Promise<Message[]> {
+    await this.getThreadForMember(threadId, requesterId);
     return this.messages.findByThreadId(threadId);
   }
 
   async editMessage(id: string, requesterId: string, body: string): Promise<Message> {
-    const message = await this.getMessage(id);
+    const message = await this.getMessageForMember(id, requesterId);
     this.assertAuthor(message.authorId, requesterId, 'Seul l’auteur peut modifier ce message.');
     const edited = message.edit(body, this.clock.now());
     await this.messages.save(edited);
@@ -152,7 +155,7 @@ export class DiscussionService {
   }
 
   async deleteMessage(id: string, requesterId: string): Promise<void> {
-    const message = await this.getMessage(id);
+    const message = await this.getMessageForMember(id, requesterId);
     this.assertAuthor(message.authorId, requesterId, 'Seul l’auteur peut supprimer ce message.');
     // Supprime aussi les réponses (et leurs propres réponses) pour ne pas laisser de sous-fils orphelins.
     await this.deleteWithReplies(message.threadId, id);
@@ -196,13 +199,28 @@ export class DiscussionService {
     return message;
   }
 
-  private async getEquipmentForMember(equipmentId: string, memberId: string): Promise<Equipment> {
-    const equipment = await this.equipments.findById(equipmentId);
-    if (!equipment) throw new NotFoundError(`Équipement introuvable : ${equipmentId}`);
-    if (!equipment.canBeUsedBy(memberId)) {
-      throw new DomainError("Seuls les membres du cercle de l'équipement peuvent participer à sa discussion.");
-    }
-    return equipment;
+  /**
+   * Fil demandé, une fois le demandeur reconnu dans le cercle de son équipement. Le refus
+   * emprunte le message d'absence du fil : hors du cercle, il n'existe pas.
+   */
+  private async getThreadForMember(id: string, memberId: string): Promise<Thread> {
+    const thread = await this.getThread(id);
+    await this.getEquipmentForMember(thread.equipmentId, memberId, `Fil introuvable : ${id}`);
+    return thread;
+  }
+
+  /** Message demandé, une fois le demandeur reconnu dans le cercle du fil qui le porte. */
+  private async getMessageForMember(id: string, memberId: string): Promise<Message> {
+    const absent = `Message introuvable : ${id}`;
+    const message = await this.messages.findById(id);
+    if (!message) throw new NotFoundError(absent);
+    const thread = await this.getThread(message.threadId);
+    await this.getEquipmentForMember(thread.equipmentId, memberId, absent);
+    return message;
+  }
+
+  private async getEquipmentForMember(equipmentId: string, memberId: string, absent?: string): Promise<Equipment> {
+    return equipmentForMember(this.equipments, equipmentId, memberId, absent);
   }
 
   private assertAuthor(authorId: string, requesterId: string, message: string): void {

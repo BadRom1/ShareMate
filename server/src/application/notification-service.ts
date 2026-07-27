@@ -2,7 +2,7 @@ import { Notification } from '../domain/notification/notification.js';
 import { NotificationPreference } from '../domain/notification/preference.js';
 import { NOTIFICATION_TYPES } from '../domain/notification/notification-type.js';
 import type { NotificationType } from '../domain/notification/notification-type.js';
-import { NotFoundError, UnauthorizedError } from '../domain/shared/domain-error.js';
+import { ForbiddenError, NotFoundError } from '../domain/shared/domain-error.js';
 import type {
   Clock,
   DeviceTokenRepository,
@@ -86,12 +86,15 @@ export class NotificationService implements Notifier {
   }
 
   async markRead(id: string, memberId: string): Promise<void> {
+    // La notification d'un autre membre est traitée comme inexistante : même réponse
+    // qu'un identifiant inconnu, sinon la distinction permettrait de les énumérer.
+    const absent = `Notification introuvable : ${id}`;
     const existing = await this.notifications.findById(id);
     if (!existing) {
-      throw new NotFoundError(`Notification introuvable : ${id}`);
+      throw new NotFoundError(absent);
     }
     if (existing.recipientId !== memberId) {
-      throw new UnauthorizedError('Notification appartenant à un autre membre.');
+      throw new ForbiddenError(absent);
     }
     await this.notifications.markRead(id);
   }

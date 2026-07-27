@@ -4,7 +4,8 @@ import { findConflicts } from '../domain/reservation/reservation-conflict.js';
 import { generateOccurrences } from '../domain/reservation/recurrence.js';
 import type { RecurrenceFrequency } from '../domain/reservation/recurrence.js';
 import { TimeRange } from '../domain/shared/time-range.js';
-import { DomainError, NotFoundError } from '../domain/shared/domain-error.js';
+import { NotFoundError } from '../domain/shared/domain-error.js';
+import { accessibleEquipmentIds, equipmentForMember } from './equipment-access.js';
 import type {
   Clock,
   EquipmentRepository,
@@ -46,13 +47,7 @@ export class ReservationService {
   ) {}
 
   async reserve(input: ReserveInput): Promise<ReserveResult> {
-    const equipment = await this.equipments.findById(input.equipmentId);
-    if (!equipment) {
-      throw new NotFoundError(`Équipement introuvable : ${input.equipmentId}`);
-    }
-    if (!equipment.canBeUsedBy(input.memberId)) {
-      throw new DomainError(`Le membre ${input.memberId} n'a pas accès à cet équipement.`);
-    }
+    const equipment = await equipmentForMember(this.equipments, input.equipmentId, input.memberId);
     const reservation = Reservation.create({
       id: this.idGenerator.next(),
       equipmentId: input.equipmentId,
@@ -88,13 +83,7 @@ export class ReservationService {
 
   /** Crée une série de réservations répétées ; chaque occurrence signale ses conflits. */
   async reserveRecurring(input: ReserveInput, recurrence: RecurrenceInput): Promise<ReserveResult[]> {
-    const equipment = await this.equipments.findById(input.equipmentId);
-    if (!equipment) {
-      throw new NotFoundError(`Équipement introuvable : ${input.equipmentId}`);
-    }
-    if (!equipment.canBeUsedBy(input.memberId)) {
-      throw new DomainError(`Le membre ${input.memberId} n'a pas accès à cet équipement.`);
-    }
+    await equipmentForMember(this.equipments, input.equipmentId, input.memberId);
     const until = /^\d{4}-\d{2}-\d{2}$/.test(recurrence.until)
       ? new Date(`${recurrence.until}T23:59:59.999`)
       : new Date(recurrence.until);
@@ -125,11 +114,9 @@ export class ReservationService {
   async update(
     id: string,
     changes: { start?: string; end?: string; status?: ReservationStatus; notes?: string | null },
+    requesterId: string,
   ): Promise<ReserveResult> {
-    const existing = await this.reservations.findById(id);
-    if (!existing) {
-      throw new NotFoundError(`Réservation introuvable : ${id}`);
-    }
+    const existing = await this.getReservationForMember(id, requesterId);
     const updated = Reservation.create({
       id: existing.id,
       equipmentId: existing.equipmentId,
@@ -148,20 +135,33 @@ export class ReservationService {
     return { reservation: updated, conflicts };
   }
 
-  async cancel(id: string): Promise<void> {
-    const existing = await this.reservations.findById(id);
-    if (!existing) {
-      throw new NotFoundError(`Réservation introuvable : ${id}`);
-    }
+  async cancel(id: string, requesterId: string): Promise<void> {
+    await this.getReservationForMember(id, requesterId);
     await this.reservations.delete(id);
   }
 
-  async listByEquipment(equipmentId: string): Promise<Reservation[]> {
+  async listByEquipment(equipmentId: string, requesterId: string): Promise<Reservation[]> {
+    await equipmentForMember(this.equipments, equipmentId, requesterId);
     return this.reservations.findByEquipmentId(equipmentId);
   }
 
-  /** Vue calendrier partagée : réservations de tous les équipements. */
-  async calendar(): Promise<Reservation[]> {
-    return this.reservations.findAll();
+  /** Vue calendrier partagée, cadrée sur les équipements du cercle du demandeur. */
+  async calendar(requesterId: string): Promise<Reservation[]> {
+    const accessible = await accessibleEquipmentIds(this.equipments, requesterId);
+    return (await this.reservations.findAll()).filter((r) => accessible.has(r.equipmentId));
+  }
+
+  /**
+   * Réservation demandée, à condition que le demandeur partage le cercle de son équipement.
+   * Le refus emprunte le message d'absence de la réservation : hors du cercle, elle n'existe pas.
+   */
+  private async getReservationForMember(id: string, requesterId: string): Promise<Reservation> {
+    const absent = `Réservation introuvable : ${id}`;
+    const existing = await this.reservations.findById(id);
+    if (!existing) {
+      throw new NotFoundError(absent);
+    }
+    await equipmentForMember(this.equipments, existing.equipmentId, requesterId, absent);
+    return existing;
   }
 }

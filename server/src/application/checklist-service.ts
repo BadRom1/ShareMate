@@ -1,6 +1,7 @@
 import { Checklist } from '../domain/checklist/checklist.js';
 import { ChecklistItem } from '../domain/checklist/checklist-item.js';
-import { DomainError, NotFoundError } from '../domain/shared/domain-error.js';
+import { NotFoundError } from '../domain/shared/domain-error.js';
+import { equipmentForMember } from './equipment-access.js';
 import type { ChecklistItemRepository, ChecklistRepository, Clock, EquipmentRepository, IdGenerator } from './ports.js';
 
 export interface CreateChecklistInput {
@@ -164,27 +165,27 @@ export class ChecklistService {
     return checklist;
   }
 
-  /** Checklist demandée, une fois le demandeur reconnu dans le cercle de son équipement. */
-  private async getChecklistForMember(id: string, memberId: string): Promise<Checklist> {
+  /**
+   * Checklist demandée, une fois le demandeur reconnu dans le cercle de son équipement.
+   * `absent` masque le refus : hors du cercle, la ressource se comporte comme inexistante.
+   */
+  private async getChecklistForMember(id: string, memberId: string, absent?: string): Promise<Checklist> {
     const checklist = await this.getChecklist(id);
-    await this.assertInCircle(checklist.equipmentId, memberId);
+    await this.assertInCircle(checklist.equipmentId, memberId, absent ?? `Checklist introuvable : ${id}`);
     return checklist;
   }
 
   /** Point demandé (et sa checklist), une fois le demandeur reconnu dans le cercle. */
   private async getItemForMember(id: string, memberId: string): Promise<{ item: ChecklistItem; checklist: Checklist }> {
+    const absent = `Point de contrôle introuvable : ${id}`;
     const item = await this.items.findById(id);
-    if (!item) throw new NotFoundError(`Point de contrôle introuvable : ${id}`);
-    return { item, checklist: await this.getChecklistForMember(item.checklistId, memberId) };
+    if (!item) throw new NotFoundError(absent);
+    return { item, checklist: await this.getChecklistForMember(item.checklistId, memberId, absent) };
   }
 
   /** Tout accès — lecture comme écriture — exige d'appartenir au cercle de l'équipement. */
-  private async assertInCircle(equipmentId: string, memberId: string): Promise<void> {
-    const equipment = await this.equipments.findById(equipmentId);
-    if (!equipment) throw new NotFoundError(`Équipement introuvable : ${equipmentId}`);
-    if (!equipment.canBeUsedBy(memberId)) {
-      throw new DomainError("Seuls les membres du cercle de l'équipement peuvent gérer ses checklists.");
-    }
+  private async assertInCircle(equipmentId: string, memberId: string, absent?: string): Promise<void> {
+    await equipmentForMember(this.equipments, equipmentId, memberId, absent);
   }
 }
 
