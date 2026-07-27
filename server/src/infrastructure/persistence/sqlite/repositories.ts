@@ -984,8 +984,8 @@ export class SqlitePushSubscriptionRepository implements PushSubscriptionReposit
       .run(subscription.endpoint, subscription.memberId, subscription.p256dh, subscription.auth);
   }
 
-  async deleteByEndpoint(endpoint: string): Promise<void> {
-    this.db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint);
+  async deleteByEndpoint(memberId: string, endpoint: string): Promise<void> {
+    this.db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ? AND member_id = ?').run(endpoint, memberId);
   }
 }
 
@@ -1010,7 +1010,7 @@ export class SqliteDeviceTokenRepository implements DeviceTokenRepository {
       .run(token.token, token.memberId, token.platform);
   }
 
-  async deleteByToken(token: string): Promise<void> {
-    this.db.prepare('DELETE FROM device_tokens WHERE token = ?').run(token);
+  async deleteByToken(memberId: string, token: string): Promise<void> {
+    this.db.prepare('DELETE FROM device_tokens WHERE token = ? AND member_id = ?').run(token, memberId);
   }
 }

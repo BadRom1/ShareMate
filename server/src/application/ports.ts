@@ -166,7 +166,12 @@ export interface WebPushSubscription {
 export interface PushSubscriptionRepository {
   findByMember(memberId: string): Promise<WebPushSubscription[]>;
   save(subscription: WebPushSubscription): Promise<void>;
-  deleteByEndpoint(endpoint: string): Promise<void>;
+  /**
+   * Supprime cet endpoint s'il appartient à ce membre, sans effet sinon. L'endpoint est le seul
+   * identifiant d'un abonnement et il circule : sans la condition de propriété, le connaître
+   * suffisait à couper les alertes push de son titulaire.
+   */
+  deleteByEndpoint(memberId: string, endpoint: string): Promise<void>;
 }
 
 /** Jeton d'appareil FCM (app native). */
@@ -179,7 +184,8 @@ export interface DeviceToken {
 export interface DeviceTokenRepository {
   findByMember(memberId: string): Promise<DeviceToken[]>;
   save(token: DeviceToken): Promise<void>;
-  deleteByToken(token: string): Promise<void>;
+  /** Supprime ce jeton s'il appartient à ce membre, sans effet sinon (cf. `deleteByEndpoint`). */
+  deleteByToken(memberId: string, token: string): Promise<void>;
 }
 
 export interface CredentialRepository {

@@ -68,8 +68,8 @@ export class NotificationService implements Notifier {
       subs.length ? this.pushSender.sendWebPush(subs, payload) : Promise.resolve([]),
       tokens.length ? this.pushSender.sendFcm(tokens, payload) : Promise.resolve([]),
     ]);
-    await Promise.all(webFailures.map((f) => this.pushSubscriptions.deleteByEndpoint(f.id)));
-    await Promise.all(fcmFailures.map((f) => this.deviceTokens.deleteByToken(f.id)));
+    await Promise.all(webFailures.map((f) => this.pushSubscriptions.deleteByEndpoint(memberId, f.id)));
+    await Promise.all(fcmFailures.map((f) => this.deviceTokens.deleteByToken(memberId, f.id)));
   }
 
   private async preferenceFor(memberId: string, type: NotificationType): Promise<NotificationPreference> {
@@ -123,15 +123,23 @@ export class NotificationService implements Notifier {
     await this.pushSubscriptions.save({ ...sub, memberId });
   }
 
-  async unsubscribeWebPush(endpoint: string): Promise<void> {
-    await this.pushSubscriptions.deleteByEndpoint(endpoint);
+  /**
+   * Désabonne un canal du membre. L'endpoint (comme le jeton d'appareil) est un identifiant qui
+   * circule — il transite par le service de push, il apparaît dans les journaux — et il ne prouve
+   * rien : seul le rapprochement avec la session dit qui a le droit de couper ce canal. Sans lui,
+   * le connaître suffisait à faire taire les alertes d'un tiers, à commencer par celles qui
+   * signalent son éviction d'un cercle. Le résultat est le même que l'endpoint ait existé ou non :
+   * la réponse ne doit pas dire à qui il appartient.
+   */
+  async unsubscribeWebPush(memberId: string, endpoint: string): Promise<void> {
+    await this.pushSubscriptions.deleteByEndpoint(memberId, endpoint);
   }
 
   async registerDeviceToken(memberId: string, token: string, platform: string): Promise<void> {
     await this.deviceTokens.save({ token, memberId, platform });
   }
 
-  async unregisterDeviceToken(token: string): Promise<void> {
-    await this.deviceTokens.deleteByToken(token);
+  async unregisterDeviceToken(memberId: string, token: string): Promise<void> {
+    await this.deviceTokens.deleteByToken(memberId, token);
   }
 }

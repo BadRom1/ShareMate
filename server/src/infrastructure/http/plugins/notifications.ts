@@ -95,7 +95,7 @@ export const notificationRoutes: FastifyPluginAsync<NotificationRoutesOptions> =
     '/api/notifications/subscriptions',
     { schema: { body: object({ endpoint }, ['endpoint']) } },
     async (request, reply) => {
-      await notificationService.unsubscribeWebPush(request.body.endpoint);
+      await notificationService.unsubscribeWebPush(request.authMember.id, request.body.endpoint);
       return reply.status(204).send();
     },
   );
@@ -117,7 +117,7 @@ export const notificationRoutes: FastifyPluginAsync<NotificationRoutesOptions> =
     '/api/notifications/device-tokens',
     { schema: { body: object({ token: text(1024) }, ['token']) } },
     async (request, reply) => {
-      await notificationService.unregisterDeviceToken(request.body.token);
+      await notificationService.unregisterDeviceToken(request.authMember.id, request.body.token);
       return reply.status(204).send();
     },
   );

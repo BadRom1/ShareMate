@@ -1582,8 +1582,8 @@ describe('API — cloisonnement des comptes (annuaire, invitations, sessions)', 
 });
 
 describe('API — notifications', () => {
-  async function openThread(equipmentId: string, cookies: Cookies) {
-    const res = await post('/api/threads', { equipmentId, title: 'Sujet' }, cookies);
+  async function openThread(equipmentId: string, cookies: Cookies, target: FastifyInstance = app) {
+    const res = await post('/api/threads', { equipmentId, title: 'Sujet' }, cookies, target);
     return (res.json() as { id: string }).id;
   }
 
@@ -1628,6 +1628,55 @@ describe('API — notifications', () => {
     const res = await get('/api/notifications/vapid-public-key', alice.cookies);
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ publicKey: null });
+  });
+
+  it('un canal push ne se coupe que par son propriétaire', async () => {
+    // Les cibles réellement poussées : seul juge de ce qui reste branché.
+    const poussés: string[] = [];
+    const pushApp = await buildTestApp({
+      pushSender: {
+        async sendWebPush(subs) {
+          poussés.push(...subs.map((s) => s.endpoint));
+          return [];
+        },
+        async sendFcm(tokens) {
+          poussés.push(...tokens.map((t) => t.token));
+          return [];
+        },
+      },
+    });
+    const { equipment, alice, bruno } = await setupMembersAndEquipment(pushApp);
+    const endpoint = 'https://push.example.test/abonnement-d-alice';
+    const token = 'jeton-d-alice';
+    const abonnement = { endpoint, keys: { p256dh: 'p', auth: 'a' } };
+    expect((await post('/api/notifications/subscriptions', abonnement, alice.cookies, pushApp)).statusCode).toBe(201);
+    expect((await post('/api/notifications/device-tokens', { token }, alice.cookies, pushApp)).statusCode).toBe(201);
+
+    // Bruno connaît l'endpoint et le jeton (ils circulent) : les connaître ne vaut pas le droit.
+    // 204 dans les deux cas, pour ne pas faire de la réponse un oracle sur leur existence.
+    for (const [url, payload] of [
+      ['/api/notifications/subscriptions', { endpoint }],
+      ['/api/notifications/device-tokens', { token }],
+    ] as const) {
+      const res = await pushApp.inject({ method: 'DELETE', url, payload, cookies: bruno.cookies });
+      expect(res.statusCode).toBe(204);
+    }
+
+    // Alice reçoit toujours ses alertes : ses deux canaux ont survécu à la tentative de Bruno.
+    await openThread(equipment.id, bruno.cookies, pushApp);
+    expect(poussés).toEqual([endpoint, token]);
+
+    // Alice, elle, coupe bien ses propres canaux.
+    poussés.length = 0;
+    for (const [url, payload] of [
+      ['/api/notifications/subscriptions', { endpoint }],
+      ['/api/notifications/device-tokens', { token }],
+    ] as const) {
+      expect((await pushApp.inject({ method: 'DELETE', url, payload, cookies: alice.cookies })).statusCode).toBe(204);
+    }
+    await openThread(equipment.id, bruno.cookies, pushApp);
+    expect(poussés).toEqual([]);
+    await pushApp.close();
   });
 });
 

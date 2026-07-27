@@ -304,8 +304,10 @@ export class InMemoryPushSubscriptionRepository implements PushSubscriptionRepos
   async save(subscription: WebPushSubscription) {
     this.items.set(subscription.endpoint, subscription);
   }
-  async deleteByEndpoint(endpoint: string) {
-    this.items.delete(endpoint);
+  async deleteByEndpoint(memberId: string, endpoint: string) {
+    if (this.items.get(endpoint)?.memberId === memberId) {
+      this.items.delete(endpoint);
+    }
   }
 }
 
@@ -317,8 +319,10 @@ export class InMemoryDeviceTokenRepository implements DeviceTokenRepository {
   async save(token: DeviceToken) {
     this.items.set(token.token, token);
   }
-  async deleteByToken(token: string) {
-    this.items.delete(token);
+  async deleteByToken(memberId: string, token: string) {
+    if (this.items.get(token)?.memberId === memberId) {
+      this.items.delete(token);
+    }
   }
 }
 
