@@ -46,6 +46,19 @@ export async function equipmentsForMember(equipments: EquipmentRepository, membe
   return (await equipments.findAll()).filter((e) => e.canBeUsedBy(memberId));
 }
 
+/**
+ * Membres avec lesquels `memberId` partage au moins un cercle, lui-même compris. Étend la règle
+ * d'accès aux gestes qui visent une personne et non un équipement (annuaire, invitation) : hors de
+ * cet ensemble, un membre n'a aucune raison de savoir qu'un autre existe.
+ */
+export async function circleMemberIds(equipments: EquipmentRepository, memberId: string): Promise<Set<string>> {
+  const ids = new Set<string>([memberId]);
+  for (const equipment of await equipmentsForMember(equipments, memberId)) {
+    for (const id of equipment.memberIds) ids.add(id);
+  }
+  return ids;
+}
+
 /** Identifiants des équipements accessibles, pour filtrer une liste hétérogène. */
 export async function accessibleEquipmentIds(equipments: EquipmentRepository, memberId: string): Promise<Set<string>> {
   return new Set((await equipmentsForMember(equipments, memberId)).map((e) => e.id));

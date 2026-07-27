@@ -19,6 +19,15 @@ export interface Member {
   email: string | null;
 }
 
+/**
+ * Membre de l'annuaire (cadré sur le périmètre du demandeur). `hasPassword` distingue un compte
+ * déjà ouvert d'un compte en attente de première connexion, seul destinataire possible d'un lien
+ * d'invitation.
+ */
+export interface DirectoryMember extends Member {
+  hasPassword: boolean;
+}
+
 export type MeterUnit = 'HOURS' | 'KILOMETERS';
 
 /** Un équipement porte son cercle d'utilisateurs (`memberIds`). */
@@ -261,12 +270,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ password }),
     }),
+  // Le changement de mot de passe révoque toutes les sessions du membre : la réponse en rouvre
+  // une, dont le jeton doit remplacer l'ancien côté natif.
   changePassword: (currentPassword: string, newPassword: string) =>
-    request<void>('/api/auth/password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
+    authRequest('/api/auth/password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
 
-  listMembers: () => request<Member[]>('/api/members'),
+  listMembers: () => request<DirectoryMember[]>('/api/members'),
   createMember: (input: { name: string; email?: string }) =>
-    request<Member & { inviteCode: string }>('/api/members', { method: 'POST', body: JSON.stringify(input) }),
+    request<DirectoryMember & { inviteCode: string }>('/api/members', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   regenerateInvite: (memberId: string) =>
     request<{ inviteCode: string }>(`/api/members/${memberId}/invite`, { method: 'POST', body: JSON.stringify({}) }),
 

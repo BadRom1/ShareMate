@@ -39,30 +39,37 @@ import type {
   WebPushSubscription,
 } from '../../../application/ports.js';
 
+interface MemberRow {
+  id: string;
+  name: string;
+  email: string | null;
+  invited_by: string | null;
+}
+
 export class SqliteMemberRepository implements MemberRepository {
   constructor(private readonly db: SqliteDb) {}
 
+  private toEntity(row: MemberRow): Member {
+    return Member.create({ id: row.id, name: row.name, email: row.email, invitedById: row.invited_by });
+  }
+
   async findById(id: string): Promise<Member | null> {
-    const row = this.db.prepare('SELECT * FROM members WHERE id = ?').get(id) as
-      { id: string; name: string; email: string | null } | undefined;
-    return row ? Member.create(row) : null;
+    const row = this.db.prepare('SELECT * FROM members WHERE id = ?').get(id) as MemberRow | undefined;
+    return row ? this.toEntity(row) : null;
   }
 
   async findAll(): Promise<Member[]> {
-    const rows = this.db.prepare('SELECT * FROM members ORDER BY name').all() as {
-      id: string;
-      name: string;
-      email: string | null;
-    }[];
-    return rows.map((r) => Member.create(r));
+    const rows = this.db.prepare('SELECT * FROM members ORDER BY name').all() as MemberRow[];
+    return rows.map((r) => this.toEntity(r));
   }
 
   async save(member: Member): Promise<void> {
     this.db
       .prepare(
-        'INSERT INTO members (id, name, email) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, email = excluded.email',
+        `INSERT INTO members (id, name, email, invited_by) VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, email = excluded.email, invited_by = excluded.invited_by`,
       )
-      .run(member.id, member.name, member.email);
+      .run(member.id, member.name, member.email, member.invitedById);
   }
 }
 
@@ -70,6 +77,7 @@ interface CredentialRow {
   member_id: string;
   password_hash: string | null;
   invite_code: string | null;
+  invite_expires_at: string | null;
 }
 
 export class SqliteCredentialRepository implements CredentialRepository {
@@ -80,6 +88,7 @@ export class SqliteCredentialRepository implements CredentialRepository {
       memberId: row.member_id,
       passwordHash: row.password_hash,
       inviteCode: row.invite_code,
+      inviteExpiresAt: row.invite_expires_at ? new Date(row.invite_expires_at) : null,
     });
   }
 
@@ -103,10 +112,29 @@ export class SqliteCredentialRepository implements CredentialRepository {
   async save(credential: MemberCredential): Promise<void> {
     this.db
       .prepare(
-        `INSERT INTO member_credentials (member_id, password_hash, invite_code) VALUES (?, ?, ?)
-         ON CONFLICT(member_id) DO UPDATE SET password_hash = excluded.password_hash, invite_code = excluded.invite_code`,
+        `INSERT INTO member_credentials (member_id, password_hash, invite_code, invite_expires_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(member_id) DO UPDATE SET password_hash = excluded.password_hash,
+           invite_code = excluded.invite_code, invite_expires_at = excluded.invite_expires_at`,
       )
-      .run(credential.memberId, credential.passwordHash, credential.inviteCode);
+      .run(credential.memberId, credential.passwordHash, credential.inviteCode, this.expiry(credential));
+  }
+
+  /**
+   * Insertion conditionnée à une table vide, en une seule instruction : la garde du bootstrap
+   * ne peut pas être contournée par deux requêtes entrelacées.
+   */
+  async saveFirst(credential: MemberCredential): Promise<boolean> {
+    const result = this.db
+      .prepare(
+        `INSERT INTO member_credentials (member_id, password_hash, invite_code, invite_expires_at)
+         SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM member_credentials)`,
+      )
+      .run(credential.memberId, credential.passwordHash, credential.inviteCode, this.expiry(credential));
+    return result.changes === 1;
+  }
+
+  private expiry(credential: MemberCredential): string | null {
+    return credential.inviteExpiresAt ? credential.inviteExpiresAt.toISOString() : null;
   }
 }
 
@@ -130,6 +158,10 @@ export class SqliteSessionRepository implements SessionRepository {
 
   async delete(tokenHash: string): Promise<void> {
     this.db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash);
+  }
+
+  async deleteByMemberId(memberId: string): Promise<void> {
+    this.db.prepare('DELETE FROM sessions WHERE member_id = ?').run(memberId);
   }
 
   async deleteExpired(now: Date): Promise<void> {

@@ -294,6 +294,11 @@ export class InMemoryCredentialRepository implements CredentialRepository {
   async save(credential: MemberCredential) {
     this.items.set(credential.memberId, credential);
   }
+  async saveFirst(credential: MemberCredential) {
+    if (this.items.size > 0) return false;
+    this.items.set(credential.memberId, credential);
+    return true;
+  }
 }
 
 export class InMemorySessionRepository implements SessionRepository {
@@ -306,6 +311,11 @@ export class InMemorySessionRepository implements SessionRepository {
   }
   async delete(tokenHash: string) {
     this.items.delete(tokenHash);
+  }
+  async deleteByMemberId(memberId: string) {
+    for (const [key, session] of this.items) {
+      if (session.memberId === memberId) this.items.delete(key);
+    }
   }
   async deleteExpired(now: Date) {
     for (const [key, session] of this.items) {

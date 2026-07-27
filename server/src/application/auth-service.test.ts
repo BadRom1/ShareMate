@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AuthService } from './auth-service.js';
 import { makeFixture } from './testing/fixture.js';
-import { ConflictError, DomainError, NotFoundError, UnauthorizedError } from '../domain/shared/domain-error.js';
+import {
+  ConflictError,
+  DomainError,
+  ForbiddenError,
+  NotFoundError,
+  UnauthorizedError,
+} from '../domain/shared/domain-error.js';
 
 let service: AuthService;
 let fixture: Awaited<ReturnType<typeof makeFixture>>;
@@ -12,6 +18,7 @@ beforeEach(async () => {
     fixture.members,
     fixture.credentials,
     fixture.sessions,
+    fixture.equipments,
     fixture.hasher,
     fixture.tokens,
     fixture.idGenerator,
@@ -32,6 +39,25 @@ describe('AuthService — bootstrap', () => {
     await expect(service.bootstrap({ name: 'Intrus', password: 'motdepasse' })).rejects.toThrow(ConflictError);
   });
 
+  it('deux bootstraps concurrents ne créent qu’un seul premier compte', async () => {
+    // Les deux appels lisent `needsBootstrap` avant que l'autre n'ait écrit : seule l'écriture
+    // conditionnelle (`saveFirst`) départage.
+    const résultats = await Promise.allSettled([
+      service.bootstrap({ name: 'Romain', password: 'motdepasse' }),
+      service.bootstrap({ name: 'Intrus', password: 'motdepasse' }),
+    ]);
+    expect(résultats.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(résultats.filter((r) => r.status === 'rejected')).toHaveLength(1);
+    expect(await fixture.credentials.count()).toBe(1);
+
+    // Le compte perdant n'ouvre aucun accès : un seul des deux noms peut se connecter.
+    const connexions = await Promise.allSettled([
+      service.login('Romain', 'motdepasse'),
+      service.login('Intrus', 'motdepasse'),
+    ]);
+    expect(connexions.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+  });
+
   it('refuse un mot de passe trop court', async () => {
     await expect(service.bootstrap({ name: 'Romain', password: 'court' })).rejects.toThrow(DomainError);
   });
@@ -39,7 +65,7 @@ describe('AuthService — bootstrap', () => {
 
 describe('AuthService — invitations', () => {
   it('création de membre avec code, puis redeem = mot de passe posé et session ouverte', async () => {
-    const { member, inviteCode } = await service.createMemberWithInvite({ name: 'Bruno' });
+    const { member, inviteCode } = await service.createMemberWithInvite({ name: 'Bruno' }, 'm1');
     expect((await service.inviteInfo(inviteCode)).id).toBe(member.id);
 
     const { session } = await service.redeemInvite(inviteCode, 'secretbruno');
@@ -50,25 +76,66 @@ describe('AuthService — invitations', () => {
     await expect(service.redeemInvite(inviteCode, 'autreessai')).rejects.toThrow(NotFoundError);
   });
 
-  it('régénère une invitation sans casser le mot de passe existant', async () => {
-    const { inviteCode } = await service.createMemberWithInvite({ name: 'Bruno' });
-    const { member } = await service.redeemInvite(inviteCode, 'secretbruno');
+  it('une invitation ne réécrit jamais un mot de passe existant', async () => {
+    // État que produisaient les versions antérieures : un code posé sur un compte déjà ouvert.
+    const { member, inviteCode } = await service.createMemberWithInvite({ name: 'Bruno' }, 'm1');
+    await service.redeemInvite(inviteCode, 'secretbruno');
+    const piégé = 'code-recyclé';
+    const ouvert = (await fixture.credentials.findByMemberId(member.id))!;
+    await fixture.credentials.save(ouvert.withInvite(piégé, new Date('2026-07-09T10:00:00Z')));
 
-    const newCode = await service.regenerateInvite(member.id);
-    await service.login('Bruno', 'secretbruno'); // l'ancien mot de passe marche toujours
-    await service.redeemInvite(newCode, 'nouveausecret');
-    await expect(service.login('Bruno', 'secretbruno')).rejects.toThrow(UnauthorizedError);
-    await service.login('Bruno', 'nouveausecret');
+    await expect(service.inviteInfo(piégé)).rejects.toThrow(ConflictError);
+    await expect(service.redeemInvite(piégé, 'volé')).rejects.toThrow(ConflictError);
+    await service.login('Bruno', 'secretbruno'); // le mot de passe du titulaire est intact
   });
 
-  it('régénérer pour un membre inconnu échoue', async () => {
-    await expect(service.regenerateInvite('fantome')).rejects.toThrow(NotFoundError);
+  it('régénérer une invitation exige de partager le périmètre du demandeur', async () => {
+    // m1/m2 partagent la minipelle ; m3 est en dehors.
+    await expect(service.regenerateInvite('m2', 'm1')).resolves.toBeTypeOf('string');
+    await expect(service.regenerateInvite('m1', 'm1')).resolves.toBeTypeOf('string');
+    await expect(service.regenerateInvite('m3', 'm1')).rejects.toThrow(ForbiddenError);
+    await expect(service.regenerateInvite('m1', 'm3')).rejects.toThrow(ForbiddenError);
+  });
+
+  it('un membre invité reste joignable par son invitant avant tout cercle commun', async () => {
+    const { member } = await service.createMemberWithInvite({ name: 'Denis' }, 'm3');
+    await expect(service.regenerateInvite(member.id, 'm3')).resolves.toBeTypeOf('string');
+    await expect(service.regenerateInvite(member.id, 'm1')).rejects.toThrow(ForbiddenError);
+  });
+
+  it('régénérer sur un compte déjà ouvert est refusé (l’invitation n’est pas une réinitialisation)', async () => {
+    const { member, inviteCode } = await service.createMemberWithInvite({ name: 'Bruno' }, 'm1');
+    await service.redeemInvite(inviteCode, 'secretbruno');
+    await expect(service.regenerateInvite(member.id, 'm1')).rejects.toThrow(ConflictError);
+    await service.login('Bruno', 'secretbruno');
+  });
+
+  it('un code non consommé expire au bout de 7 jours', async () => {
+    const { inviteCode } = await service.createMemberWithInvite({ name: 'Bruno' }, 'm1');
+    fixture.clock.set(new Date('2026-07-09T10:00:01Z')); // création + 7 jours + 1 s
+    await expect(service.inviteInfo(inviteCode)).rejects.toThrow(NotFoundError);
+    await expect(service.redeemInvite(inviteCode, 'secretbruno')).rejects.toThrow(NotFoundError);
+  });
+
+  it('régénérer repart d’une échéance neuve', async () => {
+    const { member } = await service.createMemberWithInvite({ name: 'Bruno' }, 'm1');
+    fixture.clock.set(new Date('2026-07-08T10:00:00Z'));
+    const code = await service.regenerateInvite(member.id, 'm1');
+    fixture.clock.set(new Date('2026-07-14T10:00:00Z'));
+    expect((await service.inviteInfo(code)).id).toBe(member.id);
+  });
+
+  it('régénérer pour un membre inconnu échoue, du même message qu’un membre hors périmètre', async () => {
+    const inconnu = service.regenerateInvite('fantome', 'm1');
+    await expect(inconnu).rejects.toThrow(NotFoundError);
+    await expect(inconnu).rejects.toThrow('Membre introuvable : fantome');
+    await expect(service.regenerateInvite('m3', 'm1')).rejects.toThrow('Membre introuvable : m3');
   });
 });
 
 describe('AuthService — login et sessions', () => {
   beforeEach(async () => {
-    const { inviteCode } = await service.createMemberWithInvite({ name: 'Bruno', email: 'bruno@example.org' });
+    const { inviteCode } = await service.createMemberWithInvite({ name: 'Bruno', email: 'bruno@example.org' }, 'm1');
     await service.redeemInvite(inviteCode, 'secretbruno');
   });
 
@@ -83,7 +150,7 @@ describe('AuthService — login et sessions', () => {
   });
 
   it('un membre sans mot de passe (invitation en attente) ne peut pas se connecter', async () => {
-    await service.createMemberWithInvite({ name: 'Chloé' });
+    await service.createMemberWithInvite({ name: 'Chloé' }, 'm1');
     await expect(service.login('Chloé', 'nimporte')).rejects.toThrow(UnauthorizedError);
   });
 
@@ -108,5 +175,31 @@ describe('AuthService — login et sessions', () => {
     await expect(service.changePassword(member.id, 'mauvais', 'nouveausecret')).rejects.toThrow(UnauthorizedError);
     await service.changePassword(member.id, 'secretbruno', 'nouveausecret');
     await service.login('Bruno', 'nouveausecret');
+  });
+
+  it('changer de mot de passe révoque les autres sessions et en rouvre une', async () => {
+    const { member, session: ancienne } = await service.login('Bruno', 'secretbruno');
+    const { session: autreAppareil } = await service.login('Bruno', 'secretbruno');
+
+    const nouvelle = await service.changePassword(member.id, 'secretbruno', 'nouveausecret');
+
+    expect(await service.authenticate(ancienne.token)).toBeNull();
+    expect(await service.authenticate(autreAppareil.token)).toBeNull();
+    expect((await service.authenticate(nouvelle.token))?.id).toBe(member.id);
+  });
+
+  it('consommer une invitation révoque les sessions antérieures du compte', async () => {
+    const { member, inviteCode } = await service.createMemberWithInvite({ name: 'Chloé' }, 'm1');
+    // Session ouverte sur le compte avant qu'il ne soit revendiqué (appareil prêté).
+    await fixture.sessions.save({
+      tokenHash: 'hash(vieux-jeton)',
+      memberId: member.id,
+      expiresAt: new Date('2026-08-01T10:00:00Z'),
+    });
+
+    const { session } = await service.redeemInvite(inviteCode, 'secretchloe');
+
+    expect(await service.authenticate('vieux-jeton')).toBeNull();
+    expect((await service.authenticate(session.token))?.id).toBe(member.id);
   });
 });

@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
-import type { Equipment, MaintenanceStatus, Member, MeterUnit } from '../api';
+import type { DirectoryMember, Equipment, MaintenanceStatus, MeterUnit } from '../api';
 import { formatDate, formatEuros, meterLabel } from '../format';
 import { IconEdit, IconTrash } from '../components/icons';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 
 interface Props {
-  members: Member[];
+  members: DirectoryMember[];
   currentMemberId: string;
   /** À rappeler quand un nouvel utilisateur est créé depuis cette page. */
   onMembersChanged: () => void;
@@ -110,7 +110,7 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
     }
   }
 
-  async function shareInvite(member: Member) {
+  async function shareInvite(member: DirectoryMember) {
     setError(null);
     try {
       const { inviteCode } = await api.regenerateInvite(member.id);
@@ -139,6 +139,9 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;
   }
+
+  /** Comptes jamais ouverts : les seuls à qui un lien de première connexion peut encore servir. */
+  const pendingMembers = members.filter((m) => !m.hasPassword);
 
   return (
     <>
@@ -252,32 +255,37 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
                 + Créer la personne
               </button>
             </div>
-            <div className="row" style={{ alignItems: 'flex-end' }}>
-              <label className="field">
-                Lien d'invitation (premier accès ou mot de passe perdu)
-                <select
-                  value=""
-                  onChange={(e) => {
-                    const m = members.find((x) => x.id === e.target.value);
-                    if (m) void shareInvite(m);
-                  }}
-                >
-                  <option value="" disabled>
-                    Choisir une personne…
-                  </option>
-                  {members.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
+            {/* Une invitation pose un premier mot de passe, elle n'en réinitialise jamais un :
+                pouvoir en émettre pour un compte ouvert reviendrait à pouvoir en prendre le
+                contrôle. Les comptes déjà ouverts sont donc absents de cette liste. */}
+            {pendingMembers.length > 0 && (
+              <div className="row" style={{ alignItems: 'flex-end' }}>
+                <label className="field">
+                  Lien de première connexion (personnes n'ayant pas encore choisi leur mot de passe)
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const m = pendingMembers.find((x) => x.id === e.target.value);
+                      if (m) void shareInvite(m);
+                    }}
+                  >
+                    <option value="" disabled>
+                      Choisir une personne…
                     </option>
-                  ))}
-                </select>
-              </label>
-            </div>
+                    {pendingMembers.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
             {invite && (
               <div className="card" style={{ background: 'transparent' }}>
                 <p className="muted">
                   Transmettez ce lien à <strong>{invite.memberName}</strong> (WhatsApp, SMS…) pour qu'il choisisse son
-                  mot de passe :
+                  mot de passe. Il est valable 7 jours :
                 </p>
                 <div className="row">
                   <input readOnly value={invite.url} onFocus={(e) => e.target.select()} style={{ flex: 1 }} />

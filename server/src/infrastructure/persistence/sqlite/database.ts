@@ -46,7 +46,8 @@ function migrate(db: SqliteDb): void {
     CREATE TABLE IF NOT EXISTS members (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      email TEXT
+      email TEXT,
+      invited_by TEXT REFERENCES members(id)
     );
 
     CREATE TABLE IF NOT EXISTS equipments (
@@ -118,7 +119,8 @@ function migrate(db: SqliteDb): void {
     CREATE TABLE IF NOT EXISTS member_credentials (
       member_id TEXT PRIMARY KEY REFERENCES members(id) ON DELETE CASCADE,
       password_hash TEXT,
-      invite_code TEXT UNIQUE
+      invite_code TEXT UNIQUE,
+      invite_expires_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS sessions (
@@ -213,4 +215,27 @@ function migrate(db: SqliteDb): void {
   }
   // parent_id est désormais garanti présent (base neuve ou migrée) : l'index peut être créé.
   db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_id);`);
+
+  // Annuaire cadré sur le périmètre du demandeur : on garde qui a invité qui, pour qu'un invitant
+  // voie son invité (et puisse lui repartager son lien) avant qu'un équipement ne les réunisse.
+  const memberColumns = db.prepare(`PRAGMA table_info(members)`).all() as { name: string }[];
+  if (!memberColumns.some((c) => c.name === 'invited_by')) {
+    db.exec(`ALTER TABLE members ADD COLUMN invited_by TEXT REFERENCES members(id);`);
+  }
+
+  // Expiration des codes d'invitation (7 jours) : ils circulent hors bande et restaient valables
+  // indéfiniment.
+  const credentialColumns = db.prepare(`PRAGMA table_info(member_credentials)`).all() as { name: string }[];
+  if (!credentialColumns.some((c) => c.name === 'invite_expires_at')) {
+    db.exec(`ALTER TABLE member_credentials ADD COLUMN invite_expires_at TEXT;`);
+  }
+  // Un code posé au-dessus d'un mot de passe existant est un vestige de la version où une
+  // invitation réécrivait le mot de passe (prise de contrôle de compte) : il est révoqué.
+  // Les invitations légitimes en cours (compte jamais ouvert) reçoivent l'échéance manquante.
+  db.exec(`
+    UPDATE member_credentials SET invite_code = NULL, invite_expires_at = NULL
+      WHERE invite_code IS NOT NULL AND password_hash IS NOT NULL;
+    UPDATE member_credentials SET invite_expires_at = strftime('%Y-%m-%dT%H:%M:%S.000Z', 'now', '+7 days')
+      WHERE invite_code IS NOT NULL AND invite_expires_at IS NULL;
+  `);
 }

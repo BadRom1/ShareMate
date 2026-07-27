@@ -1,4 +1,5 @@
 import type { Member } from '../../domain/member/member.js';
+import type { DirectoryEntry } from '../../application/member-service.js';
 import type { Equipment } from '../../domain/equipment/equipment.js';
 import type { Reservation } from '../../domain/reservation/reservation.js';
 import { conflictMap } from '../../domain/reservation/reservation-conflict.js';
@@ -18,6 +19,11 @@ import type { NotificationPreference } from '../../domain/notification/preferenc
 
 export function memberDto(m: Member) {
   return { id: m.id, name: m.name, email: m.email };
+}
+
+/** Annuaire : `hasPassword` dit au front à qui un lien de première connexion peut encore servir. */
+export function directoryMemberDto(entry: DirectoryEntry) {
+  return { ...memberDto(entry.member), hasPassword: entry.hasPassword };
 }
 
 export function equipmentDto(e: Equipment) {

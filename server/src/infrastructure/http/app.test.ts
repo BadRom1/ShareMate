@@ -20,7 +20,9 @@ import {
   SqliteUsageRecordRepository,
 } from '../persistence/sqlite/repositories.js';
 import { CryptoTokenGenerator, ScryptPasswordHasher, SystemClock, UuidGenerator } from '../tech/adapters.js';
+import { FixedClock } from '../../application/testing/in-memory.js';
 import { buildApp } from './app.js';
+import type { AppDependencies } from './app.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -30,9 +32,10 @@ type Cookies = Record<string, string>;
 
 let app: FastifyInstance;
 
-beforeEach(async () => {
+/** App branchée sur une base SQLite neuve ; `overrides` ajoute ou remplace des dépendances. */
+async function buildTestApp(overrides: Partial<AppDependencies> = {}): Promise<FastifyInstance> {
   const db = openDatabase(':memory:');
-  app = await buildApp({
+  return buildApp({
     members: new SqliteMemberRepository(db),
     equipments: new SqliteEquipmentRepository(db),
     reservations: new SqliteReservationRepository(db),
@@ -53,7 +56,12 @@ beforeEach(async () => {
     tokenGenerator: new CryptoTokenGenerator(),
     idGenerator: new UuidGenerator(),
     clock: new SystemClock(),
+    ...overrides,
   });
+}
+
+beforeEach(async () => {
+  app = await buildTestApp();
 });
 
 afterEach(async () => {
@@ -141,31 +149,7 @@ describe('API — justificatifs et front statique (@fastify/static)', () => {
     // Un fichier à l'extérieur du répertoire servi, cible d'une éventuelle traversée.
     fs.writeFileSync(path.join(tmpRoot, 'secret.txt'), 'SECRET-HORS-RACINE');
 
-    const db = openDatabase(':memory:');
-    staticApp = await buildApp({
-      members: new SqliteMemberRepository(db),
-      equipments: new SqliteEquipmentRepository(db),
-      reservations: new SqliteReservationRepository(db),
-      usageRecords: new SqliteUsageRecordRepository(db),
-      expenses: new SqliteExpenseRepository(db),
-      reimbursements: new SqliteReimbursementRepository(db),
-      threads: new SqliteThreadRepository(db),
-      messages: new SqliteMessageRepository(db),
-      checklists: new SqliteChecklistRepository(db),
-      checklistItems: new SqliteChecklistItemRepository(db),
-      notifications: new SqliteNotificationRepository(db),
-      notificationPreferences: new SqliteNotificationPreferenceRepository(db),
-      pushSubscriptions: new SqlitePushSubscriptionRepository(db),
-      deviceTokens: new SqliteDeviceTokenRepository(db),
-      credentials: new SqliteCredentialRepository(db),
-      sessions: new SqliteSessionRepository(db),
-      passwordHasher: new ScryptPasswordHasher(),
-      tokenGenerator: new CryptoTokenGenerator(),
-      idGenerator: new UuidGenerator(),
-      clock: new SystemClock(),
-      uploadsDir,
-      webDistDir,
-    });
+    staticApp = await buildTestApp({ uploadsDir, webDistDir });
   });
 
   afterEach(async () => {
@@ -318,13 +302,19 @@ describe('API — authentification', () => {
     expect((await post(`/api/auth/invites/${inviteCode}/redeem`, { password: PASSWORD })).statusCode).toBe(404);
   });
 
-  it('régénération d’invitation pour un membre existant', async () => {
+  it('régénération d’invitation pour un membre qui n’a pas encore ouvert son compte', async () => {
     const alice = await bootstrapAlice();
-    const bruno = await inviteAndRedeem('Bruno', alice.cookies);
+    const created = await post('/api/members', { name: 'Bruno' }, alice.cookies);
+    const bruno = created.json() as { id: string };
+
     const res = await post(`/api/members/${bruno.id}/invite`, {}, alice.cookies);
     expect(res.statusCode).toBe(201);
     const { inviteCode } = res.json() as { inviteCode: string };
     expect((await get(`/api/auth/invites/${inviteCode}`)).statusCode).toBe(200);
+
+    // Une fois le compte ouvert, l'invitation n'est plus un moyen d'y toucher.
+    expect((await post(`/api/auth/invites/${inviteCode}/redeem`, { password: PASSWORD })).statusCode).toBe(200);
+    expect((await post(`/api/members/${bruno.id}/invite`, {}, alice.cookies)).statusCode).toBe(409);
   });
 
   it('le login est limité contre le force brute (429 au-delà de 10/min)', async () => {
@@ -355,7 +345,7 @@ describe('API — authentification', () => {
       { currentPassword: PASSWORD, newPassword: 'nouveau-mdp' },
       alice.cookies,
     );
-    expect(ok.statusCode).toBe(204);
+    expect(ok.statusCode).toBe(200);
     expect((await post('/api/auth/login', { identifier: 'Alice', password: 'nouveau-mdp' })).statusCode).toBe(200);
   });
 
@@ -628,30 +618,7 @@ describe('API — CORS (origines de l’app native)', () => {
   let corsApp: FastifyInstance;
 
   beforeEach(async () => {
-    const db = openDatabase(':memory:');
-    corsApp = await buildApp({
-      members: new SqliteMemberRepository(db),
-      equipments: new SqliteEquipmentRepository(db),
-      reservations: new SqliteReservationRepository(db),
-      usageRecords: new SqliteUsageRecordRepository(db),
-      expenses: new SqliteExpenseRepository(db),
-      reimbursements: new SqliteReimbursementRepository(db),
-      threads: new SqliteThreadRepository(db),
-      messages: new SqliteMessageRepository(db),
-      checklists: new SqliteChecklistRepository(db),
-      checklistItems: new SqliteChecklistItemRepository(db),
-      notifications: new SqliteNotificationRepository(db),
-      notificationPreferences: new SqliteNotificationPreferenceRepository(db),
-      pushSubscriptions: new SqlitePushSubscriptionRepository(db),
-      deviceTokens: new SqliteDeviceTokenRepository(db),
-      credentials: new SqliteCredentialRepository(db),
-      sessions: new SqliteSessionRepository(db),
-      passwordHasher: new ScryptPasswordHasher(),
-      tokenGenerator: new CryptoTokenGenerator(),
-      idGenerator: new UuidGenerator(),
-      clock: new SystemClock(),
-      corsOrigins: ['https://localhost'],
-    });
+    corsApp = await buildTestApp({ corsOrigins: ['https://localhost'] });
   });
 
   afterEach(async () => {
@@ -1166,6 +1133,197 @@ describe('API — cloisonnement par cercle (aucune fuite hors du cercle)', () =>
       alice.cookies,
     );
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('API — cloisonnement des comptes (annuaire, invitations, sessions)', () => {
+  const NATIVE = { 'x-sharemate-client': 'native' };
+
+  /** Noms de l'annuaire tel que le voit ce demandeur, triés pour comparaison. */
+  async function annuaire(cookies: Cookies): Promise<string[]> {
+    const res = await get('/api/members', cookies);
+    expect(res.statusCode).toBe(200);
+    return (res.json() as { name: string }[]).map((m) => m.name).sort();
+  }
+
+  it('la prise de contrôle d’un compte échoue dès sa première étape', async () => {
+    // Chaîne d'attaque : lire l'annuaire → obtenir un code d'invitation pour la cible → le
+    // consommer avec un mot de passe choisi. Chloé, hors du cercle d'Alice, tente le parcours.
+    const { alice, bruno, chloe } = await setupMembersAndEquipment();
+
+    // 1. L'annuaire ne livre plus l'identifiant des membres hors de son périmètre.
+    const vus = (await get('/api/members', chloe.cookies)).json() as { id: string }[];
+    expect(vus.map((m) => m.id)).toEqual([chloe.id]);
+
+    // 2. Même en connaissant les identifiants, la régénération est refusée — masquée en 404,
+    //    du message exact qu'aurait produit un membre inexistant.
+    for (const cible of [alice.id, bruno.id]) {
+      const res = await post(`/api/members/${cible}/invite`, {}, chloe.cookies);
+      expect(res.statusCode).toBe(404);
+      expect((res.json() as { error: string }).error).toBe(`Membre introuvable : ${cible}`);
+    }
+
+    // 3. Aucun code n'a été émis, et les comptes visés sont intacts.
+    expect((await post('/api/auth/login', { identifier: 'Alice', password: PASSWORD })).statusCode).toBe(200);
+    expect((await post('/api/auth/login', { identifier: 'Bruno', password: PASSWORD })).statusCode).toBe(200);
+  });
+
+  it('une invitation ne réinitialise jamais un compte déjà ouvert', async () => {
+    const alice = await bootstrapAlice();
+    const bruno = await inviteAndRedeem('Bruno', alice.cookies);
+    // Alice partage le cercle de Bruno : elle est dans son périmètre, et pourtant refusée.
+    const res = await post(`/api/members/${bruno.id}/invite`, {}, alice.cookies);
+    expect(res.statusCode).toBe(409);
+    expect((await post('/api/auth/login', { identifier: 'Bruno', password: PASSWORD })).statusCode).toBe(200);
+  });
+
+  it('journalise en warn une invitation régénérée pour un autre membre', async () => {
+    const lignes: string[] = [];
+    const tracé = await buildTestApp({
+      logger: { level: 'warn', stream: { write: (l: string) => void lignes.push(l) } },
+    });
+    const bootstrap = await tracé.inject({
+      method: 'POST',
+      url: '/api/auth/bootstrap',
+      payload: { name: 'Alice', password: PASSWORD },
+    });
+    const cookies = sessionCookie(bootstrap);
+    const créé = await tracé.inject({ method: 'POST', url: '/api/members', payload: { name: 'Bruno' }, cookies });
+    const bruno = créé.json() as { id: string };
+
+    await tracé.inject({ method: 'POST', url: `/api/members/${bruno.id}/invite`, payload: {}, cookies });
+
+    const trace = lignes.find((l) => l.includes('invitation régénérée pour un autre membre'));
+    expect(trace).toBeDefined();
+    expect(trace).toContain(bruno.id);
+    await tracé.close();
+  });
+
+  it('cadre l’annuaire sur le périmètre du demandeur, invités compris', async () => {
+    const { alice, bruno, chloe } = await setupMembersAndEquipment();
+    // Alice voit son cercle (Bruno) et Chloé, qu'elle a invitée sans cercle commun.
+    expect(await annuaire(alice.cookies)).toEqual(['Alice', 'Bruno', 'Chloé']);
+    // Bruno voit son cercle, et rien de plus : Chloé lui est inconnue.
+    expect(await annuaire(bruno.cookies)).toEqual(['Alice', 'Bruno']);
+    expect(await annuaire(chloe.cookies)).toEqual(['Chloé']);
+  });
+
+  it('n’expose l’email d’un membre qu’à l’intérieur de son périmètre', async () => {
+    const alice = await bootstrapAlice();
+    const chloe = await inviteAndRedeem('Chloé', alice.cookies);
+    await post('/api/members', { name: 'Denis', email: 'denis@example.test' }, alice.cookies);
+
+    expect(JSON.stringify((await get('/api/members', alice.cookies)).json())).toContain('denis@example.test');
+    expect(JSON.stringify((await get('/api/members', chloe.cookies)).json())).not.toContain('denis@example.test');
+  });
+
+  it('tout membre d’un cercle reste visible de ce cercle (noms affichés par le front)', async () => {
+    const { equipment, alice, bruno, chloe } = await setupMembersAndEquipment();
+    const ajout = await app.inject({
+      method: 'PUT',
+      url: `/api/equipments/${equipment.id}`,
+      payload: { memberIds: [alice.id, bruno.id, chloe.id] },
+      cookies: alice.cookies,
+    });
+    expect(ajout.statusCode).toBe(200);
+
+    // Le calendrier, les dépenses, les discussions et les checklists n'affichent que des membres
+    // du cercle : chacun d'eux doit pouvoir être nommé par chacun des autres.
+    for (const cookies of [alice.cookies, bruno.cookies, chloe.cookies]) {
+      expect(await annuaire(cookies)).toEqual(['Alice', 'Bruno', 'Chloé']);
+    }
+  });
+
+  it('l’annuaire signale qui n’a pas encore ouvert son compte', async () => {
+    const alice = await bootstrapAlice();
+    await post('/api/members', { name: 'Bruno' }, alice.cookies);
+    const vus = (await get('/api/members', alice.cookies)).json() as { name: string; hasPassword: boolean }[];
+    expect(vus.map((m) => [m.name, m.hasPassword])).toEqual([
+      ['Alice', true],
+      ['Bruno', false],
+    ]);
+  });
+
+  it('changer de mot de passe révoque les autres sessions et remplace la sienne', async () => {
+    const alice = await bootstrapAlice();
+    const autreAppareil = sessionCookie(await post('/api/auth/login', { identifier: 'Alice', password: PASSWORD }));
+
+    const res = await post(
+      '/api/auth/password',
+      { currentPassword: PASSWORD, newPassword: 'nouveau-mdp' },
+      alice.cookies,
+    );
+    expect(res.statusCode).toBe(200);
+
+    // L'autre appareil est expulsé, l'ancien cookie du demandeur aussi…
+    expect((await get('/api/equipments', autreAppareil)).statusCode).toBe(401);
+    expect((await get('/api/equipments', alice.cookies)).statusCode).toBe(401);
+    // …mais la réponse en a posé un neuf : le geste ne déconnecte pas son auteur.
+    expect((await get('/api/equipments', sessionCookie(res))).statusCode).toBe(200);
+  });
+
+  it('changer de mot de passe en natif rend un nouveau jeton Bearer', async () => {
+    await bootstrapAlice();
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { identifier: 'Alice', password: PASSWORD },
+      headers: NATIVE,
+    });
+    const ancien = (login.json() as { token: string }).token;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password',
+      payload: { currentPassword: PASSWORD, newPassword: 'nouveau-mdp' },
+      headers: { ...NATIVE, authorization: `Bearer ${ancien}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const nouveau = (res.json() as { token: string }).token;
+    expect(nouveau).not.toBe(ancien);
+
+    const avecAncien = await app.inject({
+      method: 'GET',
+      url: '/api/equipments',
+      headers: { authorization: `Bearer ${ancien}` },
+    });
+    const avecNouveau = await app.inject({
+      method: 'GET',
+      url: '/api/equipments',
+      headers: { authorization: `Bearer ${nouveau}` },
+    });
+    expect(avecAncien.statusCode).toBe(401);
+    expect(avecNouveau.statusCode).toBe(200);
+  });
+
+  it('un lien d’invitation périme au bout de 7 jours', async () => {
+    const horloge = new FixedClock(new Date('2026-07-02T10:00:00Z'));
+    const daté = await buildTestApp({ clock: horloge });
+    const bootstrap = await daté.inject({
+      method: 'POST',
+      url: '/api/auth/bootstrap',
+      payload: { name: 'Alice', password: PASSWORD },
+    });
+    const créé = await daté.inject({
+      method: 'POST',
+      url: '/api/members',
+      payload: { name: 'Bruno' },
+      cookies: sessionCookie(bootstrap),
+    });
+    const { inviteCode } = créé.json() as { inviteCode: string };
+
+    horloge.set(new Date('2026-07-09T09:59:59Z'));
+    expect((await daté.inject({ method: 'GET', url: `/api/auth/invites/${inviteCode}` })).statusCode).toBe(200);
+
+    horloge.set(new Date('2026-07-09T10:00:01Z'));
+    expect((await daté.inject({ method: 'GET', url: `/api/auth/invites/${inviteCode}` })).statusCode).toBe(404);
+    const redeem = await daté.inject({
+      method: 'POST',
+      url: `/api/auth/invites/${inviteCode}/redeem`,
+      payload: { password: PASSWORD },
+    });
+    expect(redeem.statusCode).toBe(404);
+    await daté.close();
   });
 });
 

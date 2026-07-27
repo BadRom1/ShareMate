@@ -60,6 +60,7 @@ import {
   checklistDto,
   checklistItemDto,
   checklistSummaryDto,
+  directoryMemberDto,
   equipmentDto,
   expenseDto,
   memberDto,
@@ -215,12 +216,13 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.members,
     deps.credentials,
     deps.sessions,
+    deps.equipments,
     deps.passwordHasher,
     deps.tokenGenerator,
     deps.idGenerator,
     deps.clock,
   );
-  const memberService = new MemberService(deps.members, deps.idGenerator);
+  const memberService = new MemberService(deps.members, deps.equipments, deps.credentials, deps.idGenerator);
   const equipmentService = new EquipmentService(deps.equipments, deps.members, deps.idGenerator);
   const reservationService = new ReservationService(
     deps.reservations,
@@ -394,25 +396,38 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   );
 
   app.post<{ Body: { currentPassword: string; newPassword: string } }>('/api/auth/password', async (request, reply) => {
-    await authService.changePassword(request.authMember.id, request.body.currentPassword, request.body.newPassword);
-    return reply.status(204).send();
+    const session = await authService.changePassword(
+      request.authMember.id,
+      request.body.currentPassword,
+      request.body.newPassword,
+    );
+    // Le changement révoque toutes les sessions du membre, celle-ci comprise : on repose le cookie
+    // (et on rend le jeton à l'app native) pour ne pas déconnecter l'auteur de son propre geste.
+    return reply.send(authenticated(request, reply, request.authMember, session));
   });
 
   // --- Membres (utilisateurs globaux, portés par les équipements) ---
 
   app.post<{ Body: { name: string; email?: string | null } }>('/api/members', async (request, reply) => {
-    const { member, inviteCode } = await authService.createMemberWithInvite(request.body);
-    return reply.status(201).send({ ...memberDto(member), inviteCode });
+    const { member, inviteCode } = await authService.createMemberWithInvite(request.body, request.authMember.id);
+    return reply.status(201).send({ ...memberDto(member), hasPassword: false, inviteCode });
   });
 
   app.post<{ Params: { id: string } }>('/api/members/:id/invite', async (request, reply) => {
-    const inviteCode = await authService.regenerateInvite(request.params.id);
+    const inviteCode = await authService.regenerateInvite(request.params.id, request.authMember.id);
+    if (request.params.id !== request.authMember.id) {
+      // Geste sensible : le lien produit ouvre un compte qui n'est pas celui du demandeur.
+      app.log.warn(
+        { requesterId: request.authMember.id, targetId: request.params.id },
+        'invitation régénérée pour un autre membre',
+      );
+    }
     return reply.status(201).send({ inviteCode });
   });
 
-  app.get('/api/members', async () => {
-    const members = await memberService.listMembers();
-    return members.map(memberDto);
+  app.get('/api/members', async (request) => {
+    const entries = await memberService.listVisibleMembers(request.authMember.id);
+    return entries.map(directoryMemberDto);
   });
 
   // --- Équipements ---

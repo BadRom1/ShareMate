@@ -63,6 +63,13 @@ describe('SQLite — membres', () => {
     const { members } = await seedBase();
     expect((await members.findAll()).map((m) => m.name)).toEqual(['Alice', 'Bruno']);
   });
+
+  it('conserve l’invitant, qui cadre l’annuaire avant tout cercle commun', async () => {
+    const { members } = await seedBase();
+    await members.save(Member.create({ id: 'm3', name: 'Chloé', invitedById: 'm1' }));
+    expect((await members.findById('m3'))?.invitedById).toBe('m1');
+    expect((await members.findById('m1'))?.invitedById).toBeNull();
+  });
 });
 
 describe('SQLite — accès (credentials)', () => {
@@ -89,6 +96,32 @@ describe('SQLite — accès (credentials)', () => {
     expect(await credentials.findByInviteCode('code-bruno')).toBeNull();
     expect((await credentials.findByMemberId('m2'))?.passwordHash).toBe('hash-bruno');
   });
+
+  it('conserve l’échéance d’une invitation', async () => {
+    await seedBase();
+    const credentials = new SqliteCredentialRepository(db);
+    const échéance = new Date('2026-07-09T10:00:00Z');
+    await credentials.save(
+      MemberCredential.create({ memberId: 'm2', inviteCode: 'code-bruno', inviteExpiresAt: échéance }),
+    );
+    const relu = (await credentials.findByInviteCode('code-bruno'))!;
+    expect(relu.inviteExpiresAt).toEqual(échéance);
+    expect(relu.isInviteValid(new Date('2026-07-02T10:00:00Z'))).toBe(true);
+    expect(relu.isInviteValid(new Date('2026-07-10T10:00:00Z'))).toBe(false);
+  });
+
+  it('saveFirst n’écrit que sur une table vide (garde atomique du bootstrap)', async () => {
+    await seedBase();
+    const credentials = new SqliteCredentialRepository(db);
+    expect(await credentials.saveFirst(MemberCredential.create({ memberId: 'm1', passwordHash: 'hash-alice' }))).toBe(
+      true,
+    );
+    expect(await credentials.saveFirst(MemberCredential.create({ memberId: 'm2', passwordHash: 'hash-bruno' }))).toBe(
+      false,
+    );
+    expect(await credentials.count()).toBe(1);
+    expect(await credentials.findByMemberId('m2')).toBeNull();
+  });
 });
 
 describe('SQLite — sessions', () => {
@@ -108,6 +141,21 @@ describe('SQLite — sessions', () => {
 
     await sessions.delete('t1');
     expect(await sessions.findByTokenHash('t1')).toBeNull();
+  });
+
+  it('révoque d’un coup toutes les sessions d’un membre', async () => {
+    await seedBase();
+    const sessions = new SqliteSessionRepository(db);
+    const expiresAt = new Date('2026-08-01T00:00:00Z');
+    await sessions.save({ tokenHash: 't1', memberId: 'm1', expiresAt });
+    await sessions.save({ tokenHash: 't2', memberId: 'm1', expiresAt });
+    await sessions.save({ tokenHash: 't3', memberId: 'm2', expiresAt });
+
+    await sessions.deleteByMemberId('m1');
+
+    expect(await sessions.findByTokenHash('t1')).toBeNull();
+    expect(await sessions.findByTokenHash('t2')).toBeNull();
+    expect(await sessions.findByTokenHash('t3')).not.toBeNull();
   });
 });
 

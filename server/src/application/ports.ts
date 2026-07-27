@@ -134,12 +134,20 @@ export interface CredentialRepository {
   findByInviteCode(code: string): Promise<MemberCredential | null>;
   count(): Promise<number>;
   save(credential: MemberCredential): Promise<void>;
+  /**
+   * Enregistre l'accès du tout premier compte, et lui seul : renvoie `false` si un accès existait
+   * déjà. L'implémentation doit être atomique — `count()` puis `save()` laisse deux bootstraps
+   * concurrents créer chacun leur « premier compte ».
+   */
+  saveFirst(credential: MemberCredential): Promise<boolean>;
 }
 
 export interface SessionRepository {
   findByTokenHash(tokenHash: string): Promise<Session | null>;
   save(session: Session): Promise<void>;
   delete(tokenHash: string): Promise<void>;
+  /** Révocation globale : toutes les sessions du membre, sur tous ses appareils. */
+  deleteByMemberId(memberId: string): Promise<void>;
   deleteExpired(now: Date): Promise<void>;
 }
 
