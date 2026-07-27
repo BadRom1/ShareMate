@@ -7,7 +7,7 @@ import {
   NotFoundError,
   UnauthorizedError,
 } from '../domain/shared/domain-error.js';
-import { circleMemberIds } from './equipment-access.js';
+import { visibleMemberIds } from './member-scope.js';
 import type {
   Clock,
   CredentialRepository,
@@ -77,7 +77,9 @@ export class AuthService {
     }
     validatePassword(input.password);
     const member = Member.create({ id: this.idGenerator.next(), name: input.name, email: input.email ?? null });
-    await this.assertEmailAvailable(member);
+    // Sans demandeur ni instance à sonder (le bootstrap n'ouvre que sur une base vierge), la
+    // collision se cherche partout.
+    await this.assertEmailAvailable(member, null);
     await this.members.save(member);
     // `needsBootstrap` ci-dessus n'est qu'un raccourci : entre sa lecture et l'écriture, une autre
     // requête peut avoir créé le premier compte. Seul `saveFirst` tranche, atomiquement. Le membre
@@ -103,7 +105,7 @@ export class AuthService {
       email: input.email ?? null,
       invitedById: requesterId,
     });
-    await this.assertEmailAvailable(member);
+    await this.assertEmailAvailable(member, await visibleMemberIds(this.equipments, this.members, requesterId));
     await this.members.save(member);
     const inviteCode = this.tokens.inviteCode();
     await this.credentials.save(
@@ -113,16 +115,24 @@ export class AuthService {
   }
 
   /**
-   * Nouveau code de première connexion pour un membre du périmètre du demandeur (lui-même, un
-   * membre d'un de ses cercles, ou quelqu'un qu'il a invité). Hors périmètre, le refus est masqué
-   * derrière l'absence du membre : impossible de découvrir qu'un identifiant correspond à un compte.
+   * Nouveau code de première connexion, réservé au titulaire et à celui qui l'a invité.
+   *
+   * Le cercle commun ne suffit pas : sur un compte jamais ouvert, un code régénéré ne relance pas
+   * une invitation, il prend le compte — celui qui le consomme choisit le mot de passe, hérite des
+   * cercles du titulaire et l'enferme dehors (`hasPassword` bloque ensuite toute relance). Comme
+   * la composition d'un cercle se décide sans l'intéressé, tout membre pouvait s'inscrire dans un
+   * équipement avec sa cible pour entrer dans son périmètre. L'invitant, lui, est le seul à qui
+   * l'on doit déjà d'exister dans l'instance.
+   *
+   * Hors de ce couple, le refus est masqué derrière l'absence du membre : impossible de découvrir
+   * qu'un identifiant correspond à un compte.
    */
   async regenerateInvite(memberId: string, requesterId: string): Promise<string> {
     const member = await this.members.findById(memberId);
     if (!member) {
       throw new NotFoundError(memberNotFound(memberId));
     }
-    if (!(await this.isWithinScope(member, requesterId))) {
+    if (member.id !== requesterId && member.invitedById !== requesterId) {
       throw new ForbiddenError(memberNotFound(memberId));
     }
     const existing = await this.credentials.findByMemberId(memberId);
@@ -235,28 +245,30 @@ export class AuthService {
    * arbitrairement le premier des deux dont le mot de passe correspond. La garde reste applicative
    * — le schéma ne porte pas d'index unique, la comparaison devant suivre `String.toLowerCase`
    * (voir `minuscule` dans database.ts) et non le repli ASCII de SQLite.
+   *
+   * `scope` borne la collision aux membres que le demandeur voit déjà. Une garde à l'échelle de
+   * l'instance ne peut pas dire « cette adresse est prise » sans le dire aussi à qui la sonde :
+   * n'importe quel membre authentifié obtenait ainsi, adresse par adresse, la liste des comptes
+   * de l'instance entière — le canal même que le cadrage de l'annuaire ferme. Hors périmètre, le
+   * doublon est donc accepté ; l'ambiguïté résiduelle reste théorique, `login` n'ouvrant que le
+   * compte dont le mot de passe correspond, que l'attaquant ne connaît pas.
    */
-  private async assertEmailAvailable(member: Member): Promise<void> {
+  private async assertEmailAvailable(member: Member, scope: Set<string> | null): Promise<void> {
     if (member.email === null) {
       return;
     }
     // Le port répond aussi sur le nom : seul un email réellement identique compte comme collision.
-    const cherché = member.email.toLowerCase();
-    if ((await this.members.findByNameOrEmail(member.email)).some((autre) => autre.email?.toLowerCase() === cherché)) {
+    const wanted = member.email.toLowerCase();
+    const collision = (await this.members.findByNameOrEmail(member.email)).some(
+      (other) => other.email?.toLowerCase() === wanted && (scope === null || scope.has(other.id)),
+    );
+    if (collision) {
       throw new ConflictError('Cette adresse email est déjà utilisée par un autre membre.');
     }
   }
 
   private inviteDeadline(): Date {
     return new Date(this.clock.now().getTime() + INVITE_TTL_MS);
-  }
-
-  /** Le demandeur peut-il agir sur ce membre : lui-même, son cercle, ou quelqu'un qu'il a invité. */
-  private async isWithinScope(member: Member, requesterId: string): Promise<boolean> {
-    if (member.id === requesterId || member.invitedById === requesterId) {
-      return true;
-    }
-    return (await circleMemberIds(this.equipments, requesterId)).has(member.id);
   }
 
   /**

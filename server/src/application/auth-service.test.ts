@@ -77,17 +77,6 @@ describe('AuthService — bootstrap', () => {
     expect(connexions.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
   });
 
-  it('refuse un email déjà porté par un autre membre', async () => {
-    await service.bootstrap({ name: 'Romain', email: 'romain@example.org', password: 'motdepasse' });
-    // L'email est un identifiant de connexion : deux titulaires, et `login` en choisit un au hasard.
-    await expect(service.createMemberWithInvite({ name: 'Autre', email: 'ROMAIN@example.org' }, 'm1')).rejects.toThrow(
-      ConflictError,
-    );
-    await expect(
-      service.createMemberWithInvite({ name: 'Autre', email: 'autre@example.org' }, 'm1'),
-    ).resolves.toBeDefined();
-  });
-
   it('refuse un mot de passe trop court', async () => {
     await expect(service.bootstrap({ name: 'Romain', password: 'court' })).rejects.toThrow(DomainError);
   });
@@ -119,12 +108,42 @@ describe('AuthService — invitations', () => {
     await service.login('Bruno', 'secretbruno'); // le mot de passe du titulaire est intact
   });
 
-  it('régénérer une invitation exige de partager le périmètre du demandeur', async () => {
-    // m1/m2 partagent la minipelle ; m3 est en dehors.
+  it('refuse un email déjà porté par un membre du périmètre du demandeur', async () => {
+    await service.createMemberWithInvite({ name: 'Denis', email: 'denis@example.org' }, 'm1');
+    // L'email est un identifiant de connexion : deux titulaires, et `login` en choisit un au hasard.
+    await expect(service.createMemberWithInvite({ name: 'Autre', email: 'DENIS@example.org' }, 'm1')).rejects.toThrow(
+      ConflictError,
+    );
+    await expect(
+      service.createMemberWithInvite({ name: 'Autre', email: 'autre@example.org' }, 'm1'),
+    ).resolves.toBeDefined();
+  });
+
+  it("n'apprend pas au demandeur qu'une adresse hors de son périmètre existe", async () => {
+    await service.createMemberWithInvite({ name: 'Denis', email: 'denis@example.org' }, 'm1');
+    // m3 ne partage aucun cercle avec Denis et ne l'a pas invité. Un refus distinctif ferait de
+    // cette route un oracle : adresse par adresse, il énumérerait les comptes de l'instance —
+    // exactement le canal que le cadrage de l'annuaire referme.
+    await expect(
+      service.createMemberWithInvite({ name: 'sonde', email: 'DENIS@example.org' }, 'm3'),
+    ).resolves.toBeDefined();
+  });
+
+  it('régénérer une invitation est réservé au titulaire et à son invitant', async () => {
+    // m1 a invité m2 et m3 ; m1/m2 partagent en outre la minipelle.
     await expect(service.regenerateInvite('m2', 'm1')).resolves.toBeTypeOf('string');
     await expect(service.regenerateInvite('m1', 'm1')).resolves.toBeTypeOf('string');
-    await expect(service.regenerateInvite('m3', 'm1')).rejects.toThrow(ForbiddenError);
     await expect(service.regenerateInvite('m1', 'm3')).rejects.toThrow(ForbiddenError);
+  });
+
+  it('partager un cercle ne donne pas le droit de reprendre un compte jamais ouvert', async () => {
+    // m2 s'inscrit dans un équipement avec m3 : le cercle commun se fabrique à la demande, il ne
+    // peut donc pas ouvrir la reprise d'un compte que m2 n'a pas invité.
+    await fixture.equipments.save(
+      (await fixture.equipments.findById('e1'))!.update({ id: 'e1', memberIds: ['m2', 'm3'] }),
+    );
+    await expect(service.regenerateInvite('m3', 'm2')).rejects.toThrow(ForbiddenError);
+    await expect(service.regenerateInvite('m3', 'm2')).rejects.toThrow('Membre introuvable : m3');
   });
 
   it('un membre invité reste joignable par son invitant avant tout cercle commun', async () => {
@@ -159,7 +178,7 @@ describe('AuthService — invitations', () => {
     const inconnu = service.regenerateInvite('fantome', 'm1');
     await expect(inconnu).rejects.toThrow(NotFoundError);
     await expect(inconnu).rejects.toThrow('Membre introuvable : fantome');
-    await expect(service.regenerateInvite('m3', 'm1')).rejects.toThrow('Membre introuvable : m3');
+    await expect(service.regenerateInvite('m1', 'm2')).rejects.toThrow('Membre introuvable : m1');
   });
 });
 

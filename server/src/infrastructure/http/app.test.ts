@@ -108,6 +108,24 @@ async function inviteAndRedeem(name: string, creatorCookies: Cookies, target: Fa
   return { id, cookies: sessionCookie(redeemed) };
 }
 
+/** Équipement minimal, dont le cercle est passé tel quel (les valeurs métier n'importent pas ici). */
+async function createEquipment(name: string, memberIds: string[], cookies: Cookies, target: FastifyInstance = app) {
+  return post(
+    '/api/equipments',
+    {
+      name,
+      category: 'BTP',
+      acquisitionDate: '2025-01-01',
+      purchaseValueEuros: 1000,
+      meterUnit: 'HOURS',
+      memberIds,
+      maintenanceThreshold: null,
+    },
+    cookies,
+    target,
+  );
+}
+
 /** Trois membres connectés ; la minipelle porte le cercle m1/m2, m3 reste en dehors. */
 async function setupMembersAndEquipment(target: FastifyInstance = app) {
   const alice = await bootstrapAlice(target);
@@ -1306,9 +1324,10 @@ describe('API — cloisonnement des comptes (annuaire, invitations, sessions)', 
     // consommer avec un mot de passe choisi. Chloé, hors du cercle d'Alice, tente le parcours.
     const { alice, bruno, chloe } = await setupMembersAndEquipment();
 
-    // 1. L'annuaire ne livre plus l'identifiant des membres hors de son périmètre.
+    // 1. L'annuaire ne livre plus l'identifiant des membres hors de son périmètre : Chloé voit
+    //    Alice, qui l'a invitée, et personne d'autre — Bruno lui reste inconnu.
     const vus = (await get('/api/members', chloe.cookies)).json() as { id: string }[];
-    expect(vus.map((m) => m.id)).toEqual([chloe.id]);
+    expect(vus.map((m) => m.id)).toEqual([alice.id, chloe.id]);
 
     // 2. Même en connaissant les identifiants, la régénération est refusée — masquée en 404,
     //    du message exact qu'aurait produit un membre inexistant.
@@ -1321,6 +1340,63 @@ describe('API — cloisonnement des comptes (annuaire, invitations, sessions)', 
     // 3. Aucun code n'a été émis, et les comptes visés sont intacts.
     expect((await post('/api/auth/login', { identifier: 'Alice', password: PASSWORD })).statusCode).toBe(200);
     expect((await post('/api/auth/login', { identifier: 'Bruno', password: PASSWORD })).statusCode).toBe(200);
+  });
+
+  it('la prise de contrôle d’un compte jamais ouvert échoue aussi', async () => {
+    // La garde « ce membre a déjà un mot de passe » ne mord pas entre la création d'un compte et
+    // sa première connexion : c'est là que la chaîne annuaire → invitation → redeem opérait.
+    const alice = await bootstrapAlice();
+    const bruno = await inviteAndRedeem('Bruno', alice.cookies);
+    const david = (await post('/api/members', { name: 'David' }, alice.cookies)).json() as { id: string };
+    // Bruno et David partagent un cercle, et David n'a pas encore de mot de passe.
+    await createEquipment('Minipelle', [alice.id, bruno.id, david.id], alice.cookies);
+    const privé = (await createEquipment('Broyeur', [alice.id, david.id], alice.cookies)).json() as { id: string };
+    expect((await get(`/api/equipments/${privé.id}`, bruno.cookies)).statusCode).toBe(404);
+
+    const invite = await post(`/api/members/${david.id}/invite`, {}, bruno.cookies);
+    expect(invite.statusCode).toBe(404);
+    expect((invite.json() as { error: string }).error).toBe(`Membre introuvable : ${david.id}`);
+    // L'invitant, lui, relance sans difficulté : la relance légitime reste possible.
+    expect((await post(`/api/members/${david.id}/invite`, {}, alice.cookies)).statusCode).toBe(201);
+  });
+
+  it('un membre ne peut pas s’inscrire un cercle avec quelqu’un hors de son périmètre', async () => {
+    // Le périmètre sert de règle d'accès (annuaire, invitations) : s'il s'écrit unilatéralement,
+    // il ne borne plus rien — il suffisait de connaître un identifiant pour l'englober.
+    const alice = await bootstrapAlice();
+    const bruno = await inviteAndRedeem('Bruno', alice.cookies);
+    const chloe = await inviteAndRedeem('Chloé', alice.cookies);
+    expect(await annuaire(bruno.cookies)).toEqual(['Alice', 'Bruno']);
+
+    const imposé = await createEquipment('Cercle imposé', [bruno.id, chloe.id], bruno.cookies);
+    expect(imposé.statusCode).toBe(400);
+    expect((imposé.json() as { error: string }).error).toBe(`Membres inconnus : ${chloe.id}`);
+    expect(await annuaire(bruno.cookies)).toEqual(['Alice', 'Bruno']);
+
+    // Même refus par modification d'un équipement existant.
+    const sien = (await createEquipment('Remorque', [bruno.id], bruno.cookies)).json() as { id: string };
+    const ajout = await app.inject({
+      method: 'PUT',
+      url: `/api/equipments/${sien.id}`,
+      payload: { memberIds: [bruno.id, chloe.id] },
+      cookies: bruno.cookies,
+    });
+    expect(ajout.statusCode).toBe(400);
+  });
+
+  it('ne dit pas si une adresse hors périmètre est déjà prise', async () => {
+    const alice = await bootstrapAlice();
+    await post('/api/members', { name: 'Chloé', email: 'chloe@example.test' }, alice.cookies);
+    const bruno = await inviteAndRedeem('Bruno', alice.cookies);
+    // Bruno ne voit pas Chloé dans l'annuaire : la création d'un membre ne doit pas lui rendre,
+    // adresse par adresse, ce que l'annuaire lui refuse.
+    expect(await annuaire(bruno.cookies)).toEqual(['Alice', 'Bruno']);
+    const sonde = await post('/api/members', { name: 'sonde', email: 'chloe@example.test' }, bruno.cookies);
+    expect(sonde.statusCode).toBe(201);
+
+    // Dans son propre périmètre, en revanche, le doublon est signalé : Bruno voit déjà l'adresse.
+    const doublon = await post('/api/members', { name: 'sonde', email: 'chloe@example.test' }, bruno.cookies);
+    expect(doublon.statusCode).toBe(409);
   });
 
   it('une invitation ne réinitialise jamais un compte déjà ouvert', async () => {
@@ -1360,7 +1436,9 @@ describe('API — cloisonnement des comptes (annuaire, invitations, sessions)', 
     expect(await annuaire(alice.cookies)).toEqual(['Alice', 'Bruno', 'Chloé']);
     // Bruno voit son cercle, et rien de plus : Chloé lui est inconnue.
     expect(await annuaire(bruno.cookies)).toEqual(['Alice', 'Bruno']);
-    expect(await annuaire(chloe.cookies)).toEqual(['Chloé']);
+    // Chloé n'a aucun cercle : il lui reste Alice, qui l'a invitée — le lien vaut dans les deux
+    // sens, sans quoi elle n'aurait personne à qui ouvrir son premier équipement.
+    expect(await annuaire(chloe.cookies)).toEqual(['Alice', 'Chloé']);
   });
 
   it('n’expose l’email d’un membre qu’à l’intérieur de son périmètre', async () => {

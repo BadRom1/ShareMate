@@ -3,6 +3,7 @@ import type { MeterUnit } from '../domain/equipment/equipment.js';
 import { Money } from '../domain/shared/money.js';
 import { DomainError } from '../domain/shared/domain-error.js';
 import { equipmentForMember, equipmentsForMember } from './equipment-access.js';
+import { visibleMemberIds } from './member-scope.js';
 import { purgeOrphanReceipts } from './receipt-access.js';
 import type {
   AuditLogger,
@@ -55,20 +56,26 @@ export class EquipmentService {
     private readonly receipts?: ReceiptStorage,
   ) {}
 
-  private async assertMembersExist(memberIds: string[]): Promise<void> {
-    const unknown: string[] = [];
-    for (const memberId of memberIds) {
-      if (!(await this.members.findById(memberId))) {
-        unknown.push(memberId);
-      }
-    }
-    if (unknown.length > 0) {
-      throw new DomainError(`Membres inconnus : ${unknown.join(', ')}`);
+  /**
+   * Membres qu'un demandeur peut inscrire dans un cercle : ceux de son périmètre relationnel,
+   * et eux seuls. Sans cette garde, `memberIds` est un champ libre — n'importe quel identifiant
+   * connu entre dans le cercle de son choix, sans que l'intéressé le sache ni y consente. Le
+   * périmètre devient alors inscriptible par celui qu'il est censé borner, ce qui le rend
+   * inutilisable comme règle d'accès partout où il sert (annuaire, invitations).
+   *
+   * Un identifiant hors périmètre reçoit le message d'un identifiant inconnu : appartenir au
+   * périmètre implique d'exister, et distinguer les deux refus permettrait d'énumérer les membres.
+   */
+  private async assertMembersAssignable(memberIds: string[], requesterId: string): Promise<void> {
+    const scope = await visibleMemberIds(this.equipments, this.members, requesterId);
+    const rejected = memberIds.filter((memberId) => !scope.has(memberId));
+    if (rejected.length > 0) {
+      throw new DomainError(`Membres inconnus : ${rejected.join(', ')}`);
     }
   }
 
   async create(input: CreateEquipmentInput, creatorId: string): Promise<Equipment> {
-    await this.assertMembersExist(input.memberIds);
+    await this.assertMembersAssignable(input.memberIds, creatorId);
     // Sans son créateur dans le cercle, l'équipement serait invisible pour lui dès sa création.
     if (!input.memberIds.includes(creatorId)) {
       throw new DomainError("Vous devez faire partie du cercle de l'équipement que vous créez.");
@@ -91,7 +98,7 @@ export class EquipmentService {
     // Le cercle se coopte : seul un membre peut modifier l'équipement, y compris sa composition.
     const existing = await equipmentForMember(this.equipments, id, requesterId);
     if (input.memberIds) {
-      await this.assertMembersExist(input.memberIds);
+      await this.assertMembersAssignable(input.memberIds, requesterId);
       // Décocher sa propre case ferait disparaître l'équipement et tout son historique de la vue
       // de l'auteur, sans retour possible — trop lourd pour un effet de bord d'un formulaire.
       // Partir est un geste à part entière : `leaveCircle`.
