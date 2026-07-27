@@ -245,30 +245,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.clock,
   );
 
-  // Toute route /api/* ou /uploads/* exige une session, sauf celles marquées `config.public`.
-  // Posé sur la racine : les plugins de domaine, enregistrés ensuite, en héritent.
   app.decorateRequest('authMember', null as unknown as Member);
-  app.addHook('onRequest', async (request, reply) => {
-    const url = request.raw.url ?? '';
-    if (!url.startsWith('/api/') && !url.startsWith('/uploads/')) {
-      return; // front statique : l'écran de connexion doit rester accessible
-    }
-    if (request.routeOptions?.config?.public) {
-      return;
-    }
-    const token = sessionToken(request);
-    const session = token ? await authService.authenticate(token) : null;
-    if (!session) {
-      return reply.status(401).send({ error: 'Authentification requise.' });
-    }
-    // Prolongation glissante rendue au navigateur : sans cette repose, le cookie garderait
-    // l'échéance de la connexion et disparaîtrait pendant que la session serveur court encore.
-    // L'app native, elle, porte son jeton en Bearer et n'a pas de cookie à rafraîchir.
-    if (session.renewed && request.cookies[SESSION_COOKIE]) {
-      setSessionCookie(reply, token!, session.expiresAt, deps.cookieSecure ?? false);
-    }
-    request.authMember = session.member;
-  });
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof UnauthorizedError) {
@@ -312,19 +289,50 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
 
   app.get('/api/health', { config: { public: true } }, async () => ({ status: 'ok' }));
 
-  // Composition : chaque plugin reçoit explicitement les services dont il a besoin.
-  await app.register(authRoutes, { authService, cookieSecure: deps.cookieSecure ?? false, rateLimits });
-  await app.register(memberRoutes, { authService, memberService, rateLimits });
-  await app.register(equipmentRoutes, { equipmentService });
-  await app.register(reservationRoutes, { reservationService });
-  await app.register(usageRoutes, { usageService });
-  await app.register(expenseRoutes, { expenseService });
-  await app.register(discussionRoutes, { discussionService });
-  await app.register(checklistRoutes, { checklistService });
-  await app.register(notificationRoutes, { notificationService, vapidPublicKey: deps.vapidPublicKey ?? null });
-  if (receiptStorage) {
-    await app.register(uploadRoutes, { storage: receiptStorage, expenseService, rateLimits });
-  }
+  /**
+   * Périmètre protégé. Le hook de session est posé sur ce contexte encapsulé, et les plugins de
+   * domaine sont enregistrés dedans : toute route qu'ils déclarent exige une session, sauf celles
+   * marquées `config.public`. C'est la composition qui porte le périmètre, pas un préfixe d'URL —
+   * `request.raw.url` n'est pas décodé alors que le routeur, lui, l'est, si bien qu'un test sur
+   * `startsWith('/api/')` laissait `/%61pi/uploads/receipts` atteindre le handler sans session.
+   * Les routes hors de ce contexte (front statique, santé) sont publiques par construction.
+   */
+  await app.register(async (protectedScope) => {
+    protectedScope.addHook('onRequest', async (request, reply) => {
+      if (request.routeOptions?.config?.public) {
+        return;
+      }
+      const token = sessionToken(request);
+      const session = token ? await authService.authenticate(token) : null;
+      if (!session) {
+        return reply.status(401).send({ error: 'Authentification requise.' });
+      }
+      // Prolongation glissante rendue au navigateur : sans cette repose, le cookie garderait
+      // l'échéance de la connexion et disparaîtrait pendant que la session serveur court encore.
+      // L'app native, elle, porte son jeton en Bearer et n'a pas de cookie à rafraîchir.
+      if (session.renewed && request.cookies[SESSION_COOKIE]) {
+        setSessionCookie(reply, token!, session.expiresAt, deps.cookieSecure ?? false);
+      }
+      request.authMember = session.member;
+    });
+
+    // Composition : chaque plugin reçoit explicitement les services dont il a besoin.
+    await protectedScope.register(authRoutes, { authService, cookieSecure: deps.cookieSecure ?? false, rateLimits });
+    await protectedScope.register(memberRoutes, { authService, memberService, rateLimits });
+    await protectedScope.register(equipmentRoutes, { equipmentService });
+    await protectedScope.register(reservationRoutes, { reservationService });
+    await protectedScope.register(usageRoutes, { usageService });
+    await protectedScope.register(expenseRoutes, { expenseService });
+    await protectedScope.register(discussionRoutes, { discussionService });
+    await protectedScope.register(checklistRoutes, { checklistService });
+    await protectedScope.register(notificationRoutes, {
+      notificationService,
+      vapidPublicKey: deps.vapidPublicKey ?? null,
+    });
+    if (receiptStorage) {
+      await protectedScope.register(uploadRoutes, { storage: receiptStorage, expenseService, rateLimits });
+    }
+  });
 
   // --- Front statique (production) ---
   // Reste ici : le repli SPA s'appuie sur `reply.sendFile`, décoré par ce @fastify/static

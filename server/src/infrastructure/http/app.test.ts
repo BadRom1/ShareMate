@@ -336,11 +336,35 @@ describe('API — justificatifs et front statique', () => {
     expect(spa.statusCode).toBe(200);
     expect(spa.payload).toContain('ShareMate');
 
-    // Une route d'API inconnue reste un 404 JSON (401 sans session : le hook passe avant).
-    expect((await staticApp.inject({ method: 'GET', url: '/api/inconnu' })).statusCode).toBe(401);
+    // Une route d'API inconnue est un 404 JSON, avec ou sans session : aucune route n'ayant été
+    // appariée, il n'y a rien à protéger — la garde de session vit dans les plugins de domaine.
+    expect((await staticApp.inject({ method: 'GET', url: '/api/inconnu' })).statusCode).toBe(404);
     const api = await staticApp.inject({ method: 'GET', url: '/api/inconnu', cookies });
     expect(api.statusCode).toBe(404);
     expect((api.json() as { error: string }).error).toBeTruthy();
+  });
+
+  it('un chemin encodé ne contourne pas la garde de session', async () => {
+    await session(); // l'instance est amorcée : seule la session manque
+    // Le routeur décode le pourcentage avant d'apparier, l'URL brute non : décider de
+    // l'authentification sur `request.raw.url` laissait `/%61pi/...` atteindre le handler.
+    const { payload, headers } = filePayload('recu.png', Buffer.from('charge-utile-anonyme'));
+    const dépôt = await staticApp.inject({ method: 'POST', url: '/%61pi/uploads/receipts', payload, headers });
+    expect(dépôt.statusCode, `corps : ${dépôt.body}`).toBe(401);
+    // Aucun octet écrit : le remplissage de disque anonyme passait par là.
+    expect(fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : []).toEqual([]);
+
+    const encodées: [string, string, unknown][] = [
+      ['GET', '/%61pi/members', undefined],
+      ['GET', '/a%70i/notifications', undefined],
+      ['DELETE', '/%61pi/notifications/subscriptions', { endpoint: 'https://push.example.test/abonnement' }],
+      ['DELETE', '/%61pi/notifications/device-tokens', { token: 'jeton-alice' }],
+      ['GET', '/%75ploads/00000000-0000-4000-8000-000000000000.png', undefined],
+    ];
+    for (const [method, url, body] of encodées) {
+      const res = await staticApp.inject({ method: method as 'GET', url, payload: body as Record<string, unknown> });
+      expect(res.statusCode, `${method} ${url} → ${res.body}`).toBe(401);
+    }
   });
 });
 
