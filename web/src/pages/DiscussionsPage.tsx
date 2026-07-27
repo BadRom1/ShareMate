@@ -110,11 +110,16 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     listEndRef.current?.scrollIntoView({ block: 'nearest' });
   }, [messages]);
 
-  // Changement d'équipement : on referme le fil ouvert et on mémorise la consultation.
+  // Mémorise l'équipement consulté (partagé avec les autres onglets).
   useEffect(() => {
-    setOpenThreadId(null);
     if (selectedId) setLastEquipmentId(selectedId);
   }, [selectedId]);
+
+  // Fil ciblé par un lien de notification, y compris quand un second lien arrive alors que
+  // l'onglet est déjà affiché : l'état initial ne suffit pas, le composant reste monté.
+  useEffect(() => {
+    if (initialThreadId) setOpenThreadId(initialThreadId);
+  }, [initialThreadId]);
 
   // Échap ferme la modale de création.
   useEffect(() => {
@@ -273,7 +278,15 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
         <div className="row" style={{ alignItems: 'center' }}>
           <label className="field" style={{ flex: '0 0 auto', minWidth: '16rem' }}>
             Équipement
-            <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
+            <select
+              value={selectedId}
+              onChange={(e) => {
+                // Le fil ouvert appartient à l'équipement quitté : il se referme ici, et non dans
+                // un effet sur `selectedId` qui écraserait aussi le fil ciblé par une notification.
+                setOpenThreadId(null);
+                setSelectedId(e.target.value);
+              }}
+            >
               {equipments.map((e) => (
                 <option key={e.id} value={e.id}>
                   {e.name}
