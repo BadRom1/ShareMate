@@ -251,6 +251,14 @@ describe('AuthService — login et sessions', () => {
     expect(await service.authenticate(session.token)).toBeNull();
   });
 
+  it('une requête sans jeton est refusée comme une autre', async () => {
+    // L'absence de jeton se traite dans le service, pas chez l'appelant : sinon chaque adapter
+    // rejouerait la garde, et c'est le porteur d'un jeton — donnée de l'appelant — qui déciderait
+    // du chemin suivi.
+    expect(await service.authenticate(undefined)).toBeNull();
+    expect(await service.authenticate('')).toBeNull();
+  });
+
   it('une session expirée est refusée', async () => {
     const { session } = await service.login('Bruno', 'secretbruno');
     fixture.clock.set(new Date('2026-08-15T10:00:00Z')); // > 30 jours

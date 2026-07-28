@@ -43,9 +43,10 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
     return body;
   }
 
-  app.get('/api/auth/me', { config: { public: true } }, async (request) => {
-    const token = sessionToken(request);
-    const session = token ? await authService.authenticate(token) : null;
+  // Seule route anonyme qui interroge la base (session + amorçage) : plafonnée plus bas que le
+  // global, assez haut pour qu'un rechargement de page répété n'y touche jamais.
+  app.get('/api/auth/me', { config: { public: true, rateLimit: limit(rateLimits.anonymousRead) } }, async (request) => {
+    const session = await authService.authenticate(sessionToken(request));
     return {
       member: session ? memberDto(session.member) : null,
       needsBootstrap: await authService.needsBootstrap(),
@@ -109,6 +110,12 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
   app.post<{ Body: { currentPassword: string; newPassword: string } }>(
     '/api/auth/password',
     {
+      // La session ne suffit pas à protéger cette route : elle vérifie puis calcule un scrypt à
+      // N=2^17, soit deux fois ~128 Mio et l'essentiel d'un cœur par appel. Sous le seul plafond
+      // global, un membre légitime épuiserait la machine sans rien détourner. Le plafond des
+      // routes d'authentification s'applique donc ici aussi — changer dix fois de mot de passe en
+      // une minute n'a par ailleurs aucun sens.
+      config: { rateLimit: AUTH_RATE_LIMIT },
       schema: {
         body: object({ currentPassword: password, newPassword: password }, ['currentPassword', 'newPassword']),
       },

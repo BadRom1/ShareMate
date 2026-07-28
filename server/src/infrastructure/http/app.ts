@@ -303,7 +303,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         return;
       }
       const token = sessionToken(request);
-      const session = token ? await authService.authenticate(token) : null;
+      const session = await authService.authenticate(token);
       if (!session) {
         return reply.status(401).send({ error: 'Authentification requise.' });
       }

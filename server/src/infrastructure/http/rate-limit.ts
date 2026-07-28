@@ -12,11 +12,13 @@ export interface RateLimits {
   auth: number;
   /** Création de compte et téléversement : lents, volumineux, ou ouvrant un accès. */
   sensitive: number;
+  /** Lecture anonyme touchant la base : bornée sous le global, sans gêner un usage humain. */
+  anonymousRead: number;
 }
 
 export const RATE_WINDOW = '1 minute';
 
-export const DEFAULT_RATE_LIMITS: RateLimits = { global: 300, auth: 10, sensitive: 20 };
+export const DEFAULT_RATE_LIMITS: RateLimits = { global: 300, auth: 10, sensitive: 20, anonymousRead: 60 };
 
 /** Plafond de route, à poser dans `config.rateLimit`. */
 export function limit(max: number) {

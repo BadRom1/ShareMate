@@ -198,7 +198,13 @@ export class AuthService {
   }
 
   /** Session portée par ce jeton, avec prolongation glissante ; null si elle n'est plus valable. */
-  async authenticate(token: string): Promise<AuthenticatedSession | null> {
+  async authenticate(token: string | undefined): Promise<AuthenticatedSession | null> {
+    // L'absence de jeton est traitée ici, et non chez l'appelant : une requête anonyme et une
+    // requête au jeton inconnu doivent suivre le même chemin, et le seul fait de porter un jeton
+    // ne doit jamais être ce qui décide de l'issue.
+    if (!token) {
+      return null;
+    }
     const tokenHash = this.tokens.hash(token);
     const session = await this.sessions.findByTokenHash(tokenHash);
     const now = this.clock.now();

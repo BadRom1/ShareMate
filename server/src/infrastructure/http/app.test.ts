@@ -63,7 +63,7 @@ async function buildTestApp(overrides: Partial<AppDependencies> = {}): Promise<F
     clock: new SystemClock(),
     // Les parcours d'intégration enchaînent des dizaines de requêtes depuis la même « IP » :
     // les plafonds sont relevés ici, et testés pour eux-mêmes sur une app dédiée (voir plus bas).
-    rateLimits: { global: 10_000, auth: 10_000, sensitive: 10_000 },
+    rateLimits: { global: 10_000, auth: 10_000, sensitive: 10_000, anonymousRead: 10_000 },
     ...overrides,
   });
 }
@@ -473,6 +473,29 @@ describe('API — authentification', () => {
       const coupée = await tentative();
       expect(coupée.statusCode).toBe(429);
       expect((coupée.json() as { error: string }).error).toMatch(/^Trop de requêtes\./);
+    } finally {
+      await bridée.close();
+    }
+  });
+
+  it('le changement de mot de passe est plafonné comme les routes d’authentification', async () => {
+    // Deux scrypt à N=2^17 par appel : la session ne suffit pas à protéger la machine, seul le
+    // plafond le fait. Sans lui, la route resterait sous le global, cent fois plus haut.
+    const bridée = await buildTestApp({ rateLimits: DEFAULT_RATE_LIMITS });
+    try {
+      const alice = await bootstrapAlice(bridée);
+      const tentative = () =>
+        bridée.inject({
+          method: 'POST',
+          url: '/api/auth/password',
+          payload: { currentPassword: 'mauvais-mot-de-passe', newPassword: 'nouveau-motdepasse' },
+          cookies: alice.cookies,
+        });
+      // Le compteur est propre à la route : le bootstrap qui précède ne l'a pas entamé.
+      for (let i = 0; i < DEFAULT_RATE_LIMITS.auth; i++) {
+        expect((await tentative()).statusCode).toBe(401);
+      }
+      expect((await tentative()).statusCode).toBe(429);
     } finally {
       await bridée.close();
     }
