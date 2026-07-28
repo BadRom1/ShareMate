@@ -4,7 +4,6 @@ import type { AuthService, AuthSession } from '../../../application/auth-service
 import { memberDto } from '../dto.js';
 import { SESSION_COOKIE, isNativeClient, sessionToken, setSessionCookie } from '../session.js';
 import { nullableText, object, params, text } from '../schema.js';
-import { limit } from '../rate-limit.js';
 import type { RateLimits } from '../rate-limit.js';
 
 /**
@@ -27,9 +26,6 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
   app,
   { authService, cookieSecure, rateLimits },
 ) => {
-  /** Limite anti force-brute des routes d'authentification publiques. */
-  const AUTH_RATE_LIMIT = limit(rateLimits.auth);
-
   /**
    * Établit la session : cookie (web) et, pour l'app native, le token dans le corps pour
    * qu'elle le stocke et le renvoie ensuite en `Authorization: Bearer`.
@@ -45,7 +41,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
 
   // Seule route anonyme qui interroge la base (session + amorçage) : plafonnée plus bas que le
   // global, assez haut pour qu'un rechargement de page répété n'y touche jamais.
-  app.get('/api/auth/me', { config: { public: true, rateLimit: limit(rateLimits.anonymousRead) } }, async (request) => {
+  app.get('/api/auth/me', { config: { public: true, limitPerMinute: rateLimits.anonymousRead } }, async (request) => {
     const session = await authService.authenticate(sessionToken(request));
     return {
       member: session ? memberDto(session.member) : null,
@@ -56,7 +52,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
   app.post<{ Body: { name: string; email?: string | null; password: string } }>(
     '/api/auth/bootstrap',
     {
-      config: { public: true, rateLimit: AUTH_RATE_LIMIT },
+      config: { public: true, limitPerMinute: rateLimits.auth },
       schema: { body: object({ name: text(120), email: nullableText(254), password }, ['name', 'password']) },
     },
     async (request, reply) => {
@@ -68,7 +64,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
   app.post<{ Body: { identifier: string; password: string } }>(
     '/api/auth/login',
     {
-      config: { public: true, rateLimit: AUTH_RATE_LIMIT },
+      config: { public: true, limitPerMinute: rateLimits.auth },
       schema: { body: object({ identifier: text(200), password }, ['identifier', 'password']) },
     },
     async (request, reply) => {
@@ -88,7 +84,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
 
   app.get<{ Params: { code: string } }>(
     '/api/auth/invites/:code',
-    { config: { public: true, rateLimit: AUTH_RATE_LIMIT }, schema: { params: codeParams } },
+    { config: { public: true, limitPerMinute: rateLimits.auth }, schema: { params: codeParams } },
     async (request) => {
       const member = await authService.inviteInfo(request.params.code);
       return { memberName: member.name };
@@ -98,7 +94,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
   app.post<{ Params: { code: string }; Body: { password: string } }>(
     '/api/auth/invites/:code/redeem',
     {
-      config: { public: true, rateLimit: AUTH_RATE_LIMIT },
+      config: { public: true, limitPerMinute: rateLimits.auth },
       schema: { params: codeParams, body: object({ password }, ['password']) },
     },
     async (request, reply) => {
@@ -115,7 +111,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
       // global, un membre légitime épuiserait la machine sans rien détourner. Le plafond des
       // routes d'authentification s'applique donc ici aussi — changer dix fois de mot de passe en
       // une minute n'a par ailleurs aucun sens.
-      config: { rateLimit: AUTH_RATE_LIMIT },
+      config: { limitPerMinute: rateLimits.auth },
       schema: {
         body: object({ currentPassword: password, newPassword: password }, ['currentPassword', 'newPassword']),
       },

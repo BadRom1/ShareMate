@@ -478,6 +478,24 @@ describe('API — authentification', () => {
     }
   });
 
+  it('une requête anonyme sur une route protégée est plafonnée elle aussi', async () => {
+    // Le plafond du greffon s'attache au niveau de la route, donc après les hooks de contexte :
+    // la garde de session rendait 401 avant que le compteur ne s'incrémente, et marteler une
+    // route protégée sans cookie ne coûtait rien à personne. Le plafond global est désormais posé
+    // en `onRequest` à la racine, avant l'authentification.
+    const bridée = await buildTestApp({ rateLimits: { ...DEFAULT_RATE_LIMITS, global: 5 } });
+    try {
+      const codes: number[] = [];
+      for (let i = 0; i < 7; i++) {
+        codes.push((await get('/api/equipments', undefined, bridée)).statusCode);
+      }
+      expect(codes.slice(0, 5)).toEqual([401, 401, 401, 401, 401]);
+      expect(codes.slice(5)).toEqual([429, 429]);
+    } finally {
+      await bridée.close();
+    }
+  });
+
   it('le changement de mot de passe est plafonné comme les routes d’authentification', async () => {
     // Deux scrypt à N=2^17 par appel : la session ne suffit pas à protéger la machine, seul le
     // plafond le fait. Sans lui, la route resterait sous le global, cent fois plus haut.

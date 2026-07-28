@@ -50,7 +50,7 @@ import type {
 } from '../../application/ports.js';
 import { CLIENT_HEADER, SESSION_COOKIE, sessionToken, setSessionCookie } from './session.js';
 import { AJV_OPTIONS, schemaErrorFormatter } from './schema.js';
-import { DEFAULT_RATE_LIMITS, RATE_WINDOW, tooManyRequests } from './rate-limit.js';
+import { DEFAULT_RATE_LIMITS, RATE_WINDOW, keyPerRoute, maxFor, tooManyRequests } from './rate-limit.js';
 import type { RateLimits } from './rate-limit.js';
 import { authRoutes } from './plugins/auth.js';
 import { memberRoutes } from './plugins/members.js';
@@ -148,15 +148,19 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       allowedHeaders: ['Content-Type', 'Authorization', CLIENT_HEADER],
     });
   }
-  // Chargé avant la déclaration des routes, sinon son hook onRoute ne s'applique pas.
-  // Global : chaque route est plafonnée par défaut, les plus exposées le sont plus bas
-  // via `config.rateLimit` (voir rate-limit.ts).
   const rateLimits = { ...DEFAULT_RATE_LIMITS, ...deps.rateLimits };
-  await app.register(rateLimit, {
-    max: rateLimits.global,
-    timeWindow: RATE_WINDOW,
-    errorResponseBuilder: tooManyRequests,
-  });
+  await app.register(rateLimit, { global: false, errorResponseBuilder: tooManyRequests });
+
+  /**
+   * Point de comptage unique, en `onRequest` à la racine : il précède donc la garde de session et
+   * borne aussi les requêtes anonymes sur les routes protégées, que le mode par route laissait
+   * passer sans les compter (voir rate-limit.ts). Le plafond est choisi par route via
+   * `config.limitPerMinute`, la clé porte l'IP et le gabarit de route.
+   */
+  app.addHook(
+    'onRequest',
+    app.rateLimit({ max: maxFor(rateLimits), keyGenerator: keyPerRoute, timeWindow: RATE_WINDOW }),
+  );
 
   const noopPushSender: PushSender = {
     async sendWebPush() {

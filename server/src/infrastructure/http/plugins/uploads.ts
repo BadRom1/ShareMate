@@ -5,7 +5,6 @@ import { NotFoundError } from '../../../domain/shared/domain-error.js';
 import { receiptNotFound } from '../../../application/receipt-access.js';
 import type { ExpenseService } from '../../../application/expense-service.js';
 import { FileSystemReceiptStorage, RECEIPT_PREFIX } from '../../tech/receipt-storage.js';
-import { limit } from '../rate-limit.js';
 import type { RateLimits } from '../rate-limit.js';
 import { receiptNameParams } from '../schema.js';
 import '../session.js'; // augmentation de type : request.authMember
@@ -25,7 +24,7 @@ export const uploadRoutes: FastifyPluginAsync<UploadRoutesOptions> = async (
   await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });
 
   // 10 Mo par fichier : plafond serré, sinon le disque se remplit à volonté.
-  app.post('/api/uploads/receipts', { config: { rateLimit: limit(rateLimits.sensitive) } }, async (request, reply) => {
+  app.post('/api/uploads/receipts', { config: { limitPerMinute: rateLimits.sensitive } }, async (request, reply) => {
     const file = await request.file();
     if (!file) {
       return reply.status(400).send({ error: 'Aucun fichier reçu.' });
