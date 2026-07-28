@@ -13,10 +13,31 @@ export function assetUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
+/** Forme exacte des chemins produits par POST /api/uploads/receipts. */
+const RECEIPT_PATH = /^\/uploads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpe?g|webp|pdf)$/;
+
+/**
+ * URL d'un justificatif, ou `null` si le chemin n'est pas celui d'un fichier téléversé ici.
+ * Le serveur applique la même règle à l'écriture : ce filtre couvre les dépenses enregistrées
+ * avant elle, pour ne jamais rendre cliquable une URL choisie par un membre du cercle.
+ */
+export function receiptUrl(path: string | null): string | null {
+  return path && RECEIPT_PATH.test(path) ? assetUrl(path) : null;
+}
+
 export interface Member {
   id: string;
   name: string;
   email: string | null;
+}
+
+/**
+ * Membre de l'annuaire (cadré sur le périmètre du demandeur). `hasPassword` distingue un compte
+ * déjà ouvert d'un compte en attente de première connexion, seul destinataire possible d'un lien
+ * d'invitation.
+ */
+export interface DirectoryMember extends Member {
+  hasPassword: boolean;
 }
 
 export type MeterUnit = 'HOURS' | 'KILOMETERS';
@@ -165,7 +186,12 @@ export interface ChecklistItem {
 }
 
 export type NotificationType =
-  'MESSAGE_POSTED' | 'EXPENSE_ADDED' | 'RESERVATION_CREATED' | 'REIMBURSEMENT_RECORDED' | 'MAINTENANCE_ALERT';
+  | 'MESSAGE_POSTED'
+  | 'EXPENSE_ADDED'
+  | 'RESERVATION_CREATED'
+  | 'REIMBURSEMENT_RECORDED'
+  | 'MAINTENANCE_ALERT'
+  | 'EQUIPMENT_CIRCLE_CHANGED';
 
 export interface AppNotification {
   id: string;
@@ -222,6 +248,12 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     headers: { ...buildHeaders(Boolean(options?.body)), ...options?.headers },
   });
   if (response.status === 401 && !url.startsWith('/api/auth/')) {
+    // Session expirée ou révoquée. C'est le seul chemin qu'emprunte un intrus — il ne cliquera
+    // pas sur « se déconnecter » —, et c'est celui que produit un changement de mot de passe, qui
+    // révoque toutes les sessions du membre. L'appareil doit donc s'y vider comme à la
+    // déconnexion : sans cela, le geste réflexe après une compromission laisse l'attaquant lire
+    // hors ligne une journée de dépenses, de soldes, de messages et d'annuaire.
+    await forgetSession();
     onUnauthorized?.();
   }
   if (!response.ok) {
@@ -245,6 +277,24 @@ async function authRequest(url: string, options: RequestInit): Promise<{ member:
   return { member: res.member };
 }
 
+/**
+ * Vide les caches du service worker (`sharemate-*`, voir web/vite.config.ts). Ils gardent hors
+ * ligne les réponses de l'API du membre qui se déconnecte : sans cette purge, elles restent
+ * lisibles sur l'appareil, y compris par le compte suivant. Le précache du shell applicatif
+ * (`workbox-*`) ne contient rien de personnel et survit, sinon l'app ne démarrerait plus hors ligne.
+ */
+async function purgeOfflineCaches(): Promise<void> {
+  if (typeof caches === 'undefined') return;
+  const keys = await caches.keys();
+  await Promise.all(keys.filter((k) => k.startsWith('sharemate-')).map((k) => caches.delete(k)));
+}
+
+/** Ne laisse plus rien de la session sur l'appareil : jeton natif et réponses d'API en cache. */
+async function forgetSession(): Promise<void> {
+  await setToken(null);
+  await purgeOfflineCaches();
+}
+
 export const api = {
   me: () => request<AuthState>('/api/auth/me'),
   bootstrap: (input: { name: string; email?: string; password: string }) =>
@@ -252,8 +302,13 @@ export const api = {
   login: (identifier: string, password: string) =>
     authRequest('/api/auth/login', { method: 'POST', body: JSON.stringify({ identifier, password }) }),
   logout: async () => {
-    await request<void>('/api/auth/logout', { method: 'POST', body: JSON.stringify({}) });
-    await setToken(null);
+    try {
+      await request<void>('/api/auth/logout', { method: 'POST', body: JSON.stringify({}) });
+    } finally {
+      // Même si la révocation côté serveur échoue (hors ligne), l'appareil se vide : l'écran
+      // retombe de toute façon sur la connexion (App.tsx), jeton et caches ne doivent pas rester.
+      await forgetSession();
+    }
   },
   inviteInfo: (code: string) => request<{ memberName: string }>(`/api/auth/invites/${encodeURIComponent(code)}`),
   redeemInvite: (code: string, password: string) =>
@@ -261,12 +316,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ password }),
     }),
+  // Le changement de mot de passe révoque toutes les sessions du membre : la réponse en rouvre
+  // une, dont le jeton doit remplacer l'ancien côté natif.
   changePassword: (currentPassword: string, newPassword: string) =>
-    request<void>('/api/auth/password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
+    authRequest('/api/auth/password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
 
-  listMembers: () => request<Member[]>('/api/members'),
+  listMembers: () => request<DirectoryMember[]>('/api/members'),
   createMember: (input: { name: string; email?: string }) =>
-    request<Member & { inviteCode: string }>('/api/members', { method: 'POST', body: JSON.stringify(input) }),
+    request<DirectoryMember & { inviteCode: string }>('/api/members', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   regenerateInvite: (memberId: string) =>
     request<{ inviteCode: string }>(`/api/members/${memberId}/invite`, { method: 'POST', body: JSON.stringify({}) }),
 
@@ -276,6 +336,8 @@ export const api = {
   updateEquipment: (id: string, input: Partial<Omit<Equipment, 'id'>>) =>
     request<Equipment>(`/api/equipments/${id}`, { method: 'PUT', body: JSON.stringify(input) }),
   deleteEquipment: (id: string) => request<void>(`/api/equipments/${id}`, { method: 'DELETE' }),
+  /** Se retirer du cercle : geste dédié, la mise à jour de l'équipement le refuse. */
+  leaveEquipment: (id: string) => request<void>(`/api/equipments/${id}/leave`, { method: 'POST' }),
 
   calendar: () => request<Reservation[]>('/api/calendar'),
   reserve: (input: { equipmentId: string; start: string; end: string; status?: ReservationStatus; notes?: string }) =>

@@ -30,7 +30,7 @@ export class UsageService {
     private readonly equipments: EquipmentRepository,
     private readonly idGenerator: IdGenerator,
     private readonly clock: Clock,
-    private readonly notifier?: Notifier,
+    private readonly notifier: Notifier,
   ) {}
 
   async recordUsage(input: RecordUsageInput): Promise<UsageEntry> {
@@ -56,18 +56,16 @@ export class UsageService {
     const statusBefore = computeMaintenanceStatus(equipment, existing);
     await this.usageRecords.save(record);
 
-    if (this.notifier) {
-      const statusAfter = computeMaintenanceStatus(equipment, [...existing, record]);
-      // Notifier uniquement au passage en alerte, pas à chaque relevé au-dessus du seuil.
-      if (!statusBefore.alert && statusAfter.alert) {
-        await this.notifier.notify({
-          type: 'MAINTENANCE_ALERT',
-          recipientIds: [...equipment.memberIds],
-          title: `🔧 Entretien : ${equipment.name}`,
-          body: `Le seuil d'entretien est atteint (${statusAfter.unitsSinceMaintenance ?? '?'} ${equipment.meterUnit === 'HOURS' ? 'h' : 'km'} depuis le dernier entretien).`,
-          link: `/?tab=usage&equipment=${equipment.id}`,
-        });
-      }
+    const statusAfter = computeMaintenanceStatus(equipment, [...existing, record]);
+    // Notifier uniquement au passage en alerte, pas à chaque relevé au-dessus du seuil.
+    if (!statusBefore.alert && statusAfter.alert) {
+      await this.notifier.notify({
+        type: 'MAINTENANCE_ALERT',
+        recipientIds: [...equipment.memberIds],
+        title: `🔧 Entretien : ${equipment.name}`,
+        body: `Le seuil d'entretien est atteint (${statusAfter.unitsSinceMaintenance ?? '?'} ${equipment.meterUnit === 'HOURS' ? 'h' : 'km'} depuis le dernier entretien).`,
+        link: `/?tab=usage&equipment=${equipment.id}`,
+      });
     }
     return { record, duration: lastReading === null ? null : record.meterReading - lastReading };
   }
@@ -103,11 +101,10 @@ export class UsageService {
     const accessible = await accessibleEquipmentIds(this.equipments, requesterId);
     const records = (await this.usageRecords.findByMemberId(memberId)).filter((r) => accessible.has(r.equipmentId));
     // La durée dépend du relevé précédent sur l'équipement, quel qu'en soit l'auteur :
-    // on recalcule donc sur l'historique complet de chaque équipement concerné.
+    // on recalcule donc sur l'historique complet des équipements concernés, chargé d'un seul coup.
     const durations = new Map<string, number | null>();
-    for (const equipmentId of new Set(records.map((r) => r.equipmentId))) {
-      const all = await this.usageRecords.findByEquipmentId(equipmentId);
-      for (const [id, duration] of computeDurations(all)) {
+    for (const history of (await this.recordsByEquipment([...new Set(records.map((r) => r.equipmentId))])).values()) {
+      for (const [id, duration] of computeDurations(history)) {
         durations.set(id, duration);
       }
     }
@@ -125,9 +122,16 @@ export class UsageService {
   /** Statuts en alerte, pour les seuls équipements du cercle du demandeur. */
   async alerts(requesterId: string): Promise<MaintenanceStatus[]> {
     const equipments = await equipmentsForMember(this.equipments, requesterId);
-    const statuses = await Promise.all(
-      equipments.map(async (e) => computeMaintenanceStatus(e, await this.usageRecords.findByEquipmentId(e.id))),
-    );
-    return statuses.filter((s) => s.alert);
+    const byEquipment = await this.recordsByEquipment(equipments.map((e) => e.id));
+    return equipments.map((e) => computeMaintenanceStatus(e, byEquipment.get(e.id) ?? [])).filter((s) => s.alert);
+  }
+
+  /** Relevés de plusieurs équipements, indexés par équipement, en une seule interrogation. */
+  private async recordsByEquipment(equipmentIds: string[]): Promise<Map<string, UsageRecord[]>> {
+    const byEquipment = new Map<string, UsageRecord[]>(equipmentIds.map((id) => [id, []]));
+    for (const record of await this.usageRecords.findByEquipmentIds(equipmentIds)) {
+      byEquipment.get(record.equipmentId)?.push(record);
+    }
+    return byEquipment;
   }
 }

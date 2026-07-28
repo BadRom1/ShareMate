@@ -17,7 +17,9 @@ import { Checklist } from '../../../domain/checklist/checklist.js';
 import { ChecklistItem } from '../../../domain/checklist/checklist-item.js';
 import { Notification } from '../../../domain/notification/notification.js';
 import { NotificationPreference } from '../../../domain/notification/preference.js';
+import { NOTIFICATION_TYPES } from '../../../domain/notification/notification-type.js';
 import type { NotificationType } from '../../../domain/notification/notification-type.js';
+import { NOTIFICATION_PAGE_SIZE } from '../../../application/ports.js';
 import type {
   ChecklistItemRepository,
   ChecklistRepository,
@@ -39,30 +41,62 @@ import type {
   WebPushSubscription,
 } from '../../../application/ports.js';
 
+/** `IN (?, ?, …)` : better-sqlite3 ne lie pas un tableau à un seul paramètre. */
+function placeholders(count: number): string {
+  return new Array(count).fill('?').join(', ');
+}
+
+interface MemberRow {
+  id: string;
+  name: string;
+  email: string | null;
+  invited_by: string | null;
+}
+
 export class SqliteMemberRepository implements MemberRepository {
   constructor(private readonly db: SqliteDb) {}
 
-  async findById(id: string): Promise<Member | null> {
-    const row = this.db.prepare('SELECT * FROM members WHERE id = ?').get(id) as
-      { id: string; name: string; email: string | null } | undefined;
-    return row ? Member.create(row) : null;
+  private toEntity(row: MemberRow): Member {
+    return Member.create({ id: row.id, name: row.name, email: row.email, invitedById: row.invited_by });
   }
 
-  async findAll(): Promise<Member[]> {
-    const rows = this.db.prepare('SELECT * FROM members ORDER BY name').all() as {
-      id: string;
-      name: string;
-      email: string | null;
-    }[];
-    return rows.map((r) => Member.create(r));
+  async findById(id: string): Promise<Member | null> {
+    const row = this.db.prepare('SELECT * FROM members WHERE id = ?').get(id) as MemberRow | undefined;
+    return row ? this.toEntity(row) : null;
+  }
+
+  async findByIds(ids: readonly string[]): Promise<Member[]> {
+    if (ids.length === 0) return [];
+    const rows = this.db
+      .prepare(`SELECT * FROM members WHERE id IN (${placeholders(ids.length)}) ORDER BY name`)
+      .all(...ids) as MemberRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
+  async findInvitedBy(inviterId: string): Promise<Member[]> {
+    const rows = this.db
+      .prepare('SELECT * FROM members WHERE invited_by = ? ORDER BY name')
+      .all(inviterId) as MemberRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
+  async findByNameOrEmail(identifier: string): Promise<Member[]> {
+    // `minuscule` (déclarée à l'ouverture de la base) et non `lower` : cette dernière ne replie
+    // que l'ASCII et écarterait « JOSÉ » de « josé ».
+    const wanted = identifier.trim().toLowerCase();
+    const rows = this.db
+      .prepare('SELECT * FROM members WHERE minuscule(name) = ? OR minuscule(email) = ? ORDER BY name')
+      .all(wanted, wanted) as MemberRow[];
+    return rows.map((r) => this.toEntity(r));
   }
 
   async save(member: Member): Promise<void> {
     this.db
       .prepare(
-        'INSERT INTO members (id, name, email) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, email = excluded.email',
+        `INSERT INTO members (id, name, email, invited_by) VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, email = excluded.email, invited_by = excluded.invited_by`,
       )
-      .run(member.id, member.name, member.email);
+      .run(member.id, member.name, member.email, member.invitedById);
   }
 }
 
@@ -70,6 +104,7 @@ interface CredentialRow {
   member_id: string;
   password_hash: string | null;
   invite_code: string | null;
+  invite_expires_at: string | null;
 }
 
 export class SqliteCredentialRepository implements CredentialRepository {
@@ -80,6 +115,7 @@ export class SqliteCredentialRepository implements CredentialRepository {
       memberId: row.member_id,
       passwordHash: row.password_hash,
       inviteCode: row.invite_code,
+      inviteExpiresAt: row.invite_expires_at ? new Date(row.invite_expires_at) : null,
     });
   }
 
@@ -95,6 +131,17 @@ export class SqliteCredentialRepository implements CredentialRepository {
     return row ? this.toEntity(row) : null;
   }
 
+  async findMemberIdsWithPassword(memberIds: readonly string[]): Promise<Set<string>> {
+    if (memberIds.length === 0) return new Set();
+    const rows = this.db
+      .prepare(
+        `SELECT member_id FROM member_credentials
+         WHERE password_hash IS NOT NULL AND member_id IN (${placeholders(memberIds.length)})`,
+      )
+      .all(...memberIds) as { member_id: string }[];
+    return new Set(rows.map((r) => r.member_id));
+  }
+
   async count(): Promise<number> {
     const row = this.db.prepare('SELECT COUNT(*) AS count FROM member_credentials').get() as { count: number };
     return row.count;
@@ -103,10 +150,29 @@ export class SqliteCredentialRepository implements CredentialRepository {
   async save(credential: MemberCredential): Promise<void> {
     this.db
       .prepare(
-        `INSERT INTO member_credentials (member_id, password_hash, invite_code) VALUES (?, ?, ?)
-         ON CONFLICT(member_id) DO UPDATE SET password_hash = excluded.password_hash, invite_code = excluded.invite_code`,
+        `INSERT INTO member_credentials (member_id, password_hash, invite_code, invite_expires_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(member_id) DO UPDATE SET password_hash = excluded.password_hash,
+           invite_code = excluded.invite_code, invite_expires_at = excluded.invite_expires_at`,
       )
-      .run(credential.memberId, credential.passwordHash, credential.inviteCode);
+      .run(credential.memberId, credential.passwordHash, credential.inviteCode, this.expiry(credential));
+  }
+
+  /**
+   * Insertion conditionnée à une table vide, en une seule instruction : la garde du bootstrap
+   * ne peut pas être contournée par deux requêtes entrelacées.
+   */
+  async saveFirst(credential: MemberCredential): Promise<boolean> {
+    const result = this.db
+      .prepare(
+        `INSERT INTO member_credentials (member_id, password_hash, invite_code, invite_expires_at)
+         SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM member_credentials)`,
+      )
+      .run(credential.memberId, credential.passwordHash, credential.inviteCode, this.expiry(credential));
+    return result.changes === 1;
+  }
+
+  private expiry(credential: MemberCredential): string | null {
+    return credential.inviteExpiresAt ? credential.inviteExpiresAt.toISOString() : null;
   }
 }
 
@@ -132,6 +198,10 @@ export class SqliteSessionRepository implements SessionRepository {
     this.db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash);
   }
 
+  async deleteByMemberId(memberId: string): Promise<void> {
+    this.db.prepare('DELETE FROM sessions WHERE member_id = ?').run(memberId);
+  }
+
   async deleteExpired(now: Date): Promise<void> {
     this.db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(now.toISOString());
   }
@@ -150,30 +220,58 @@ interface EquipmentRow {
 export class SqliteEquipmentRepository implements EquipmentRepository {
   constructor(private readonly db: SqliteDb) {}
 
-  private toEntity(row: EquipmentRow): Equipment {
-    const circle = this.db
-      .prepare('SELECT member_id FROM equipment_members WHERE equipment_id = ? ORDER BY position')
-      .all(row.id) as { member_id: string }[];
-    return Equipment.create({
-      id: row.id,
-      name: row.name,
-      category: row.category,
-      acquisitionDate: new Date(row.acquisition_date),
-      purchaseValue: Money.fromCents(row.purchase_value_cents),
-      meterUnit: row.meter_unit as MeterUnit,
-      memberIds: circle.map((a) => a.member_id),
-      maintenanceThreshold: row.maintenance_threshold,
-    });
+  /**
+   * Cercles de plusieurs équipements en une interrogation : les charger un par un rendait le coût
+   * d'une liste proportionnel au nombre d'équipements qu'elle contient.
+   */
+  private cercles(ids: string[]): Map<string, string[]> {
+    const cercles = new Map<string, string[]>(ids.map((id) => [id, []]));
+    if (ids.length === 0) {
+      return cercles;
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT equipment_id, member_id FROM equipment_members
+         WHERE equipment_id IN (${placeholders(ids.length)}) ORDER BY equipment_id, position`,
+      )
+      .all(...ids) as { equipment_id: string; member_id: string }[];
+    for (const row of rows) {
+      cercles.get(row.equipment_id)?.push(row.member_id);
+    }
+    return cercles;
+  }
+
+  private toEntities(rows: EquipmentRow[]): Equipment[] {
+    const cercles = this.cercles(rows.map((r) => r.id));
+    return rows.map((row) =>
+      Equipment.create({
+        id: row.id,
+        name: row.name,
+        category: row.category,
+        acquisitionDate: new Date(row.acquisition_date),
+        purchaseValue: Money.fromCents(row.purchase_value_cents),
+        meterUnit: row.meter_unit as MeterUnit,
+        memberIds: cercles.get(row.id) ?? [],
+        maintenanceThreshold: row.maintenance_threshold,
+      }),
+    );
   }
 
   async findById(id: string): Promise<Equipment | null> {
     const row = this.db.prepare('SELECT * FROM equipments WHERE id = ?').get(id) as EquipmentRow | undefined;
-    return row ? this.toEntity(row) : null;
+    return row ? (this.toEntities([row])[0] ?? null) : null;
   }
 
-  async findAll(): Promise<Equipment[]> {
-    const rows = this.db.prepare('SELECT * FROM equipments ORDER BY name').all() as EquipmentRow[];
-    return rows.map((r) => this.toEntity(r));
+  async findByMemberId(memberId: string): Promise<Equipment[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT e.* FROM equipments e
+           JOIN equipment_members em ON em.equipment_id = e.id
+          WHERE em.member_id = ?
+          ORDER BY e.name`,
+      )
+      .all(memberId) as EquipmentRow[];
+    return this.toEntities(rows);
   }
 
   async save(equipment: Equipment): Promise<void> {
@@ -248,8 +346,15 @@ export class SqliteReservationRepository implements ReservationRepository {
     return rows.map((r) => this.toEntity(r));
   }
 
-  async findAll(): Promise<Reservation[]> {
-    const rows = this.db.prepare('SELECT * FROM reservations ORDER BY start_at').all() as ReservationRow[];
+  async findByEquipmentIds(equipmentIds: readonly string[]): Promise<Reservation[]> {
+    if (equipmentIds.length === 0) {
+      return [];
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM reservations WHERE equipment_id IN (${placeholders(equipmentIds.length)}) ORDER BY start_at`,
+      )
+      .all(...equipmentIds) as ReservationRow[];
     return rows.map((r) => this.toEntity(r));
   }
 
@@ -309,6 +414,18 @@ export class SqliteUsageRecordRepository implements UsageRecordRepository {
     const rows = this.db
       .prepare('SELECT * FROM usage_records WHERE equipment_id = ? ORDER BY recorded_at')
       .all(equipmentId) as UsageRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
+  async findByEquipmentIds(equipmentIds: readonly string[]): Promise<UsageRecord[]> {
+    if (equipmentIds.length === 0) {
+      return [];
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM usage_records WHERE equipment_id IN (${placeholders(equipmentIds.length)}) ORDER BY recorded_at`,
+      )
+      .all(...equipmentIds) as UsageRow[];
     return rows.map((r) => this.toEntity(r));
   }
 
@@ -402,6 +519,11 @@ export class SqliteExpenseRepository implements ExpenseRepository {
     const rows = this.db
       .prepare('SELECT * FROM expenses WHERE equipment_id = ? ORDER BY date DESC')
       .all(equipmentId) as ExpenseRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
+  async findByReceiptPath(receiptPath: string): Promise<Expense[]> {
+    const rows = this.db.prepare('SELECT * FROM expenses WHERE receipt_path = ?').all(receiptPath) as ExpenseRow[];
     return rows.map((r) => this.toEntity(r));
   }
 
@@ -757,7 +879,7 @@ export class SqliteNotificationRepository implements NotificationRepository {
     options?: { unreadOnly?: boolean; limit?: number },
   ): Promise<Notification[]> {
     const clause = options?.unreadOnly ? 'AND read_at IS NULL' : '';
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? NOTIFICATION_PAGE_SIZE;
     const rows = this.db
       .prepare(`SELECT * FROM notifications WHERE recipient_id = ? ${clause} ORDER BY created_at DESC LIMIT ?`)
       .all(recipientId, limit) as NotificationRow[];
@@ -816,13 +938,19 @@ export class SqliteNotificationPreferenceRepository implements NotificationPrefe
     const rows = this.db
       .prepare('SELECT * FROM notification_preferences WHERE member_id = ?')
       .all(memberId) as PreferenceRow[];
-    return rows.map((r) =>
-      NotificationPreference.create({
-        memberId: r.member_id,
-        type: r.type as NotificationType,
-        inApp: r.in_app === 1,
-        push: r.push === 1,
-      }),
+    return (
+      rows
+        // Un type retiré du domaine laisse ses rangées derrière lui : elles ne correspondent plus
+        // à aucune préférence lisible, et `NotificationPreference.create` les rejetterait.
+        .filter((r) => NOTIFICATION_TYPES.includes(r.type as NotificationType))
+        .map((r) =>
+          NotificationPreference.create({
+            memberId: r.member_id,
+            type: r.type as NotificationType,
+            inApp: r.in_app === 1,
+            push: r.push === 1,
+          }),
+        )
     );
   }
 
@@ -858,8 +986,8 @@ export class SqlitePushSubscriptionRepository implements PushSubscriptionReposit
       .run(subscription.endpoint, subscription.memberId, subscription.p256dh, subscription.auth);
   }
 
-  async deleteByEndpoint(endpoint: string): Promise<void> {
-    this.db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint);
+  async deleteByEndpoint(memberId: string, endpoint: string): Promise<void> {
+    this.db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ? AND member_id = ?').run(endpoint, memberId);
   }
 }
 
@@ -884,7 +1012,7 @@ export class SqliteDeviceTokenRepository implements DeviceTokenRepository {
       .run(token.token, token.memberId, token.platform);
   }
 
-  async deleteByToken(token: string): Promise<void> {
-    this.db.prepare('DELETE FROM device_tokens WHERE token = ?').run(token);
+  async deleteByToken(memberId: string, token: string): Promise<void> {
+    this.db.prepare('DELETE FROM device_tokens WHERE token = ? AND member_id = ?').run(token, memberId);
   }
 }

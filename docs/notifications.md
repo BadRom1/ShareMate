@@ -1,7 +1,7 @@
 # Notifications
 
 ShareMate a un système de notifications à trois canaux, **découplé** des fonctionnalités qui les
-déclenchent (discussions, dépenses, réservations, entretien) :
+déclenchent (discussions, dépenses, réservations, entretien, composition des cercles) :
 
 1. **Centre in-app** (cloche 🔔) — toujours actif, aucune configuration. Badge de non-lus,
    liste, marquage lu, préférences par type d'événement.
@@ -14,16 +14,25 @@ Sans les variables d'environnement ci-dessous, le push est **désactivé proprem
 
 ## Événements notifiés
 
-| Type                     | Déclencheur                                | Destinataires         |
-| ------------------------ | ------------------------------------------ | --------------------- |
-| `MESSAGE_POSTED`         | Nouveau message sur le fil d'un équipement | Cercle sauf l'auteur  |
-| `EXPENSE_ADDED`          | Nouvelle dépense                           | Cercle sauf le payeur |
-| `RESERVATION_CREATED`    | Nouvelle réservation                       | Cercle sauf l'auteur  |
-| `REIMBURSEMENT_RECORDED` | Remboursement enregistré                   | Le bénéficiaire       |
-| `MAINTENANCE_ALERT`      | Passage au-dessus du seuil d'entretien     | Tout le cercle        |
+| Type                       | Déclencheur                                | Destinataires                             |
+| -------------------------- | ------------------------------------------ | ----------------------------------------- |
+| `MESSAGE_POSTED`           | Nouveau message sur le fil d'un équipement | Cercle sauf l'auteur                      |
+| `EXPENSE_ADDED`            | Nouvelle dépense                           | Cercle sauf le payeur                     |
+| `RESERVATION_CREATED`      | Nouvelle réservation                       | Cercle sauf l'auteur                      |
+| `REIMBURSEMENT_RECORDED`   | Remboursement enregistré                   | Le bénéficiaire                           |
+| `MAINTENANCE_ALERT`        | Passage au-dessus du seuil d'entretien     | Tout le cercle                            |
+| `EQUIPMENT_CIRCLE_CHANGED` | Composition du cercle modifiée, ou départ  | Retirés, ajoutés et restants (3 messages) |
+
+`EQUIPMENT_CIRCLE_CHANGED` prévient les trois populations d'un changement de composition, avec un
+message distinct pour chacune : ceux qui sont retirés (sans lien — l'équipement ne leur est plus
+accessible), ceux qui sont ajoutés, et ceux qui restent. Ces derniers sont prévenus pour qu'une
+éviction ne se découvre pas par l'absence d'un nom dans une liste. Une notification se marque lue et
+s'efface : le même geste laisse aussi une entrée dans le journal du serveur, hors de portée des
+membres concernés (port `AuditLogger`).
 
 Chaque membre règle, par type, la réception in-app et push (`GET/PUT /api/notifications/preferences`).
-Par défaut tout est activé.
+Par défaut tout est activé. Un type absent de la liste ci-dessus est refusé (`400`) : une préférence
+stockée pour un type inexistant ne serait jamais relue.
 
 ## Web Push (PWA)
 

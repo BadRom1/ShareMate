@@ -20,7 +20,11 @@ import {
   SqliteUsageRecordRepository,
 } from '../persistence/sqlite/repositories.js';
 import { CryptoTokenGenerator, ScryptPasswordHasher, SystemClock, UuidGenerator } from '../tech/adapters.js';
+import { FixedClock } from '../../application/testing/in-memory.js';
 import { buildApp } from './app.js';
+import { DEFAULT_RATE_LIMITS } from './rate-limit.js';
+import type { AppDependencies } from './app.js';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -30,9 +34,10 @@ type Cookies = Record<string, string>;
 
 let app: FastifyInstance;
 
-beforeEach(async () => {
+/** App branchée sur une base SQLite neuve ; `overrides` ajoute ou remplace des dépendances. */
+async function buildTestApp(overrides: Partial<AppDependencies> = {}): Promise<FastifyInstance> {
   const db = openDatabase(':memory:');
-  app = await buildApp({
+  return buildApp({
     members: new SqliteMemberRepository(db),
     equipments: new SqliteEquipmentRepository(db),
     reservations: new SqliteReservationRepository(db),
@@ -49,23 +54,35 @@ beforeEach(async () => {
     deviceTokens: new SqliteDeviceTokenRepository(db),
     credentials: new SqliteCredentialRepository(db),
     sessions: new SqliteSessionRepository(db),
-    passwordHasher: new ScryptPasswordHasher(),
+    // Coût de dérivation réduit : ces parcours ouvrent des dizaines de sessions, et au coût de
+    // production (N = 2¹⁷, ~0,3 s par hachage) la suite se paierait plusieurs minutes de scrypt.
+    // Le coût réel est testé pour lui-même dans tech/adapters.test.ts.
+    passwordHasher: new ScryptPasswordHasher({ N: 2 ** 12, r: 8, p: 1 }),
     tokenGenerator: new CryptoTokenGenerator(),
     idGenerator: new UuidGenerator(),
     clock: new SystemClock(),
+    // Les parcours d'intégration enchaînent des dizaines de requêtes depuis la même « IP » :
+    // les plafonds sont relevés ici, et testés pour eux-mêmes sur une app dédiée (voir plus bas).
+    rateLimits: { global: 10_000, auth: 10_000, sensitive: 10_000, anonymousRead: 10_000 },
+    ...overrides,
   });
+}
+
+beforeEach(async () => {
+  app = await buildTestApp();
 });
 
 afterEach(async () => {
   await app.close();
 });
 
-async function post(url: string, body: unknown, cookies?: Cookies) {
-  return app.inject({ method: 'POST', url, payload: body as Record<string, unknown>, cookies });
+// `target` : les parcours qui ont besoin d'un répertoire d'upload tournent sur une app dédiée.
+async function post(url: string, body: unknown, cookies?: Cookies, target: FastifyInstance = app) {
+  return target.inject({ method: 'POST', url, payload: body as Record<string, unknown>, cookies });
 }
 
-async function get(url: string, cookies?: Cookies) {
-  return app.inject({ method: 'GET', url, cookies });
+async function get(url: string, cookies?: Cookies, target: FastifyInstance = app) {
+  return target.inject({ method: 'GET', url, cookies });
 }
 
 function sessionCookie(res: { cookies: { name: string; value: string }[] }): Cookies {
@@ -75,27 +92,45 @@ function sessionCookie(res: { cookies: { name: string; value: string }[] }): Coo
 }
 
 /** Premier compte (Alice) via bootstrap : renvoie son id et sa session. */
-async function bootstrapAlice() {
-  const res = await post('/api/auth/bootstrap', { name: 'Alice', password: PASSWORD });
+async function bootstrapAlice(target: FastifyInstance = app) {
+  const res = await post('/api/auth/bootstrap', { name: 'Alice', password: PASSWORD }, undefined, target);
   expect(res.statusCode).toBe(201);
   return { id: (res.json() as { member: { id: string } }).member.id, cookies: sessionCookie(res) };
 }
 
 /** Crée un membre (invité), consomme son invitation et renvoie id + session. */
-async function inviteAndRedeem(name: string, creatorCookies: Cookies) {
-  const created = await post('/api/members', { name }, creatorCookies);
+async function inviteAndRedeem(name: string, creatorCookies: Cookies, target: FastifyInstance = app) {
+  const created = await post('/api/members', { name }, creatorCookies, target);
   expect(created.statusCode).toBe(201);
   const { id, inviteCode } = created.json() as { id: string; inviteCode: string };
-  const redeemed = await post(`/api/auth/invites/${inviteCode}/redeem`, { password: PASSWORD });
+  const redeemed = await post(`/api/auth/invites/${inviteCode}/redeem`, { password: PASSWORD }, undefined, target);
   expect(redeemed.statusCode).toBe(200);
   return { id, cookies: sessionCookie(redeemed) };
 }
 
+/** Équipement minimal, dont le cercle est passé tel quel (les valeurs métier n'importent pas ici). */
+async function createEquipment(name: string, memberIds: string[], cookies: Cookies, target: FastifyInstance = app) {
+  return post(
+    '/api/equipments',
+    {
+      name,
+      category: 'BTP',
+      acquisitionDate: '2025-01-01',
+      purchaseValueEuros: 1000,
+      meterUnit: 'HOURS',
+      memberIds,
+      maintenanceThreshold: null,
+    },
+    cookies,
+    target,
+  );
+}
+
 /** Trois membres connectés ; la minipelle porte le cercle m1/m2, m3 reste en dehors. */
-async function setupMembersAndEquipment() {
-  const alice = await bootstrapAlice();
-  const bruno = await inviteAndRedeem('Bruno', alice.cookies);
-  const chloe = await inviteAndRedeem('Chloé', alice.cookies);
+async function setupMembersAndEquipment(target: FastifyInstance = app) {
+  const alice = await bootstrapAlice(target);
+  const bruno = await inviteAndRedeem('Bruno', alice.cookies, target);
+  const chloe = await inviteAndRedeem('Chloé', alice.cookies, target);
   const equipmentRes = await post(
     '/api/equipments',
     {
@@ -108,29 +143,30 @@ async function setupMembersAndEquipment() {
       maintenanceThreshold: 50,
     },
     alice.cookies,
+    target,
   );
   const equipment = equipmentRes.json() as { id: string; memberIds: string[] };
   return { equipment, alice, bruno, chloe };
 }
 
-describe('API — justificatifs et front statique (@fastify/static)', () => {
+/** Corps multipart minimal : `app.inject` n'a pas de constructeur de formulaire. */
+function filePayload(filename: string, content: Buffer, contentType = 'image/png') {
+  const boundary = '----sharemateTestBoundary';
+  const head =
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+    `Content-Type: ${contentType}\r\n\r\n`;
+  return {
+    payload: Buffer.concat([Buffer.from(head), content, Buffer.from(`\r\n--${boundary}--\r\n`)]),
+    headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+  };
+}
+
+describe('API — justificatifs et front statique', () => {
   let staticApp: FastifyInstance;
   let uploadsDir: string;
   let webDistDir: string;
   let tmpRoot: string;
-
-  /** Corps multipart minimal : `app.inject` n'a pas de constructeur de formulaire. */
-  function filePayload(filename: string, content: Buffer, contentType = 'image/png') {
-    const boundary = '----sharemateTestBoundary';
-    const head =
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
-      `Content-Type: ${contentType}\r\n\r\n`;
-    return {
-      payload: Buffer.concat([Buffer.from(head), content, Buffer.from(`\r\n--${boundary}--\r\n`)]),
-      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
-    };
-  }
 
   beforeEach(async () => {
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-static-'));
@@ -141,31 +177,7 @@ describe('API — justificatifs et front statique (@fastify/static)', () => {
     // Un fichier à l'extérieur du répertoire servi, cible d'une éventuelle traversée.
     fs.writeFileSync(path.join(tmpRoot, 'secret.txt'), 'SECRET-HORS-RACINE');
 
-    const db = openDatabase(':memory:');
-    staticApp = await buildApp({
-      members: new SqliteMemberRepository(db),
-      equipments: new SqliteEquipmentRepository(db),
-      reservations: new SqliteReservationRepository(db),
-      usageRecords: new SqliteUsageRecordRepository(db),
-      expenses: new SqliteExpenseRepository(db),
-      reimbursements: new SqliteReimbursementRepository(db),
-      threads: new SqliteThreadRepository(db),
-      messages: new SqliteMessageRepository(db),
-      checklists: new SqliteChecklistRepository(db),
-      checklistItems: new SqliteChecklistItemRepository(db),
-      notifications: new SqliteNotificationRepository(db),
-      notificationPreferences: new SqliteNotificationPreferenceRepository(db),
-      pushSubscriptions: new SqlitePushSubscriptionRepository(db),
-      deviceTokens: new SqliteDeviceTokenRepository(db),
-      credentials: new SqliteCredentialRepository(db),
-      sessions: new SqliteSessionRepository(db),
-      passwordHasher: new ScryptPasswordHasher(),
-      tokenGenerator: new CryptoTokenGenerator(),
-      idGenerator: new UuidGenerator(),
-      clock: new SystemClock(),
-      uploadsDir,
-      webDistDir,
-    });
+    staticApp = await buildTestApp({ uploadsDir, webDistDir });
   });
 
   afterEach(async () => {
@@ -184,22 +196,110 @@ describe('API — justificatifs et front statique (@fastify/static)', () => {
     return sessionCookie(res);
   }
 
-  it('téléverse un justificatif, puis ne le sert qu’avec une session', async () => {
-    const cookies = await session();
-    const contenu = Buffer.from('image-factice');
+  /** Téléverse un justificatif et le rattache à une dépense de `equipmentId`. */
+  async function dépenseAvecJustificatif(equipmentId: string, payerId: string, cookies: Cookies) {
+    const contenu = Buffer.from(`justificatif-${equipmentId}`);
     const { payload, headers } = filePayload('recu.png', contenu);
     const upload = await staticApp.inject({ method: 'POST', url: '/api/uploads/receipts', payload, headers, cookies });
     expect(upload.statusCode).toBe(201);
     const { path: servedPath } = upload.json() as { path: string };
     expect(servedPath).toMatch(/^\/uploads\/[\w-]+\.png$/);
+    const dépense = await post(
+      '/api/expenses',
+      {
+        equipmentId,
+        label: 'Plein gasoil',
+        amountEuros: 90,
+        payerId,
+        date: '2026-07-01',
+        category: 'FUEL',
+        split: { type: 'EQUAL' },
+        receiptPath: servedPath,
+      },
+      cookies,
+      staticApp,
+    );
+    expect(dépense.statusCode).toBe(201);
+    const fichier = path.join(uploadsDir, servedPath.slice('/uploads/'.length));
+    return { id: (dépense.json() as { id: string }).id, servedPath, contenu, fichier };
+  }
 
-    const authentifié = await staticApp.inject({ method: 'GET', url: servedPath, cookies });
+  it('téléverse un justificatif, puis ne le sert qu’avec une session', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(staticApp);
+    const { servedPath, contenu } = await dépenseAvecJustificatif(equipment.id, alice.id, alice.cookies);
+
+    const authentifié = await staticApp.inject({ method: 'GET', url: servedPath, cookies: alice.cookies });
     expect(authentifié.statusCode).toBe(200);
     expect(authentifié.rawPayload.equals(contenu)).toBe(true);
+    // Un justificatif ne doit pas survivre sur l'appareil à la perte du droit qui l'ouvre.
+    expect(authentifié.headers['cache-control']).toBe('private, no-store');
 
     // Sans session, le justificatif reste inaccessible.
     const anonyme = await staticApp.inject({ method: 'GET', url: servedPath });
     expect(anonyme.statusCode).toBe(401);
+  });
+
+  it('ne sert un justificatif qu’aux membres du cercle de la dépense qui le porte', async () => {
+    const { equipment, alice, chloe } = await setupMembersAndEquipment(staticApp);
+    // Chloé a son propre cercle : session valide, mais étrangère à la minipelle.
+    const tondeuse = await post(
+      '/api/equipments',
+      {
+        name: 'Tondeuse',
+        category: 'Jardin',
+        acquisitionDate: '2025-03-01',
+        purchaseValueEuros: 900,
+        meterUnit: 'HOURS',
+        memberIds: [chloe.id],
+        maintenanceThreshold: null,
+      },
+      chloe.cookies,
+      staticApp,
+    );
+    expect(tondeuse.statusCode).toBe(201);
+
+    // Réponse de référence : le justificatif n'existe pas encore, ce chemin ne désigne rien.
+    const servedPath = `/uploads/${crypto.randomUUID()}.png`;
+    const avant = await get(servedPath, chloe.cookies, staticApp);
+    expect(avant.statusCode).toBe(404);
+
+    const justificatif = await dépenseAvecJustificatif(equipment.id, alice.id, alice.cookies);
+    const membre = await get(justificatif.servedPath, alice.cookies, staticApp);
+    expect(membre.statusCode).toBe(200);
+
+    // Le même chemin, vu de l'extérieur du cercle : la réponse est celle d'un fichier qui n'existe
+    // pas — même code, même corps. Détenir le chemin n'apprend donc rien (anti-énumération).
+    const après = await get(justificatif.servedPath, chloe.cookies, staticApp);
+    expect(après.statusCode).toBe(avant.statusCode);
+    expect(après.payload).toBe(avant.payload.replace(servedPath, justificatif.servedPath));
+  });
+
+  it('purge le fichier quand la dépense qui le porte est supprimée', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(staticApp);
+    const { id, fichier, servedPath } = await dépenseAvecJustificatif(equipment.id, alice.id, alice.cookies);
+    expect(fs.existsSync(fichier)).toBe(true);
+
+    const suppression = await staticApp.inject({
+      method: 'DELETE',
+      url: `/api/expenses/${id}`,
+      cookies: alice.cookies,
+    });
+    expect(suppression.statusCode).toBe(204);
+    expect(fs.existsSync(fichier)).toBe(false);
+    expect((await get(servedPath, alice.cookies, staticApp)).statusCode).toBe(404);
+  });
+
+  it('purge les justificatifs emportés par la suppression de l’équipement', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(staticApp);
+    const { fichier } = await dépenseAvecJustificatif(equipment.id, alice.id, alice.cookies);
+
+    const suppression = await staticApp.inject({
+      method: 'DELETE',
+      url: `/api/equipments/${equipment.id}`,
+      cookies: alice.cookies,
+    });
+    expect(suppression.statusCode).toBe(204);
+    expect(fs.existsSync(fichier)).toBe(false);
   });
 
   it('refuse les formats non autorisés', async () => {
@@ -254,11 +354,35 @@ describe('API — justificatifs et front statique (@fastify/static)', () => {
     expect(spa.statusCode).toBe(200);
     expect(spa.payload).toContain('ShareMate');
 
-    // Une route d'API inconnue reste un 404 JSON (401 sans session : le hook passe avant).
-    expect((await staticApp.inject({ method: 'GET', url: '/api/inconnu' })).statusCode).toBe(401);
+    // Une route d'API inconnue est un 404 JSON, avec ou sans session : aucune route n'ayant été
+    // appariée, il n'y a rien à protéger — la garde de session vit dans les plugins de domaine.
+    expect((await staticApp.inject({ method: 'GET', url: '/api/inconnu' })).statusCode).toBe(404);
     const api = await staticApp.inject({ method: 'GET', url: '/api/inconnu', cookies });
     expect(api.statusCode).toBe(404);
     expect((api.json() as { error: string }).error).toBeTruthy();
+  });
+
+  it('un chemin encodé ne contourne pas la garde de session', async () => {
+    await session(); // l'instance est amorcée : seule la session manque
+    // Le routeur décode le pourcentage avant d'apparier, l'URL brute non : décider de
+    // l'authentification sur `request.raw.url` laissait `/%61pi/...` atteindre le handler.
+    const { payload, headers } = filePayload('recu.png', Buffer.from('charge-utile-anonyme'));
+    const dépôt = await staticApp.inject({ method: 'POST', url: '/%61pi/uploads/receipts', payload, headers });
+    expect(dépôt.statusCode, `corps : ${dépôt.body}`).toBe(401);
+    // Aucun octet écrit : le remplissage de disque anonyme passait par là.
+    expect(fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : []).toEqual([]);
+
+    const encodées: [string, string, unknown][] = [
+      ['GET', '/%61pi/members', undefined],
+      ['GET', '/a%70i/notifications', undefined],
+      ['DELETE', '/%61pi/notifications/subscriptions', { endpoint: 'https://push.example.test/abonnement' }],
+      ['DELETE', '/%61pi/notifications/device-tokens', { token: 'jeton-alice' }],
+      ['GET', '/%75ploads/00000000-0000-4000-8000-000000000000.png', undefined],
+    ];
+    for (const [method, url, body] of encodées) {
+      const res = await staticApp.inject({ method: method as 'GET', url, payload: body as Record<string, unknown> });
+      expect(res.statusCode, `${method} ${url} → ${res.body}`).toBe(401);
+    }
   });
 });
 
@@ -318,21 +442,81 @@ describe('API — authentification', () => {
     expect((await post(`/api/auth/invites/${inviteCode}/redeem`, { password: PASSWORD })).statusCode).toBe(404);
   });
 
-  it('régénération d’invitation pour un membre existant', async () => {
+  it('régénération d’invitation pour un membre qui n’a pas encore ouvert son compte', async () => {
     const alice = await bootstrapAlice();
-    const bruno = await inviteAndRedeem('Bruno', alice.cookies);
+    const created = await post('/api/members', { name: 'Bruno' }, alice.cookies);
+    const bruno = created.json() as { id: string };
+
     const res = await post(`/api/members/${bruno.id}/invite`, {}, alice.cookies);
     expect(res.statusCode).toBe(201);
     const { inviteCode } = res.json() as { inviteCode: string };
     expect((await get(`/api/auth/invites/${inviteCode}`)).statusCode).toBe(200);
+
+    // Une fois le compte ouvert, l'invitation n'est plus un moyen d'y toucher.
+    expect((await post(`/api/auth/invites/${inviteCode}/redeem`, { password: PASSWORD })).statusCode).toBe(200);
+    expect((await post(`/api/members/${bruno.id}/invite`, {}, alice.cookies)).statusCode).toBe(409);
   });
 
   it('le login est limité contre le force brute (429 au-delà de 10/min)', async () => {
-    await bootstrapAlice();
-    for (let i = 0; i < 10; i++) {
-      expect((await post('/api/auth/login', { identifier: 'Personne', password: 'xxxxxxxx' })).statusCode).toBe(401);
+    // Plafonds de production : ceux de `buildTestApp` sont relevés pour les parcours d'intégration.
+    const bridée = await buildTestApp({ rateLimits: DEFAULT_RATE_LIMITS });
+    const tentative = () =>
+      bridée.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        payload: { identifier: 'Personne', password: 'xxxxxxxx' },
+      });
+    try {
+      for (let i = 0; i < DEFAULT_RATE_LIMITS.auth; i++) {
+        expect((await tentative()).statusCode).toBe(401);
+      }
+      const coupée = await tentative();
+      expect(coupée.statusCode).toBe(429);
+      expect((coupée.json() as { error: string }).error).toMatch(/^Trop de requêtes\./);
+    } finally {
+      await bridée.close();
     }
-    expect((await post('/api/auth/login', { identifier: 'Personne', password: 'xxxxxxxx' })).statusCode).toBe(429);
+  });
+
+  it('une requête anonyme sur une route protégée est plafonnée elle aussi', async () => {
+    // Le plafond du greffon s'attache au niveau de la route, donc après les hooks de contexte :
+    // la garde de session rendait 401 avant que le compteur ne s'incrémente, et marteler une
+    // route protégée sans cookie ne coûtait rien à personne. Le plafond global est désormais posé
+    // en `onRequest` à la racine, avant l'authentification.
+    const bridée = await buildTestApp({ rateLimits: { ...DEFAULT_RATE_LIMITS, global: 5 } });
+    try {
+      const codes: number[] = [];
+      for (let i = 0; i < 7; i++) {
+        codes.push((await get('/api/equipments', undefined, bridée)).statusCode);
+      }
+      expect(codes.slice(0, 5)).toEqual([401, 401, 401, 401, 401]);
+      expect(codes.slice(5)).toEqual([429, 429]);
+    } finally {
+      await bridée.close();
+    }
+  });
+
+  it('le changement de mot de passe est plafonné comme les routes d’authentification', async () => {
+    // Deux scrypt à N=2^17 par appel : la session ne suffit pas à protéger la machine, seul le
+    // plafond le fait. Sans lui, la route resterait sous le global, cent fois plus haut.
+    const bridée = await buildTestApp({ rateLimits: DEFAULT_RATE_LIMITS });
+    try {
+      const alice = await bootstrapAlice(bridée);
+      const tentative = () =>
+        bridée.inject({
+          method: 'POST',
+          url: '/api/auth/password',
+          payload: { currentPassword: 'mauvais-mot-de-passe', newPassword: 'nouveau-motdepasse' },
+          cookies: alice.cookies,
+        });
+      // Le compteur est propre à la route : le bootstrap qui précède ne l'a pas entamé.
+      for (let i = 0; i < DEFAULT_RATE_LIMITS.auth; i++) {
+        expect((await tentative()).statusCode).toBe(401);
+      }
+      expect((await tentative()).statusCode).toBe(429);
+    } finally {
+      await bridée.close();
+    }
   });
 
   it('logout invalide la session', async () => {
@@ -355,20 +539,30 @@ describe('API — authentification', () => {
       { currentPassword: PASSWORD, newPassword: 'nouveau-mdp' },
       alice.cookies,
     );
-    expect(ok.statusCode).toBe(204);
+    expect(ok.statusCode).toBe(200);
     expect((await post('/api/auth/login', { identifier: 'Alice', password: 'nouveau-mdp' })).statusCode).toBe(200);
   });
 
   it('la réservation est créée au nom du membre de la session, pas du body', async () => {
     const { equipment, alice, bruno } = await setupMembersAndEquipment();
-    const res = await post(
+
+    // `memberId` n'appartient pas au schéma de la route : il est refusé net, et non plus
+    // accepté puis silencieusement écrasé — un appelant ne doit pas croire son auteur retenu.
+    const usurpation = await post(
       '/api/reservations',
       {
         equipmentId: equipment.id,
-        memberId: alice.id, // ignoré : la session de Bruno prime
+        memberId: alice.id,
         start: '2026-07-10T08:00:00Z',
         end: '2026-07-10T10:00:00Z',
       },
+      bruno.cookies,
+    );
+    expect(usurpation.statusCode).toBe(400);
+
+    const res = await post(
+      '/api/reservations',
+      { equipmentId: equipment.id, start: '2026-07-10T08:00:00Z', end: '2026-07-10T10:00:00Z' },
       bruno.cookies,
     );
     expect(res.statusCode).toBe(201);
@@ -628,30 +822,7 @@ describe('API — CORS (origines de l’app native)', () => {
   let corsApp: FastifyInstance;
 
   beforeEach(async () => {
-    const db = openDatabase(':memory:');
-    corsApp = await buildApp({
-      members: new SqliteMemberRepository(db),
-      equipments: new SqliteEquipmentRepository(db),
-      reservations: new SqliteReservationRepository(db),
-      usageRecords: new SqliteUsageRecordRepository(db),
-      expenses: new SqliteExpenseRepository(db),
-      reimbursements: new SqliteReimbursementRepository(db),
-      threads: new SqliteThreadRepository(db),
-      messages: new SqliteMessageRepository(db),
-      checklists: new SqliteChecklistRepository(db),
-      checklistItems: new SqliteChecklistItemRepository(db),
-      notifications: new SqliteNotificationRepository(db),
-      notificationPreferences: new SqliteNotificationPreferenceRepository(db),
-      pushSubscriptions: new SqlitePushSubscriptionRepository(db),
-      deviceTokens: new SqliteDeviceTokenRepository(db),
-      credentials: new SqliteCredentialRepository(db),
-      sessions: new SqliteSessionRepository(db),
-      passwordHasher: new ScryptPasswordHasher(),
-      tokenGenerator: new CryptoTokenGenerator(),
-      idGenerator: new UuidGenerator(),
-      clock: new SystemClock(),
-      corsOrigins: ['https://localhost'],
-    });
+    corsApp = await buildTestApp({ corsOrigins: ['https://localhost'] });
   });
 
   afterEach(async () => {
@@ -719,14 +890,24 @@ describe('API — discussions (fils + messages)', () => {
     expect(edited.statusCode).toBe(200);
     expect((edited.json() as { body: string; editedAt: string | null }).editedAt).not.toBeNull();
 
-    // Alice ne peut pas éditer le message de Bruno.
+    // Alice ne peut pas éditer le message de Bruno : 403 (refus assumé) et non 401, qui
+    // déconnecterait Alice de l'application pour un simple geste refusé.
     const editOther = await app.inject({
       method: 'PUT',
       url: `/api/messages/${message.id}`,
       payload: { body: 'pirate' },
       cookies: alice.cookies,
     });
-    expect(editOther.statusCode).toBe(401);
+    expect(editOther.statusCode).toBe(403);
+
+    // Même règle pour le renommage d'un fil dont on n'est pas l'auteur.
+    const renameOther = await app.inject({
+      method: 'PUT',
+      url: `/api/threads/${thread.id}`,
+      payload: { title: 'Détourné' },
+      cookies: bruno.cookies,
+    });
+    expect(renameOther.statusCode).toBe(403);
 
     // Les messages du fil (1er message + réponse).
     const msgs = await get(`/api/threads/${thread.id}/messages`, alice.cookies);
@@ -734,7 +915,7 @@ describe('API — discussions (fils + messages)', () => {
 
     // Seul l'auteur supprime le fil : Bruno ne peut pas, Alice oui (cascade sur les messages).
     const delByOther = await app.inject({ method: 'DELETE', url: `/api/threads/${thread.id}`, cookies: bruno.cookies });
-    expect(delByOther.statusCode).toBe(401);
+    expect(delByOther.statusCode).toBe(403);
     const delByAuthor = await app.inject({
       method: 'DELETE',
       url: `/api/threads/${thread.id}`,
@@ -1169,9 +1350,281 @@ describe('API — cloisonnement par cercle (aucune fuite hors du cercle)', () =>
   });
 });
 
+describe('API — cloisonnement des comptes (annuaire, invitations, sessions)', () => {
+  const NATIVE = { 'x-sharemate-client': 'native' };
+
+  /** Noms de l'annuaire tel que le voit ce demandeur, triés pour comparaison. */
+  async function annuaire(cookies: Cookies): Promise<string[]> {
+    const res = await get('/api/members', cookies);
+    expect(res.statusCode).toBe(200);
+    return (res.json() as { name: string }[]).map((m) => m.name).sort();
+  }
+
+  it('la prise de contrôle d’un compte échoue dès sa première étape', async () => {
+    // Chaîne d'attaque : lire l'annuaire → obtenir un code d'invitation pour la cible → le
+    // consommer avec un mot de passe choisi. Chloé, hors du cercle d'Alice, tente le parcours.
+    const { alice, bruno, chloe } = await setupMembersAndEquipment();
+
+    // 1. L'annuaire ne livre plus l'identifiant des membres hors de son périmètre : Chloé voit
+    //    Alice, qui l'a invitée, et personne d'autre — Bruno lui reste inconnu.
+    const vus = (await get('/api/members', chloe.cookies)).json() as { id: string }[];
+    expect(vus.map((m) => m.id)).toEqual([alice.id, chloe.id]);
+
+    // 2. Même en connaissant les identifiants, la régénération est refusée — masquée en 404,
+    //    du message exact qu'aurait produit un membre inexistant.
+    for (const cible of [alice.id, bruno.id]) {
+      const res = await post(`/api/members/${cible}/invite`, {}, chloe.cookies);
+      expect(res.statusCode).toBe(404);
+      expect((res.json() as { error: string }).error).toBe(`Membre introuvable : ${cible}`);
+    }
+
+    // 3. Aucun code n'a été émis, et les comptes visés sont intacts.
+    expect((await post('/api/auth/login', { identifier: 'Alice', password: PASSWORD })).statusCode).toBe(200);
+    expect((await post('/api/auth/login', { identifier: 'Bruno', password: PASSWORD })).statusCode).toBe(200);
+  });
+
+  it('la prise de contrôle d’un compte jamais ouvert échoue aussi', async () => {
+    // La garde « ce membre a déjà un mot de passe » ne mord pas entre la création d'un compte et
+    // sa première connexion : c'est là que la chaîne annuaire → invitation → redeem opérait.
+    const alice = await bootstrapAlice();
+    const bruno = await inviteAndRedeem('Bruno', alice.cookies);
+    const david = (await post('/api/members', { name: 'David' }, alice.cookies)).json() as { id: string };
+    // Bruno et David partagent un cercle, et David n'a pas encore de mot de passe.
+    await createEquipment('Minipelle', [alice.id, bruno.id, david.id], alice.cookies);
+    const privé = (await createEquipment('Broyeur', [alice.id, david.id], alice.cookies)).json() as { id: string };
+    expect((await get(`/api/equipments/${privé.id}`, bruno.cookies)).statusCode).toBe(404);
+
+    const invite = await post(`/api/members/${david.id}/invite`, {}, bruno.cookies);
+    expect(invite.statusCode).toBe(404);
+    expect((invite.json() as { error: string }).error).toBe(`Membre introuvable : ${david.id}`);
+    // L'invitant, lui, relance sans difficulté : la relance légitime reste possible.
+    expect((await post(`/api/members/${david.id}/invite`, {}, alice.cookies)).statusCode).toBe(201);
+  });
+
+  it('un membre ne peut pas s’inscrire un cercle avec quelqu’un hors de son périmètre', async () => {
+    // Le périmètre sert de règle d'accès (annuaire, invitations) : s'il s'écrit unilatéralement,
+    // il ne borne plus rien — il suffisait de connaître un identifiant pour l'englober.
+    const alice = await bootstrapAlice();
+    const bruno = await inviteAndRedeem('Bruno', alice.cookies);
+    const chloe = await inviteAndRedeem('Chloé', alice.cookies);
+    expect(await annuaire(bruno.cookies)).toEqual(['Alice', 'Bruno']);
+
+    const imposé = await createEquipment('Cercle imposé', [bruno.id, chloe.id], bruno.cookies);
+    expect(imposé.statusCode).toBe(400);
+    expect((imposé.json() as { error: string }).error).toBe(`Membres inconnus : ${chloe.id}`);
+    expect(await annuaire(bruno.cookies)).toEqual(['Alice', 'Bruno']);
+
+    // Même refus par modification d'un équipement existant.
+    const sien = (await createEquipment('Remorque', [bruno.id], bruno.cookies)).json() as { id: string };
+    const ajout = await app.inject({
+      method: 'PUT',
+      url: `/api/equipments/${sien.id}`,
+      payload: { memberIds: [bruno.id, chloe.id] },
+      cookies: bruno.cookies,
+    });
+    expect(ajout.statusCode).toBe(400);
+  });
+
+  it('ne dit pas si une adresse hors périmètre est déjà prise', async () => {
+    const alice = await bootstrapAlice();
+    await post('/api/members', { name: 'Chloé', email: 'chloe@example.test' }, alice.cookies);
+    const bruno = await inviteAndRedeem('Bruno', alice.cookies);
+    // Bruno ne voit pas Chloé dans l'annuaire : la création d'un membre ne doit pas lui rendre,
+    // adresse par adresse, ce que l'annuaire lui refuse.
+    expect(await annuaire(bruno.cookies)).toEqual(['Alice', 'Bruno']);
+    const sonde = await post('/api/members', { name: 'sonde', email: 'chloe@example.test' }, bruno.cookies);
+    expect(sonde.statusCode).toBe(201);
+
+    // Dans son propre périmètre, en revanche, le doublon est signalé : Bruno voit déjà l'adresse.
+    const doublon = await post('/api/members', { name: 'sonde', email: 'chloe@example.test' }, bruno.cookies);
+    expect(doublon.statusCode).toBe(409);
+  });
+
+  it('une invitation ne réinitialise jamais un compte déjà ouvert', async () => {
+    const alice = await bootstrapAlice();
+    const bruno = await inviteAndRedeem('Bruno', alice.cookies);
+    // Alice partage le cercle de Bruno : elle est dans son périmètre, et pourtant refusée.
+    const res = await post(`/api/members/${bruno.id}/invite`, {}, alice.cookies);
+    expect(res.statusCode).toBe(409);
+    expect((await post('/api/auth/login', { identifier: 'Bruno', password: PASSWORD })).statusCode).toBe(200);
+  });
+
+  it('journalise en warn une invitation régénérée pour un autre membre', async () => {
+    const lignes: string[] = [];
+    const tracé = await buildTestApp({
+      logger: { level: 'warn', stream: { write: (l: string) => void lignes.push(l) } },
+    });
+    const bootstrap = await tracé.inject({
+      method: 'POST',
+      url: '/api/auth/bootstrap',
+      payload: { name: 'Alice', password: PASSWORD },
+    });
+    const cookies = sessionCookie(bootstrap);
+    const créé = await tracé.inject({ method: 'POST', url: '/api/members', payload: { name: 'Bruno' }, cookies });
+    const bruno = créé.json() as { id: string };
+
+    await tracé.inject({ method: 'POST', url: `/api/members/${bruno.id}/invite`, payload: {}, cookies });
+
+    const trace = lignes.find((l) => l.includes('invitation régénérée pour un autre membre'));
+    expect(trace).toBeDefined();
+    expect(trace).toContain(bruno.id);
+    await tracé.close();
+  });
+
+  it('cadre l’annuaire sur le périmètre du demandeur, invités compris', async () => {
+    const { alice, bruno, chloe } = await setupMembersAndEquipment();
+    // Alice voit son cercle (Bruno) et Chloé, qu'elle a invitée sans cercle commun.
+    expect(await annuaire(alice.cookies)).toEqual(['Alice', 'Bruno', 'Chloé']);
+    // Bruno voit son cercle, et rien de plus : Chloé lui est inconnue.
+    expect(await annuaire(bruno.cookies)).toEqual(['Alice', 'Bruno']);
+    // Chloé n'a aucun cercle : il lui reste Alice, qui l'a invitée — le lien vaut dans les deux
+    // sens, sans quoi elle n'aurait personne à qui ouvrir son premier équipement.
+    expect(await annuaire(chloe.cookies)).toEqual(['Alice', 'Chloé']);
+  });
+
+  it('n’expose l’email d’un membre qu’à l’intérieur de son périmètre', async () => {
+    const alice = await bootstrapAlice();
+    const chloe = await inviteAndRedeem('Chloé', alice.cookies);
+    await post('/api/members', { name: 'Denis', email: 'denis@example.test' }, alice.cookies);
+
+    expect(JSON.stringify((await get('/api/members', alice.cookies)).json())).toContain('denis@example.test');
+    expect(JSON.stringify((await get('/api/members', chloe.cookies)).json())).not.toContain('denis@example.test');
+  });
+
+  it('tout membre d’un cercle reste visible de ce cercle (noms affichés par le front)', async () => {
+    const { equipment, alice, bruno, chloe } = await setupMembersAndEquipment();
+    const ajout = await app.inject({
+      method: 'PUT',
+      url: `/api/equipments/${equipment.id}`,
+      payload: { memberIds: [alice.id, bruno.id, chloe.id] },
+      cookies: alice.cookies,
+    });
+    expect(ajout.statusCode).toBe(200);
+
+    // Le calendrier, les dépenses, les discussions et les checklists n'affichent que des membres
+    // du cercle : chacun d'eux doit pouvoir être nommé par chacun des autres.
+    for (const cookies of [alice.cookies, bruno.cookies, chloe.cookies]) {
+      expect(await annuaire(cookies)).toEqual(['Alice', 'Bruno', 'Chloé']);
+    }
+  });
+
+  it('l’annuaire signale qui n’a pas encore ouvert son compte', async () => {
+    const alice = await bootstrapAlice();
+    await post('/api/members', { name: 'Bruno' }, alice.cookies);
+    const vus = (await get('/api/members', alice.cookies)).json() as { name: string; hasPassword: boolean }[];
+    expect(vus.map((m) => [m.name, m.hasPassword])).toEqual([
+      ['Alice', true],
+      ['Bruno', false],
+    ]);
+  });
+
+  it('changer de mot de passe révoque les autres sessions et remplace la sienne', async () => {
+    const alice = await bootstrapAlice();
+    const autreAppareil = sessionCookie(await post('/api/auth/login', { identifier: 'Alice', password: PASSWORD }));
+
+    const res = await post(
+      '/api/auth/password',
+      { currentPassword: PASSWORD, newPassword: 'nouveau-mdp' },
+      alice.cookies,
+    );
+    expect(res.statusCode).toBe(200);
+
+    // L'autre appareil est expulsé, l'ancien cookie du demandeur aussi…
+    expect((await get('/api/equipments', autreAppareil)).statusCode).toBe(401);
+    expect((await get('/api/equipments', alice.cookies)).statusCode).toBe(401);
+    // …mais la réponse en a posé un neuf : le geste ne déconnecte pas son auteur.
+    expect((await get('/api/equipments', sessionCookie(res))).statusCode).toBe(200);
+  });
+
+  it('changer de mot de passe en natif rend un nouveau jeton Bearer', async () => {
+    await bootstrapAlice();
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { identifier: 'Alice', password: PASSWORD },
+      headers: NATIVE,
+    });
+    const ancien = (login.json() as { token: string }).token;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password',
+      payload: { currentPassword: PASSWORD, newPassword: 'nouveau-mdp' },
+      headers: { ...NATIVE, authorization: `Bearer ${ancien}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const nouveau = (res.json() as { token: string }).token;
+    expect(nouveau).not.toBe(ancien);
+
+    const avecAncien = await app.inject({
+      method: 'GET',
+      url: '/api/equipments',
+      headers: { authorization: `Bearer ${ancien}` },
+    });
+    const avecNouveau = await app.inject({
+      method: 'GET',
+      url: '/api/equipments',
+      headers: { authorization: `Bearer ${nouveau}` },
+    });
+    expect(avecAncien.statusCode).toBe(401);
+    expect(avecNouveau.statusCode).toBe(200);
+  });
+
+  it('un lien d’invitation périme au bout de 7 jours', async () => {
+    const horloge = new FixedClock(new Date('2026-07-02T10:00:00Z'));
+    const daté = await buildTestApp({ clock: horloge });
+    const bootstrap = await daté.inject({
+      method: 'POST',
+      url: '/api/auth/bootstrap',
+      payload: { name: 'Alice', password: PASSWORD },
+    });
+    const créé = await daté.inject({
+      method: 'POST',
+      url: '/api/members',
+      payload: { name: 'Bruno' },
+      cookies: sessionCookie(bootstrap),
+    });
+    const { inviteCode } = créé.json() as { inviteCode: string };
+
+    horloge.set(new Date('2026-07-09T09:59:59Z'));
+    expect((await daté.inject({ method: 'GET', url: `/api/auth/invites/${inviteCode}` })).statusCode).toBe(200);
+
+    horloge.set(new Date('2026-07-09T10:00:01Z'));
+    expect((await daté.inject({ method: 'GET', url: `/api/auth/invites/${inviteCode}` })).statusCode).toBe(404);
+    const redeem = await daté.inject({
+      method: 'POST',
+      url: `/api/auth/invites/${inviteCode}/redeem`,
+      payload: { password: PASSWORD },
+    });
+    expect(redeem.statusCode).toBe(404);
+    await daté.close();
+  });
+
+  it('la prolongation glissante de la session repose le cookie à sa nouvelle échéance', async () => {
+    // Sans repose, le cookie garde l'échéance de la connexion : le navigateur l'oublie au bout de
+    // 30 jours alors que la session serveur, elle, vient d'être repoussée d'autant.
+    const horloge = new FixedClock(new Date('2026-07-02T10:00:00Z'));
+    const daté = await buildTestApp({ clock: horloge });
+    const alice = await bootstrapAlice(daté);
+
+    // J+2 : l'échéance est lointaine (TTL 30 jours, seuil de prolongation à 10), rien ne bouge.
+    horloge.set(new Date('2026-07-04T10:00:00Z'));
+    expect((await get('/api/equipments', alice.cookies, daté)).cookies).toEqual([]);
+
+    // J+25 : il reste 5 jours, la session est repoussée — et le cookie avec elle.
+    horloge.set(new Date('2026-07-27T10:00:00Z'));
+    const posé = (await get('/api/equipments', alice.cookies, daté)).cookies.find(
+      (c) => c.name === 'sharemate_session',
+    ) as { value: string; expires?: Date } | undefined;
+    expect(posé?.value).toBe(alice.cookies.sharemate_session);
+    expect(posé?.expires?.toISOString()).toBe('2026-08-26T10:00:00.000Z');
+    await daté.close();
+  });
+});
+
 describe('API — notifications', () => {
-  async function openThread(equipmentId: string, cookies: Cookies) {
-    const res = await post('/api/threads', { equipmentId, title: 'Sujet' }, cookies);
+  async function openThread(equipmentId: string, cookies: Cookies, target: FastifyInstance = app) {
+    const res = await post('/api/threads', { equipmentId, title: 'Sujet' }, cookies, target);
     return (res.json() as { id: string }).id;
   }
 
@@ -1216,5 +1669,404 @@ describe('API — notifications', () => {
     const res = await get('/api/notifications/vapid-public-key', alice.cookies);
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ publicKey: null });
+  });
+
+  it('un canal push ne se coupe que par son propriétaire', async () => {
+    // Les cibles réellement poussées : seul juge de ce qui reste branché.
+    const poussés: string[] = [];
+    const pushApp = await buildTestApp({
+      pushSender: {
+        async sendWebPush(subs) {
+          poussés.push(...subs.map((s) => s.endpoint));
+          return [];
+        },
+        async sendFcm(tokens) {
+          poussés.push(...tokens.map((t) => t.token));
+          return [];
+        },
+      },
+    });
+    const { equipment, alice, bruno } = await setupMembersAndEquipment(pushApp);
+    const endpoint = 'https://push.example.test/abonnement-d-alice';
+    const token = 'jeton-d-alice';
+    const abonnement = { endpoint, keys: { p256dh: 'p', auth: 'a' } };
+    expect((await post('/api/notifications/subscriptions', abonnement, alice.cookies, pushApp)).statusCode).toBe(201);
+    expect((await post('/api/notifications/device-tokens', { token }, alice.cookies, pushApp)).statusCode).toBe(201);
+
+    // Bruno connaît l'endpoint et le jeton (ils circulent) : les connaître ne vaut pas le droit.
+    // 204 dans les deux cas, pour ne pas faire de la réponse un oracle sur leur existence.
+    for (const [url, payload] of [
+      ['/api/notifications/subscriptions', { endpoint }],
+      ['/api/notifications/device-tokens', { token }],
+    ] as const) {
+      const res = await pushApp.inject({ method: 'DELETE', url, payload, cookies: bruno.cookies });
+      expect(res.statusCode).toBe(204);
+    }
+
+    // Alice reçoit toujours ses alertes : ses deux canaux ont survécu à la tentative de Bruno.
+    await openThread(equipment.id, bruno.cookies, pushApp);
+    expect(poussés).toEqual([endpoint, token]);
+
+    // Alice, elle, coupe bien ses propres canaux.
+    poussés.length = 0;
+    for (const [url, payload] of [
+      ['/api/notifications/subscriptions', { endpoint }],
+      ['/api/notifications/device-tokens', { token }],
+    ] as const) {
+      expect((await pushApp.inject({ method: 'DELETE', url, payload, cookies: alice.cookies })).statusCode).toBe(204);
+    }
+    await openThread(equipment.id, bruno.cookies, pushApp);
+    expect(poussés).toEqual([]);
+    await pushApp.close();
+  });
+});
+
+describe('API — composition du cercle d’un équipement', () => {
+  /** Cercle de l'équipement tel que le serveur le renvoie à un membre. */
+  async function circle(equipmentId: string, cookies: Cookies): Promise<string[]> {
+    const res = await get(`/api/equipments/${equipmentId}`, cookies);
+    return (res.json() as { memberIds: string[] }).memberIds;
+  }
+
+  it('refuse de se retirer soi-même par une mise à jour de l’équipement', async () => {
+    const { equipment, alice, bruno } = await setupMembersAndEquipment();
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/equipments/${equipment.id}`,
+      payload: { memberIds: [bruno.id] },
+      cookies: alice.cookies,
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toMatch(/quitter le cercle/);
+    expect(await circle(equipment.id, alice.cookies)).toEqual([alice.id, bruno.id]);
+  });
+
+  it('évincer un membre le notifie, et l’équipement disparaît de sa vue', async () => {
+    const { equipment, alice, bruno } = await setupMembersAndEquipment();
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/equipments/${equipment.id}`,
+      payload: { memberIds: [alice.id] },
+      cookies: alice.cookies,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const list = await get('/api/notifications', bruno.cookies);
+    const notif = (list.json() as { type: string; body: string }[])[0]!;
+    expect(notif.type).toBe('EQUIPMENT_CIRCLE_CHANGED');
+    expect(notif.body).toMatch(/vous a retiré du cercle/);
+    expect((await get(`/api/equipments/${equipment.id}`, bruno.cookies)).statusCode).toBe(404);
+  });
+
+  it('« quitter le cercle » retire le demandeur et prévient ceux qui restent', async () => {
+    const { equipment, alice, bruno } = await setupMembersAndEquipment();
+    const res = await post(`/api/equipments/${equipment.id}/leave`, {}, bruno.cookies);
+    expect(res.statusCode).toBe(204);
+
+    expect(await circle(equipment.id, alice.cookies)).toEqual([alice.id]);
+    expect((await get(`/api/equipments/${equipment.id}`, bruno.cookies)).statusCode).toBe(404);
+    const list = await get('/api/notifications', alice.cookies);
+    expect((list.json() as { type: string; body: string }[])[0]?.body).toMatch(/a quitté le cercle/);
+  });
+
+  it('le dernier membre ne peut pas quitter son propre équipement', async () => {
+    const { equipment, alice, bruno } = await setupMembersAndEquipment();
+    expect((await post(`/api/equipments/${equipment.id}/leave`, {}, bruno.cookies)).statusCode).toBe(204);
+    const res = await post(`/api/equipments/${equipment.id}/leave`, {}, alice.cookies);
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toMatch(/dernier membre/);
+  });
+
+  it('quitter un équipement hors de son cercle répond 404, comme un identifiant inconnu', async () => {
+    const { equipment, chloe } = await setupMembersAndEquipment();
+    expect((await post(`/api/equipments/${equipment.id}/leave`, {}, chloe.cookies)).statusCode).toBe(404);
+  });
+});
+
+describe('API — validation des requêtes (schémas)', () => {
+  /** Message d'erreur d'une réponse, tel que le front l'affiche à l'utilisateur. */
+  function erreur(res: { json: () => unknown }): string {
+    return (res.json() as { error: string }).error;
+  }
+
+  const equipmentPayload = (overrides: Record<string, unknown> = {}) => ({
+    name: 'Tracteur',
+    category: 'Agricole',
+    acquisitionDate: '2025-01-01',
+    purchaseValueEuros: 30000,
+    meterUnit: 'HOURS',
+    memberIds: ['remplacé'],
+    ...overrides,
+  });
+
+  it('refuse un corps absent, vide ou illisible en 400 et en français', async () => {
+    // Aucun corps du tout : rien à valider, donc rien d'exploitable côté service.
+    const absent = await app.inject({ method: 'POST', url: '/api/auth/login' });
+    expect(absent.statusCode).toBe(400);
+    expect(erreur(absent)).toMatch(/^Corps de requête invalide/);
+
+    // Corps présent mais vide : le champ obligatoire est nommé.
+    const vide = await post('/api/auth/login', {});
+    expect(vide.statusCode).toBe(400);
+    expect(erreur(vide)).toBe('Corps de requête invalide : le champ « identifier » est obligatoire.');
+
+    // JSON malformé : Fastify échoue avant tout schéma, le message reste français.
+    const illisible = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: '{"identifier":',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(illisible.statusCode).toBe(400);
+    expect(erreur(illisible)).toBe('Corps de requête invalide : JSON illisible.');
+  });
+
+  it('refuse un champ mal typé, inconnu ou trop long sur les routes d’authentification', async () => {
+    const malTypé = await post('/api/auth/login', { identifier: { $ne: null }, password: PASSWORD });
+    expect(malTypé.statusCode).toBe(400);
+    expect(erreur(malTypé)).toBe('Corps de requête invalide : le champ « identifier » doit être de type texte.');
+
+    const inconnu = await post('/api/auth/login', { identifier: 'Alice', password: PASSWORD, admin: true });
+    expect(inconnu.statusCode).toBe(400);
+    expect(erreur(inconnu)).toBe('Corps de requête invalide : le champ « admin » n’est pas attendu.');
+
+    const tropLong = await post('/api/auth/login', { identifier: 'x'.repeat(201), password: PASSWORD });
+    expect(tropLong.statusCode).toBe(400);
+    expect(erreur(tropLong)).toBe('Corps de requête invalide : le champ « identifier » dépasse 200 caractères.');
+  });
+
+  it('refuse un équipement incomplet ou hors nomenclature (au lieu d’échouer en 500)', async () => {
+    const alice = await bootstrapAlice();
+
+    const incomplet = await post('/api/equipments', { name: 'Tracteur' }, alice.cookies);
+    expect(incomplet.statusCode).toBe(400);
+    expect(erreur(incomplet)).toBe('Corps de requête invalide : le champ « category » est obligatoire.');
+
+    const unitéInconnue = await post(
+      '/api/equipments',
+      equipmentPayload({ memberIds: [alice.id], meterUnit: 'PARSECS' }),
+      alice.cookies,
+    );
+    expect(unitéInconnue.statusCode).toBe(400);
+    expect(erreur(unitéInconnue)).toBe(
+      'Corps de requête invalide : le champ « meterUnit » n’accepte que : HOURS, KILOMETERS.',
+    );
+
+    const dateFantaisiste = await post(
+      '/api/equipments',
+      equipmentPayload({ memberIds: [alice.id], acquisitionDate: 'hier' }),
+      alice.cookies,
+    );
+    expect(dateFantaisiste.statusCode).toBe(400);
+
+    const cercleVide = await post('/api/equipments', equipmentPayload({ memberIds: [] }), alice.cookies);
+    expect(cercleVide.statusCode).toBe(400);
+  });
+
+  it('refuse une dépense mal formée et n’accepte qu’un justificatif issu de l’upload', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment();
+    const dépense = (overrides: Record<string, unknown> = {}) => ({
+      equipmentId: equipment.id,
+      label: 'Gasoil',
+      amountEuros: 90,
+      payerId: alice.id,
+      date: '2026-07-01',
+      category: 'FUEL',
+      split: { type: 'EQUAL' },
+      ...overrides,
+    });
+
+    expect((await post('/api/expenses', dépense({ category: 'CAVIAR' }), alice.cookies)).statusCode).toBe(400);
+    expect((await post('/api/expenses', dépense({ amountEuros: 'beaucoup' }), alice.cookies)).statusCode).toBe(400);
+    expect((await post('/api/expenses', dépense({ split: { type: 'MOITIÉ' } }), alice.cookies)).statusCode).toBe(400);
+    // Champ étranger à la forme EQUAL : refusé, et non ignoré en silence.
+    const splitHybride = await post(
+      '/api/expenses',
+      dépense({ split: { type: 'EQUAL', amountsEuros: { [alice.id]: 90 } } }),
+      alice.cookies,
+    );
+    expect(splitHybride.statusCode).toBe(400);
+
+    // Hameçonnage : une URL externe rendue par le front comme un justificatif de l'application.
+    const externe = await post(
+      '/api/expenses',
+      dépense({ receiptPath: 'https://faux-recu.example/facture.pdf' }),
+      alice.cookies,
+    );
+    expect(externe.statusCode).toBe(400);
+    expect(erreur(externe)).toBe('Corps de requête invalide : le champ « receiptPath » n’a pas le format attendu.');
+
+    // Chemin relatif hors du répertoire servi : même refus.
+    expect(
+      (await post('/api/expenses', dépense({ receiptPath: '/uploads/../secret.txt' }), alice.cookies)).statusCode,
+    ).toBe(400);
+
+    // Seule la forme réellement produite par POST /api/uploads/receipts est acceptée.
+    const valide = await post(
+      '/api/expenses',
+      dépense({ receiptPath: `/uploads/${crypto.randomUUID()}.png` }),
+      alice.cookies,
+    );
+    expect(valide.statusCode).toBe(201);
+  });
+
+  it('refuse des préférences de notification mal typées (au lieu d’échouer en 500)', async () => {
+    const alice = await bootstrapAlice();
+
+    const malTypées = await app.inject({
+      method: 'PUT',
+      url: '/api/notifications/preferences',
+      payload: { preferences: 'x' },
+      cookies: alice.cookies,
+    });
+    expect(malTypées.statusCode).toBe(400);
+    expect(erreur(malTypées)).toBe('Corps de requête invalide : le champ « preferences » doit être de type liste.');
+
+    const typeInconnu = await app.inject({
+      method: 'PUT',
+      url: '/api/notifications/preferences',
+      payload: { preferences: [{ type: 'PLUIE_DE_GRENOUILLES', inApp: true, push: true }] },
+      cookies: alice.cookies,
+    });
+    expect(typeInconnu.statusCode).toBe(400);
+    expect(erreur(typeInconnu)).toMatch(/champ « preferences.0.type »/);
+  });
+
+  it('valide aussi les paramètres d’URL et la querystring', async () => {
+    const alice = await bootstrapAlice();
+
+    const idInterminable = await get(`/api/equipments/${'x'.repeat(100)}`, alice.cookies);
+    expect(idInterminable.statusCode).toBe(400);
+    expect(erreur(idInterminable)).toMatch(/^Paramètre d’URL invalide/);
+
+    const filtreInconnu = await get('/api/notifications?unread=oui', alice.cookies);
+    expect(filtreInconnu.statusCode).toBe(400);
+    expect(erreur(filtreInconnu)).toMatch(/^Paramètre de requête invalide/);
+    expect((await get('/api/notifications?unread=1', alice.cookies)).statusCode).toBe(200);
+
+    // Une URL n'est pas maîtrisée par le seul client : anti-cache, `utm_*`, marqueur d'analytics
+    // s'y ajoutent sans que l'application les ait demandés. Les ignorer, ne pas refuser la requête.
+    expect((await get('/api/notifications?unread=1&_=1234&utm_source=sms', alice.cookies)).statusCode).toBe(200);
+  });
+
+  it('refuse une date calendairement impossible (au lieu d’un 500 ou d’une réécriture muette)', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment();
+
+    // Le motif du schéma ne porte que la forme : `new Date` rend ici une Invalid Date, qui ne
+    // cassait qu'à la sérialisation de la réponse — un 500 déclenchable par un corps de requête.
+    for (const absurde of ['0000-00-00', '9999-99-99', '2026-13-01']) {
+      const res = await post(
+        '/api/equipments',
+        equipmentPayload({ memberIds: [alice.id], acquisitionDate: absurde }),
+        alice.cookies,
+      );
+      expect(res.statusCode, `${absurde} → ${res.body}`).toBe(400);
+    }
+    const dépense = await post(
+      '/api/expenses',
+      {
+        equipmentId: equipment.id,
+        label: 'Gasoil',
+        amountEuros: 90,
+        payerId: alice.id,
+        date: '9999-99-99',
+        category: 'FUEL',
+        split: { type: 'EQUAL' },
+      },
+      alice.cookies,
+    );
+    expect(dépense.statusCode, dépense.body).toBe(400);
+
+    // Un jour qui n'existe pas était accepté puis reporté en silence : 2026-02-31 → 3 mars.
+    const février = await post(
+      '/api/equipments',
+      equipmentPayload({ memberIds: [alice.id], acquisitionDate: '2026-02-31' }),
+      alice.cookies,
+    );
+    expect(février.statusCode, février.body).toBe(400);
+  });
+
+  it('n’accepte pas `null` là où un nombre est déclaré', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment();
+
+    // La coercition Ajv promouvait `null` en `0` : un champ obligatoire oublié par le front
+    // devenait une valeur d'achat de 0 €, ou un montant nul dans un calcul de soldes.
+    const sansValeur = await post(
+      '/api/equipments',
+      equipmentPayload({ memberIds: [alice.id], purchaseValueEuros: null }),
+      alice.cookies,
+    );
+    expect(sansValeur.statusCode, sansValeur.body).toBe(400);
+
+    const sansMontant = await post(
+      '/api/expenses',
+      {
+        equipmentId: equipment.id,
+        label: 'Gasoil',
+        amountEuros: null,
+        payerId: alice.id,
+        date: '2026-07-01',
+        category: 'FUEL',
+        split: { type: 'EQUAL' },
+      },
+      alice.cookies,
+    );
+    expect(sansMontant.statusCode, sansMontant.body).toBe(400);
+    expect(erreur(sansMontant)).toMatch(/champ « amountEuros »/);
+  });
+});
+
+describe('API — plafonds de requêtes (rate-limit)', () => {
+  let tmpRoot: string;
+  let bridée: FastifyInstance;
+
+  beforeEach(async () => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-quota-'));
+    bridée = await buildTestApp({
+      rateLimits: { global: 3, sensitive: 1 },
+      uploadsDir: path.join(tmpRoot, 'uploads'),
+    });
+  });
+
+  afterEach(async () => {
+    await bridée.close();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  /** Session sur l'app bridée : le bootstrap est public et hors quota « sensible ». */
+  async function session(): Promise<Cookies> {
+    const res = await bridée.inject({
+      method: 'POST',
+      url: '/api/auth/bootstrap',
+      payload: { name: 'Alice', password: PASSWORD },
+    });
+    expect(res.statusCode).toBe(201);
+    return sessionCookie(res);
+  }
+
+  it('plafonne par défaut toute route, y compris celles sans limite propre', async () => {
+    for (let i = 0; i < 3; i++) {
+      expect((await bridée.inject({ method: 'GET', url: '/api/health' })).statusCode).toBe(200);
+    }
+    const coupée = await bridée.inject({ method: 'GET', url: '/api/health' });
+    expect(coupée.statusCode).toBe(429);
+    expect((coupée.json() as { error: string }).error).toMatch(/^Trop de requêtes\./);
+  });
+
+  it('plafonne plus bas la création de compte et le téléversement', async () => {
+    const cookies = await session();
+
+    // Création de compte : chaque appel ouvre un compte et émet un lien d'invitation.
+    const membre = (name: string) => bridée.inject({ method: 'POST', url: '/api/members', payload: { name }, cookies });
+    expect((await membre('Bruno')).statusCode).toBe(201);
+    expect((await membre('Chloé')).statusCode).toBe(429);
+
+    // Téléversement : 10 Mo par fichier, jamais supprimé — le plafond global serait trop haut.
+    const envoi = () => {
+      const { payload, headers } = filePayload('recu.png', Buffer.from('image-factice'));
+      return bridée.inject({ method: 'POST', url: '/api/uploads/receipts', payload, headers, cookies });
+    };
+    expect((await envoi()).statusCode).toBe(201);
+    expect((await envoi()).statusCode).toBe(429);
   });
 });

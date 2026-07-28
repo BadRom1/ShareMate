@@ -1,9 +1,17 @@
 import { Member } from '../domain/member/member.js';
 import { MemberCredential } from '../domain/auth/credential.js';
-import { ConflictError, DomainError, NotFoundError, UnauthorizedError } from '../domain/shared/domain-error.js';
+import {
+  ConflictError,
+  DomainError,
+  ForbiddenError,
+  NotFoundError,
+  UnauthorizedError,
+} from '../domain/shared/domain-error.js';
+import { visibleMemberIds } from './member-scope.js';
 import type {
   Clock,
   CredentialRepository,
+  EquipmentRepository,
   IdGenerator,
   MemberRepository,
   PasswordHasher,
@@ -22,7 +30,16 @@ export interface AuthResult {
   session: AuthSession;
 }
 
+/** Session reconnue par `authenticate` : `renewed` signale une échéance repoussée à rendre au client. */
+export interface AuthenticatedSession {
+  member: Member;
+  expiresAt: Date;
+  renewed: boolean;
+}
+
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 jours, expiration glissante
+const SESSION_RENEWAL_THRESHOLD_MS = SESSION_TTL_MS / 3; // en deçà, la session est repoussée
+const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 jours : un code circule hors bande (SMS, WhatsApp)
 const MIN_PASSWORD_LENGTH = 8;
 
 function validatePassword(password: string): void {
@@ -31,11 +48,17 @@ function validatePassword(password: string): void {
   }
 }
 
+/** Message d'absence d'un membre, réutilisé tel quel pour masquer un refus (cf. equipment-access). */
+function memberNotFound(memberId: string): string {
+  return `Membre introuvable : ${memberId}`;
+}
+
 export class AuthService {
   constructor(
     private readonly members: MemberRepository,
     private readonly credentials: CredentialRepository,
     private readonly sessions: SessionRepository,
+    private readonly equipments: EquipmentRepository,
     private readonly hasher: PasswordHasher,
     private readonly tokens: TokenGenerator,
     private readonly idGenerator: IdGenerator,
@@ -54,78 +77,133 @@ export class AuthService {
     }
     validatePassword(input.password);
     const member = Member.create({ id: this.idGenerator.next(), name: input.name, email: input.email ?? null });
+    // Sans demandeur ni instance à sonder (le bootstrap n'ouvre que sur une base vierge), la
+    // collision se cherche partout.
+    await this.assertEmailAvailable(member, null);
     await this.members.save(member);
-    await this.credentials.save(
+    // `needsBootstrap` ci-dessus n'est qu'un raccourci : entre sa lecture et l'écriture, une autre
+    // requête peut avoir créé le premier compte. Seul `saveFirst` tranche, atomiquement. Le membre
+    // du perdant reste en base sans accès : il ne peut pas se connecter, et l'annuaire ne le montre
+    // à personne (aucun cercle, aucun invitant).
+    const claimed = await this.credentials.saveFirst(
       MemberCredential.create({ memberId: member.id, passwordHash: await this.hasher.hash(input.password) }),
     );
+    if (!claimed) {
+      throw new ConflictError('Le premier compte existe déjà : connectez-vous.');
+    }
     return { member, session: await this.openSession(member.id) };
   }
 
   /** Crée un membre et son invitation ; le code est à transmettre hors application. */
-  async createMemberWithInvite(input: {
-    name: string;
-    email?: string | null;
-  }): Promise<{ member: Member; inviteCode: string }> {
-    const member = Member.create({ id: this.idGenerator.next(), name: input.name, email: input.email ?? null });
+  async createMemberWithInvite(
+    input: { name: string; email?: string | null },
+    requesterId: string,
+  ): Promise<{ member: Member; inviteCode: string }> {
+    const member = Member.create({
+      id: this.idGenerator.next(),
+      name: input.name,
+      email: input.email ?? null,
+      invitedById: requesterId,
+    });
+    await this.assertEmailAvailable(member, await visibleMemberIds(this.equipments, this.members, requesterId));
     await this.members.save(member);
     const inviteCode = this.tokens.inviteCode();
-    await this.credentials.save(MemberCredential.create({ memberId: member.id, inviteCode }));
+    await this.credentials.save(
+      MemberCredential.create({ memberId: member.id, inviteCode, inviteExpiresAt: this.inviteDeadline() }),
+    );
     return { member, inviteCode };
   }
 
-  /** Nouveau code d'invitation (mot de passe perdu, code égaré, membre pré-existant). */
-  async regenerateInvite(memberId: string): Promise<string> {
+  /**
+   * Nouveau code de première connexion, réservé au titulaire et à celui qui l'a invité.
+   *
+   * Le cercle commun ne suffit pas : sur un compte jamais ouvert, un code régénéré ne relance pas
+   * une invitation, il prend le compte — celui qui le consomme choisit le mot de passe, hérite des
+   * cercles du titulaire et l'enferme dehors (`hasPassword` bloque ensuite toute relance). Comme
+   * la composition d'un cercle se décide sans l'intéressé, tout membre pouvait s'inscrire dans un
+   * équipement avec sa cible pour entrer dans son périmètre. L'invitant, lui, est le seul à qui
+   * l'on doit déjà d'exister dans l'instance.
+   *
+   * Hors de ce couple, le refus est masqué derrière l'absence du membre : impossible de découvrir
+   * qu'un identifiant correspond à un compte.
+   */
+  async regenerateInvite(memberId: string, requesterId: string): Promise<string> {
     const member = await this.members.findById(memberId);
     if (!member) {
-      throw new NotFoundError(`Membre introuvable : ${memberId}`);
+      throw new NotFoundError(memberNotFound(memberId));
+    }
+    if (member.id !== requesterId && member.invitedById !== requesterId) {
+      throw new ForbiddenError(memberNotFound(memberId));
     }
     const existing = await this.credentials.findByMemberId(memberId);
+    // Une invitation n'est pas une réinitialisation : sans cette garde, obtenir un code pour un
+    // compte ouvert revient à en prendre le contrôle. Un mot de passe perdu se règle donc autrement.
+    if (existing?.hasPassword) {
+      throw new ConflictError("Ce membre a déjà un mot de passe : un lien d'invitation ne le réinitialise pas.");
+    }
     const inviteCode = this.tokens.inviteCode();
+    const expiresAt = this.inviteDeadline();
     await this.credentials.save(
-      existing ? existing.withInvite(inviteCode) : MemberCredential.create({ memberId, inviteCode }),
+      existing
+        ? existing.withInvite(inviteCode, expiresAt)
+        : MemberCredential.create({ memberId, inviteCode, inviteExpiresAt: expiresAt }),
     );
     return inviteCode;
   }
 
   /** Membre associé à un code d'invitation encore valable. */
   async inviteInfo(code: string): Promise<Member> {
-    const credential = await this.credentials.findByInviteCode(code);
-    if (!credential) {
-      throw new NotFoundError('Invitation invalide ou déjà utilisée.');
-    }
+    const credential = await this.pendingInvite(code);
     return this.memberOf(credential.memberId);
   }
 
   /** Consomme une invitation : le membre définit son mot de passe et est connecté. */
   async redeemInvite(code: string, password: string): Promise<AuthResult> {
-    const credential = await this.credentials.findByInviteCode(code);
-    if (!credential) {
-      throw new NotFoundError('Invitation invalide ou déjà utilisée.');
-    }
+    const credential = await this.pendingInvite(code);
     validatePassword(password);
     await this.credentials.save(credential.withPassword(await this.hasher.hash(password)));
+    // Le compte vient d'être ouvert : toute session antérieure (appareil prêté, code recyclé)
+    // n'a pas à survivre au choix du mot de passe.
+    await this.sessions.deleteByMemberId(credential.memberId);
     const member = await this.memberOf(credential.memberId);
     return { member, session: await this.openSession(member.id) };
   }
 
   /** Connexion par nom ou email (insensible à la casse). */
   async login(identifier: string, password: string): Promise<AuthResult> {
-    const needle = identifier.trim().toLowerCase();
-    const candidates = (await this.members.findAll()).filter(
-      (m) => m.name.toLowerCase() === needle || m.email?.toLowerCase() === needle,
-    );
+    const candidates = await this.members.findByNameOrEmail(identifier);
+    let derivationDone = false;
     for (const member of candidates) {
       const credential = await this.credentials.findByMemberId(member.id);
-      if (credential?.passwordHash && (await this.hasher.verify(password, credential.passwordHash))) {
+      if (!credential?.passwordHash) {
+        continue;
+      }
+      derivationDone = true;
+      if (await this.hasher.verify(password, credential.passwordHash)) {
+        // Migration progressive du coût de hachage : durcir les paramètres n'invalide rien, chaque
+        // membre est repassé au coût courant à sa première connexion suivante, sans le savoir.
+        if (this.hasher.needsRehash(credential.passwordHash)) {
+          await this.credentials.save(credential.withPassword(await this.hasher.hash(password)));
+        }
         return { member, session: await this.openSession(member.id) };
       }
+    }
+    // Sans candidat vérifiable (identifiant inconnu, ou invitation jamais consommée), le refus
+    // reviendrait sans aucune dérivation de clé : le temps de réponse trahirait alors l'existence
+    // du compte, malgré le message générique. Un hachage leurre, de coût identique, referme ce canal.
+    if (!derivationDone) {
+      await this.hasher.hash(password);
     }
     throw new UnauthorizedError('Identifiants invalides.');
   }
 
-  /** Membre de la session portée par ce jeton, avec prolongation glissante ; null sinon. */
-  async authenticate(token: string): Promise<Member | null> {
-    const tokenHash = this.tokens.hash(token);
+  /** Session portée par ce jeton, avec prolongation glissante ; null si elle n'est plus valable. */
+  async authenticate(token: string | undefined): Promise<AuthenticatedSession | null> {
+    // Le jeton absent n'est pas court-circuité : il est haché et cherché comme un autre. Aucun
+    // branchement ne dépend donc de ce que porte l'appelant, et « pas de jeton » suit exactement
+    // le chemin — et le temps — de « jeton inconnu ». L'empreinte de la chaîne vide ne peut
+    // appareiller aucune session : elles portent toutes l'empreinte de 32 octets aléatoires.
+    const tokenHash = this.tokens.hash(token ?? '');
     const session = await this.sessions.findByTokenHash(tokenHash);
     const now = this.clock.now();
     if (!session || session.expiresAt.getTime() <= now.getTime()) {
@@ -135,21 +213,83 @@ export class AuthService {
     if (!member) {
       return null;
     }
-    await this.sessions.save({ ...session, expiresAt: new Date(now.getTime() + SESSION_TTL_MS) });
-    return member;
+    // Prolonger à chaque appel ferait de la moindre lecture d'API une transaction en écriture
+    // SQLite — sur un volume réseau, c'est le point de contention de toute l'application. Repousser
+    // l'échéance dans le dernier tiers du TTL suffit : un usage même épisodique la maintient ouverte.
+    if (session.expiresAt.getTime() - now.getTime() < SESSION_RENEWAL_THRESHOLD_MS) {
+      const expiresAt = new Date(now.getTime() + SESSION_TTL_MS);
+      await this.sessions.save({ ...session, expiresAt });
+      return { member, expiresAt, renewed: true };
+    }
+    return { member, expiresAt: session.expiresAt, renewed: false };
   }
 
   async logout(token: string): Promise<void> {
     await this.sessions.delete(this.tokens.hash(token));
   }
 
-  async changePassword(memberId: string, currentPassword: string, newPassword: string): Promise<void> {
+  /**
+   * Change le mot de passe et révoque toutes les sessions du membre — le geste réflexe après une
+   * compromission doit expulser l'intrus. La session du demandeur tombe avec les autres : la
+   * nouvelle session renvoyée la remplace, sans quoi il se déconnecterait lui-même.
+   */
+  async changePassword(memberId: string, currentPassword: string, newPassword: string): Promise<AuthSession> {
     const credential = await this.credentials.findByMemberId(memberId);
     if (!credential?.passwordHash || !(await this.hasher.verify(currentPassword, credential.passwordHash))) {
       throw new UnauthorizedError('Mot de passe actuel incorrect.');
     }
     validatePassword(newPassword);
     await this.credentials.save(credential.withPassword(await this.hasher.hash(newPassword)));
+    await this.sessions.deleteByMemberId(memberId);
+    return this.openSession(memberId);
+  }
+
+  /**
+   * L'email est un identifiant de connexion : partagé par deux membres, `login` retiendrait
+   * arbitrairement le premier des deux dont le mot de passe correspond. La garde reste applicative
+   * — le schéma ne porte pas d'index unique, la comparaison devant suivre `String.toLowerCase`
+   * (voir `minuscule` dans database.ts) et non le repli ASCII de SQLite.
+   *
+   * `scope` borne la collision aux membres que le demandeur voit déjà. Une garde à l'échelle de
+   * l'instance ne peut pas dire « cette adresse est prise » sans le dire aussi à qui la sonde :
+   * n'importe quel membre authentifié obtenait ainsi, adresse par adresse, la liste des comptes
+   * de l'instance entière — le canal même que le cadrage de l'annuaire ferme. Hors périmètre, le
+   * doublon est donc accepté ; l'ambiguïté résiduelle reste théorique, `login` n'ouvrant que le
+   * compte dont le mot de passe correspond, que l'attaquant ne connaît pas.
+   */
+  private async assertEmailAvailable(member: Member, scope: Set<string> | null): Promise<void> {
+    if (member.email === null) {
+      return;
+    }
+    // Le port répond aussi sur le nom : seul un email réellement identique compte comme collision.
+    const wanted = member.email.toLowerCase();
+    const collision = (await this.members.findByNameOrEmail(member.email)).some(
+      (other) => other.email?.toLowerCase() === wanted && (scope === null || scope.has(other.id)),
+    );
+    if (collision) {
+      throw new ConflictError('Cette adresse email est déjà utilisée par un autre membre.');
+    }
+  }
+
+  private inviteDeadline(): Date {
+    return new Date(this.clock.now().getTime() + INVITE_TTL_MS);
+  }
+
+  /**
+   * Invitation exploitable : code connu, non expiré, sur un compte encore sans mot de passe.
+   * Le même message couvre l'inconnu, l'expiré et le consommé : rien ne permet de sonder les codes.
+   */
+  private async pendingInvite(code: string): Promise<MemberCredential> {
+    const credential = await this.credentials.findByInviteCode(code);
+    if (!credential || !credential.isInviteValid(this.clock.now())) {
+      throw new NotFoundError('Invitation invalide, expirée ou déjà utilisée.');
+    }
+    // Filet de sécurité contre les codes émis au-dessus d'un mot de passe existant par les versions
+    // antérieures : les consommer réécrirait le mot de passe du titulaire.
+    if (credential.hasPassword) {
+      throw new ConflictError('Ce compte a déjà un mot de passe : connectez-vous.');
+    }
+    return credential;
   }
 
   private async openSession(memberId: string): Promise<AuthSession> {
@@ -164,7 +304,7 @@ export class AuthService {
   private async memberOf(memberId: string): Promise<Member> {
     const member = await this.members.findById(memberId);
     if (!member) {
-      throw new NotFoundError(`Membre introuvable : ${memberId}`);
+      throw new NotFoundError(memberNotFound(memberId));
     }
     return member;
   }

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
-import type { Equipment, MaintenanceStatus, Member, UsageRecord } from '../api';
+import type { Member } from '../api';
 import { formatDateTime, meterLabel } from '../format';
 import { pickInitialEquipmentId, setLastEquipmentId } from '../lastEquipment';
+import { errorMessage, firstError, useApiResource } from '../useApiResource';
 
 interface Props {
   members: Member[];
@@ -12,12 +13,8 @@ interface Props {
 }
 
 export function UsagePage({ members, currentMemberId, initialEquipmentId }: Props) {
-  const [equipments, setEquipments] = useState<Equipment[]>([]);
   const [selectedId, setSelectedId] = useState(initialEquipmentId ?? '');
-  const [history, setHistory] = useState<UsageRecord[]>([]);
-  const [status, setStatus] = useState<MaintenanceStatus | null>(null);
-  const [alerts, setAlerts] = useState<MaintenanceStatus[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [viewByMember, setViewByMember] = useState(false);
 
   const [form, setForm] = useState({
@@ -30,35 +27,37 @@ export function UsagePage({ members, currentMemberId, initialEquipmentId }: Prop
   /** Champ piloté par l'utilisateur : la durée (le serveur calcule le compteur) ou le compteur total. */
   const [entryMode, setEntryMode] = useState<'duration' | 'total'>('duration');
 
+  const equipmentsResource = useApiResource(
+    useCallback(async () => {
+      const [list, alerts] = await Promise.all([api.listEquipments(), api.alerts()]);
+      setSelectedId((id) =>
+        pickInitialEquipmentId(list, currentMemberId, { current: id, deepLink: initialEquipmentId }),
+      );
+      return { list, alerts };
+    }, [currentMemberId, initialEquipmentId]),
+  );
+
+  const historyResource = useApiResource(
+    useCallback(async () => {
+      if (!selectedId) return { records: [], status: null };
+      // Le statut est toujours chargé : le formulaire préremplit le total avec le dernier relevé.
+      const [records, status] = await Promise.all([
+        viewByMember ? api.usageByMember(currentMemberId) : api.usageByEquipment(selectedId),
+        api.maintenanceStatus(selectedId),
+      ]);
+      return { records, status };
+    }, [selectedId, viewByMember, currentMemberId]),
+  );
+
+  const equipments = equipmentsResource.data?.list ?? [];
+  const alerts = equipmentsResource.data?.alerts ?? [];
+  const history = historyResource.data?.records ?? [];
+  const status = historyResource.data?.status ?? null;
+  const error = actionError ?? firstError(equipmentsResource, historyResource);
+
   const selected = equipments.find((e) => e.id === selectedId) ?? null;
   /** Dernier compteur connu : sert à préremplir le total et à convertir durée ↔ total. */
   const lastReading = status?.currentReading ?? null;
-
-  const loadEquipments = useCallback(async () => {
-    const list = await api.listEquipments();
-    setEquipments(list);
-    setSelectedId((id) => pickInitialEquipmentId(list, currentMemberId, { current: id, deepLink: initialEquipmentId }));
-    setAlerts(await api.alerts());
-  }, [currentMemberId, initialEquipmentId]);
-
-  const loadHistory = useCallback(async () => {
-    if (!selectedId) return;
-    // Le statut est toujours chargé : le formulaire préremplit le total avec le dernier relevé.
-    const [records, s] = await Promise.all([
-      viewByMember ? api.usageByMember(currentMemberId) : api.usageByEquipment(selectedId),
-      api.maintenanceStatus(selectedId),
-    ]);
-    setHistory(records);
-    setStatus(s);
-  }, [selectedId, viewByMember, currentMemberId]);
-
-  useEffect(() => {
-    loadEquipments().catch((e: Error) => setError(e.message));
-  }, [loadEquipments]);
-
-  useEffect(() => {
-    loadHistory().catch((e: Error) => setError(e.message));
-  }, [loadHistory]);
 
   // Mémorise l'équipement consulté (partagé avec l'onglet Discussions).
   useEffect(() => {
@@ -96,7 +95,7 @@ export function UsagePage({ members, currentMemberId, initialEquipmentId }: Prop
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    setError(null);
+    setActionError(null);
     try {
       // En mode durée, on envoie la durée : le serveur l'ajoute au dernier relevé connu,
       // même si quelqu'un d'autre a enregistré un usage entre-temps.
@@ -113,9 +112,9 @@ export function UsagePage({ members, currentMemberId, initialEquipmentId }: Prop
       });
       setForm({ duration: '', meterReading: '', fuelAddedLiters: '', notes: '', isMaintenance: false });
       setEntryMode('duration');
-      await Promise.all([loadHistory(), loadEquipments()]);
+      await Promise.all([historyResource.reload(), equipmentsResource.reload()]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur.');
+      setActionError(errorMessage(e));
     }
   }
 

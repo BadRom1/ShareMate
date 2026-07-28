@@ -57,14 +57,11 @@ export default defineConfig({
             },
           },
           {
-            // Justificatifs uploadés : cache d'abord, ils ne changent pas.
+            // Justificatifs : jamais conservés sur l'appareil. Leur lecture dépend du cercle de la
+            // dépense qui les porte, contrôlé à chaque requête côté serveur ; un cache les
+            // rendrait à un droit révoqué, et les laisserait lisibles après une déconnexion.
             urlPattern: ({ url }) => url.pathname.startsWith('/uploads/'),
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'sharemate-uploads',
-              expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 30 },
-              cacheableResponse: { statuses: [200] },
-            },
+            handler: 'NetworkOnly',
           },
         ],
       },

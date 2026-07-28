@@ -18,11 +18,41 @@ describe('MemberCredential', () => {
     expect(credential.hasPassword).toBe(true);
     expect(credential.passwordHash).toBe('hash');
     expect(credential.inviteCode).toBeNull();
+    expect(credential.inviteExpiresAt).toBeNull();
   });
 
-  it('withInvite conserve le mot de passe existant', () => {
-    const credential = MemberCredential.create({ memberId: 'm1', passwordHash: 'hash' }).withInvite('nouveau');
+  it('withInvite conserve le mot de passe existant et pose l’échéance', () => {
+    const expiresAt = new Date('2026-07-09T10:00:00Z');
+    const credential = MemberCredential.create({ memberId: 'm1', passwordHash: 'hash' }).withInvite(
+      'nouveau',
+      expiresAt,
+    );
     expect(credential.passwordHash).toBe('hash');
     expect(credential.inviteCode).toBe('nouveau');
+    expect(credential.inviteExpiresAt).toEqual(expiresAt);
+  });
+
+  describe('validité d’une invitation', () => {
+    const maintenant = new Date('2026-07-02T10:00:00Z');
+
+    it('vaut jusqu’à son échéance, pas au-delà', () => {
+      const credential = MemberCredential.create({
+        memberId: 'm1',
+        inviteCode: 'code',
+        inviteExpiresAt: new Date('2026-07-09T10:00:00Z'),
+      });
+      expect(credential.isInviteValid(maintenant)).toBe(true);
+      expect(credential.isInviteValid(new Date('2026-07-09T10:00:01Z'))).toBe(false);
+    });
+
+    it('un code sans échéance est tenu pour périmé (rangée antérieure à l’expiration)', () => {
+      const credential = MemberCredential.create({ memberId: 'm1', inviteCode: 'code' });
+      expect(credential.isInviteValid(maintenant)).toBe(false);
+    });
+
+    it('un accès sans invitation n’est jamais valide', () => {
+      const credential = MemberCredential.create({ memberId: 'm1', passwordHash: 'hash' });
+      expect(credential.isInviteValid(maintenant)).toBe(false);
+    });
   });
 });

@@ -1,16 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, assetUrl } from '../api';
-import type {
-  Balance,
-  Equipment,
-  Expense,
-  ExpenseCategory,
-  Member,
-  Reimbursement,
-  SettlementTransaction,
-  SplitInput,
-} from '../api';
+import { api, receiptUrl } from '../api';
+import type { Expense, ExpenseCategory, Member, SettlementTransaction, SplitInput } from '../api';
 import { CATEGORY_LABELS, formatDate, formatEuros } from '../format';
+import { errorMessage, firstError, useApiResource } from '../useApiResource';
 
 interface Props {
   members: Member[];
@@ -21,15 +13,39 @@ type SplitType = 'EQUAL' | 'USAGE_PRORATED' | 'CUSTOM';
 
 /** Dépenses, soldes et remboursements du cercle de l'équipement sélectionné. */
 export function ExpensesPage({ members, currentMemberId }: Props) {
-  const [equipments, setEquipments] = useState<Equipment[]>([]);
   const [selectedId, setSelectedId] = useState('');
-  const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [balances, setBalances] = useState<Balance[]>([]);
-  const [settlement, setSettlement] = useState<SettlementTransaction[]>([]);
-  const [reimbursements, setReimbursements] = useState<Reimbursement[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  const equipmentsResource = useApiResource(
+    useCallback(async () => {
+      const list = await api.listEquipments();
+      setSelectedId((id) => id || list.find((e) => e.memberIds.includes(currentMemberId))?.id || list[0]?.id || '');
+      return list;
+    }, [currentMemberId]),
+  );
+
+  /** Dépenses, soldes, plan de remboursement et remboursements de l'équipement sélectionné. */
+  const accountsResource = useApiResource(
+    useCallback(async () => {
+      if (!selectedId) return { expenses: [], balances: [], settlement: [], reimbursements: [] };
+      const [expenses, balances, settlement, reimbursements] = await Promise.all([
+        api.listExpenses(selectedId),
+        api.balances(selectedId),
+        api.settlement(selectedId),
+        api.listReimbursements(selectedId),
+      ]);
+      return { expenses, balances, settlement, reimbursements };
+    }, [selectedId]),
+  );
+
+  const equipments = equipmentsResource.data ?? [];
+  const expenses = accountsResource.data?.expenses ?? [];
+  const balances = accountsResource.data?.balances ?? [];
+  const settlement = accountsResource.data?.settlement ?? [];
+  const reimbursements = accountsResource.data?.reimbursements ?? [];
+  const error = actionError ?? firstError(equipmentsResource, accountsResource);
 
   const selected = equipments.find((e) => e.id === selectedId) ?? null;
 
@@ -50,34 +66,6 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
     customAmounts: {} as Record<string, string>,
     receiptFile: null as File | null,
   });
-
-  const loadEquipments = useCallback(async () => {
-    const list = await api.listEquipments();
-    setEquipments(list);
-    setSelectedId((id) => id || list.find((e) => e.memberIds.includes(currentMemberId))?.id || list[0]?.id || '');
-  }, [currentMemberId]);
-
-  const loadForEquipment = useCallback(async () => {
-    if (!selectedId) return;
-    const [xs, bs, plan, rbs] = await Promise.all([
-      api.listExpenses(selectedId),
-      api.balances(selectedId),
-      api.settlement(selectedId),
-      api.listReimbursements(selectedId),
-    ]);
-    setExpenses(xs);
-    setBalances(bs);
-    setSettlement(plan);
-    setReimbursements(rbs);
-  }, [selectedId]);
-
-  useEffect(() => {
-    loadEquipments().catch((e: Error) => setError(e.message));
-  }, [loadEquipments]);
-
-  useEffect(() => {
-    loadForEquipment().catch((e: Error) => setError(e.message));
-  }, [loadForEquipment]);
 
   // À chaque changement d'équipement (ou de son cercle), recale le formulaire.
   // Clé primitive : évite de relancer l'effet quand le rechargement recrée des objets identiques.
@@ -113,7 +101,7 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!selectedId) return;
-    setError(null);
+    setActionError(null);
     setBusy(true);
     try {
       let receiptPath: string | null = null;
@@ -138,9 +126,9 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
         customAmounts: {},
         receiptFile: null,
       });
-      await loadForEquipment();
+      await accountsResource.reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur.');
+      setActionError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -161,13 +149,13 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
       amountEuros: t.amountEuros,
       date: new Date().toISOString().slice(0, 10),
     });
-    await loadForEquipment();
+    await accountsResource.reload();
   }
 
   async function removeExpense(x: Expense) {
     if (!confirm(`Supprimer la dépense « ${x.label} » ?`)) return;
     await api.deleteExpense(x.id);
-    await loadForEquipment();
+    await accountsResource.reload();
   }
 
   if (equipments.length === 0) {
@@ -404,35 +392,39 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {expenses.map((x) => (
-                  <tr key={x.id}>
-                    <td>{formatDate(x.date)}</td>
-                    <td>
-                      {x.label}
-                      {x.receiptPath && (
-                        <>
-                          {' '}
-                          <a href={assetUrl(x.receiptPath)} target="_blank" rel="noreferrer">
-                            📎
-                          </a>
-                        </>
-                      )}
-                    </td>
-                    <td>{CATEGORY_LABELS[x.category]}</td>
-                    <td>{formatEuros(x.amountEuros)}</td>
-                    <td>{memberName(x.payerId)}</td>
-                    <td className="muted">
-                      {Object.entries(x.sharesEuros)
-                        .map(([id, euros]) => `${memberName(id)} ${formatEuros(euros)}`)
-                        .join(' · ')}
-                    </td>
-                    <td>
-                      <button className="danger" onClick={() => void removeExpense(x)}>
-                        ✕
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {expenses.map((x) => {
+                  // Lien ouvert seulement si le chemin est bien celui d'un fichier téléversé ici.
+                  const receipt = receiptUrl(x.receiptPath);
+                  return (
+                    <tr key={x.id}>
+                      <td>{formatDate(x.date)}</td>
+                      <td>
+                        {x.label}
+                        {receipt && (
+                          <>
+                            {' '}
+                            <a href={receipt} target="_blank" rel="noreferrer">
+                              📎
+                            </a>
+                          </>
+                        )}
+                      </td>
+                      <td>{CATEGORY_LABELS[x.category]}</td>
+                      <td>{formatEuros(x.amountEuros)}</td>
+                      <td>{memberName(x.payerId)}</td>
+                      <td className="muted">
+                        {Object.entries(x.sharesEuros)
+                          .map(([id, euros]) => `${memberName(id)} ${formatEuros(euros)}`)
+                          .join(' · ')}
+                      </td>
+                      <td>
+                        <button className="danger" onClick={() => void removeExpense(x)}>
+                          ✕
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

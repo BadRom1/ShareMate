@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { api } from '../api';
-import type { Equipment, MaintenanceStatus, Member, MeterUnit } from '../api';
+import type { DirectoryMember, Equipment, MaintenanceStatus, MeterUnit } from '../api';
 import { formatDate, formatEuros, meterLabel } from '../format';
-import { IconEdit, IconTrash } from '../components/icons';
+import { errorMessage, useApiResource } from '../useApiResource';
+import { IconEdit, IconLogout, IconTrash } from '../components/icons';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 
 interface Props {
-  members: Member[];
+  members: DirectoryMember[];
   currentMemberId: string;
   /** À rappeler quand un nouvel utilisateur est créé depuis cette page. */
   onMembersChanged: () => void;
@@ -23,8 +24,6 @@ const EMPTY_FORM = {
 };
 
 export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: Props) {
-  const [equipments, setEquipments] = useState<Equipment[]>([]);
-  const [statuses, setStatuses] = useState<Record<string, MaintenanceStatus>>({});
   const [editing, setEditing] = useState<Equipment | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -32,18 +31,21 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
   const [invite, setInvite] = useState<{ memberName: string; url: string } | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Equipment | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [pendingLeave, setPendingLeave] = useState<Equipment | null>(null);
+  const [leaving, setLeaving] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    const list = await api.listEquipments();
-    setEquipments(list);
-    const entries = await Promise.all(list.map(async (e) => [e.id, await api.maintenanceStatus(e.id)] as const));
-    setStatuses(Object.fromEntries(entries));
-  }, []);
+  const resource = useApiResource(
+    useCallback(async () => {
+      const list = await api.listEquipments();
+      const entries = await Promise.all(list.map(async (e) => [e.id, await api.maintenanceStatus(e.id)] as const));
+      return { list, statuses: Object.fromEntries(entries) as Record<string, MaintenanceStatus> };
+    }, []),
+  );
 
-  useEffect(() => {
-    load().catch((e: Error) => setError(e.message));
-  }, [load]);
+  const equipments = resource.data?.list ?? [];
+  const statuses = resource.data?.statuses ?? {};
+  const error = actionError ?? resource.error;
 
   function startCreate() {
     setEditing(null);
@@ -67,7 +69,7 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    setError(null);
+    setActionError(null);
     const payload = {
       name: form.name,
       category: form.category,
@@ -84,9 +86,9 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
         await api.createEquipment(payload);
       }
       setShowForm(false);
-      await load();
+      await resource.reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur.');
+      setActionError(errorMessage(e));
     }
   }
 
@@ -97,7 +99,7 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
   async function addMember() {
     const name = newMemberName.trim();
     if (!name) return;
-    setError(null);
+    setActionError(null);
     try {
       const created = await api.createMember({ name });
       setNewMemberName('');
@@ -106,29 +108,29 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
       setInvite({ memberName: created.name, url: inviteUrl(created.inviteCode) });
       onMembersChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur.');
+      setActionError(errorMessage(e));
     }
   }
 
-  async function shareInvite(member: Member) {
-    setError(null);
+  async function shareInvite(member: DirectoryMember) {
+    setActionError(null);
     try {
       const { inviteCode } = await api.regenerateInvite(member.id);
       setInvite({ memberName: member.name, url: inviteUrl(inviteCode) });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur.');
+      setActionError(errorMessage(e));
     }
   }
 
   async function confirmRemove() {
     if (!pendingDelete) return;
-    setError(null);
+    setActionError(null);
     setDeleting(true);
     try {
       await api.deleteEquipment(pendingDelete.id);
-      await load();
+      await resource.reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur.');
+      setActionError(errorMessage(e));
     } finally {
       // Fermée dans tous les cas : l'alerte d'erreur s'affiche en haut de page, sous la modale.
       setPendingDelete(null);
@@ -136,9 +138,27 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
     }
   }
 
+  async function confirmLeave() {
+    if (!pendingLeave) return;
+    setActionError(null);
+    setLeaving(true);
+    try {
+      await api.leaveEquipment(pendingLeave.id);
+      await resource.reload();
+    } catch (e) {
+      setActionError(errorMessage(e));
+    } finally {
+      setPendingLeave(null);
+      setLeaving(false);
+    }
+  }
+
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;
   }
+
+  /** Comptes jamais ouverts : les seuls à qui un lien de première connexion peut encore servir. */
+  const pendingMembers = members.filter((m) => !m.hasPassword);
 
   return (
     <>
@@ -216,15 +236,22 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
             <span className="muted">Cercle de partage : qui utilise cet équipement ?</span>
             <div className="row">
               {members.map((m) => {
-                // À la création, le créateur reste dans le cercle : sinon l'équipement lui serait invisible.
-                const locked = !editing && m.id === currentMemberId;
+                // Le demandeur ne se retire jamais d'ici : à la création l'équipement lui serait
+                // invisible, en modification le serveur l'exige (geste dédié « quitter le cercle »).
+                const locked = m.id === currentMemberId;
                 return (
                   <label key={m.id} className="check">
                     <input
                       type="checkbox"
                       checked={form.memberIds.includes(m.id)}
                       disabled={locked}
-                      title={locked ? 'Vous faites partie du cercle des équipements que vous créez.' : undefined}
+                      title={
+                        locked
+                          ? editing
+                            ? 'Pour vous retirer, utilisez « Quitter le cercle » sur la fiche de l’équipement.'
+                            : 'Vous faites partie du cercle des équipements que vous créez.'
+                          : undefined
+                      }
                       onChange={(e) =>
                         setForm({
                           ...form,
@@ -252,32 +279,37 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
                 + Créer la personne
               </button>
             </div>
-            <div className="row" style={{ alignItems: 'flex-end' }}>
-              <label className="field">
-                Lien d'invitation (premier accès ou mot de passe perdu)
-                <select
-                  value=""
-                  onChange={(e) => {
-                    const m = members.find((x) => x.id === e.target.value);
-                    if (m) void shareInvite(m);
-                  }}
-                >
-                  <option value="" disabled>
-                    Choisir une personne…
-                  </option>
-                  {members.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
+            {/* Une invitation pose un premier mot de passe, elle n'en réinitialise jamais un :
+                pouvoir en émettre pour un compte ouvert reviendrait à pouvoir en prendre le
+                contrôle. Les comptes déjà ouverts sont donc absents de cette liste. */}
+            {pendingMembers.length > 0 && (
+              <div className="row" style={{ alignItems: 'flex-end' }}>
+                <label className="field">
+                  Lien de première connexion (personnes n'ayant pas encore choisi leur mot de passe)
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const m = pendingMembers.find((x) => x.id === e.target.value);
+                      if (m) void shareInvite(m);
+                    }}
+                  >
+                    <option value="" disabled>
+                      Choisir une personne…
                     </option>
-                  ))}
-                </select>
-              </label>
-            </div>
+                    {pendingMembers.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
             {invite && (
               <div className="card" style={{ background: 'transparent' }}>
                 <p className="muted">
                   Transmettez ce lien à <strong>{invite.memberName}</strong> (WhatsApp, SMS…) pour qu'il choisisse son
-                  mot de passe :
+                  mot de passe. Il est valable 7 jours :
                 </p>
                 <div className="row">
                   <input readOnly value={invite.url} onFocus={(e) => e.target.select()} style={{ flex: 1 }} />
@@ -338,6 +370,18 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
                 >
                   <IconEdit size={20} />
                 </button>
+                {/* Le dernier membre n'a rien à quitter : l'équipement deviendrait invisible
+                    pour tout le monde, le serveur le refuse. Il lui reste la suppression. */}
+                {e.memberIds.length > 1 && (
+                  <button
+                    className="icon-btn"
+                    onClick={() => setPendingLeave(e)}
+                    title="Quitter le cercle"
+                    aria-label="Quitter le cercle"
+                  >
+                    <IconLogout size={20} />
+                  </button>
+                )}
                 <button
                   className="icon-btn icon-danger"
                   onClick={() => setPendingDelete(e)}
@@ -351,6 +395,27 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
           );
         })}
       </div>
+
+      {pendingLeave && (
+        <ConfirmDialog
+          title={`Quitter le cercle de « ${pendingLeave.name} » ?`}
+          confirmLabel="Quitter le cercle"
+          busy={leaving}
+          onConfirm={() => void confirmLeave()}
+          onCancel={() => setPendingLeave(null)}
+        >
+          <p style={{ margin: 0 }}>L'équipement disparaîtra de votre application, avec tout ce que vous en voyez :</p>
+          <ul className="modal-loss">
+            <li>ses réservations, ses relevés et son suivi d'entretien</li>
+            <li>ses dépenses, justificatifs, remboursements et votre solde</li>
+            <li>ses fils de discussion et ses checklists</li>
+          </ul>
+          <p className="muted" style={{ margin: 0 }}>
+            Rien n'est supprimé pour les {pendingLeave.memberIds.length - 1} autres membres, qui sont prévenus de votre
+            départ. Seul l'un d'eux pourra vous réintégrer au cercle.
+          </p>
+        </ConfirmDialog>
+      )}
 
       {pendingDelete && (
         <ConfirmDialog

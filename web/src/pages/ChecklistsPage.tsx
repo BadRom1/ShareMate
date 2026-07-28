@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import type { ChecklistItem, ChecklistSummary, Equipment, Member } from '../api';
+import type { ChecklistItem, Member } from '../api';
 import { formatDateTime, formatRelative } from '../format';
 import { pickInitialEquipmentId, setLastEquipmentId } from '../lastEquipment';
+import { clearErrors, errorMessage, firstError, useApiResource } from '../useApiResource';
 import {
   IconBack,
   IconCheck,
@@ -33,12 +34,9 @@ interface Props {
  * cercle, rien n'est visible (le serveur applique la même règle, y compris en lecture).
  */
 export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }: Props) {
-  const [equipments, setEquipments] = useState<Equipment[]>([]);
   const [selectedId, setSelectedId] = useState('');
-  const [checklists, setChecklists] = useState<ChecklistSummary[]>([]);
   const [openChecklistId, setOpenChecklistId] = useState<string | null>(null);
-  const [items, setItems] = useState<ChecklistItem[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   // Formulaire de nouvelle checklist.
@@ -53,6 +51,31 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
   const [editDraft, setEditDraft] = useState('');
   const [newItemLabel, setNewItemLabel] = useState('');
 
+  const equipmentsResource = useApiResource(
+    useCallback(async () => {
+      // Filtré au cercle de l'utilisateur : un équipement qu'il ne partage pas n'a pas à
+      // apparaître, et ses checklists lui seraient de toute façon refusées par l'API.
+      const mine = (await api.listEquipments()).filter((e) => e.memberIds.includes(currentMemberId));
+      setSelectedId((id) =>
+        pickInitialEquipmentId(mine, currentMemberId, { current: id, deepLink: initialEquipmentId }),
+      );
+      return mine;
+    }, [currentMemberId, initialEquipmentId]),
+  );
+
+  const checklistsResource = useApiResource(
+    useCallback(async () => (selectedId ? api.listChecklists(selectedId) : []), [selectedId]),
+  );
+
+  const itemsResource = useApiResource(
+    useCallback(async () => (openChecklistId ? api.listChecklistItems(openChecklistId) : []), [openChecklistId]),
+  );
+
+  const equipments = equipmentsResource.data ?? [];
+  const checklists = checklistsResource.data ?? [];
+  const items = itemsResource.data ?? [];
+  const error = actionError ?? firstError(equipmentsResource, checklistsResource, itemsResource);
+
   const selected = equipments.find((e) => e.id === selectedId) ?? null;
   const openChecklist = checklists.find((c) => c.id === openChecklistId) ?? null;
   const circle = useMemo(
@@ -61,43 +84,15 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
   );
   const checkedCount = items.filter((i) => i.checkedAt !== null).length;
 
-  const loadEquipments = useCallback(async () => {
-    // Filtré au cercle de l'utilisateur : un équipement qu'il ne partage pas n'a pas à
-    // apparaître, et ses checklists lui seraient de toute façon refusées par l'API.
-    const mine = (await api.listEquipments()).filter((e) => e.memberIds.includes(currentMemberId));
-    setEquipments(mine);
-    setSelectedId((id) => pickInitialEquipmentId(mine, currentMemberId, { current: id, deepLink: initialEquipmentId }));
-  }, [currentMemberId, initialEquipmentId]);
-
-  const loadChecklists = useCallback(async () => {
-    if (!selectedId) return;
-    setChecklists(await api.listChecklists(selectedId));
-  }, [selectedId]);
-
-  const loadItems = useCallback(async () => {
-    if (!openChecklistId) return;
-    setItems(await api.listChecklistItems(openChecklistId));
-  }, [openChecklistId]);
-
+  // Changement de checklist : on repart d'une vue propre.
   useEffect(() => {
-    loadEquipments().catch((e: Error) => setError(e.message));
-  }, [loadEquipments]);
-
-  useEffect(() => {
-    loadChecklists().catch((e: Error) => setError(e.message));
-  }, [loadChecklists]);
-
-  useEffect(() => {
-    if (openChecklistId) loadItems().catch((e: Error) => setError(e.message));
-    // Changement de checklist : on repart d'une vue propre.
     setEditingItemId(null);
     setRenaming(false);
     setNewItemLabel('');
-  }, [openChecklistId, loadItems]);
+  }, [openChecklistId]);
 
-  // Changement d'équipement : on referme la checklist ouverte et on mémorise la consultation.
+  // Mémorise l'équipement consulté (partagé avec les autres onglets).
   useEffect(() => {
-    setOpenChecklistId(null);
     if (selectedId) setLastEquipmentId(selectedId);
   }, [selectedId]);
 
@@ -116,14 +111,14 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
   }
 
   function fail(e: unknown) {
-    setError(e instanceof Error ? e.message : 'Erreur.');
+    setActionError(errorMessage(e));
   }
 
   async function createChecklist(event: React.FormEvent) {
     event.preventDefault();
     if (!selectedId || !newTitle.trim()) return;
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       // Saisie multiligne : une ligne = un point de contrôle.
       const labels = newItems.split('\n');
@@ -131,7 +126,7 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
       setNewTitle('');
       setNewItems('');
       setShowNew(false);
-      await loadChecklists();
+      await checklistsResource.reload();
       setOpenChecklistId(checklist.id);
     } catch (e) {
       fail(e);
@@ -145,7 +140,7 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
     try {
       await api.deleteChecklist(id);
       if (openChecklistId === id) setOpenChecklistId(null);
-      await loadChecklists();
+      await checklistsResource.reload();
     } catch (e) {
       fail(e);
     }
@@ -156,7 +151,7 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
     try {
       await api.renameChecklist(openChecklist.id, renameDraft.trim());
       setRenaming(false);
-      await loadChecklists();
+      await checklistsResource.reload();
     } catch (e) {
       fail(e);
     }
@@ -166,7 +161,7 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
     if (!confirm('Décocher tous les points de cette checklist ?')) return;
     try {
       await api.resetChecklist(id);
-      await Promise.all([loadItems(), loadChecklists()]);
+      await Promise.all([itemsResource.reload(), checklistsResource.reload()]);
     } catch (e) {
       fail(e);
     }
@@ -177,11 +172,11 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
     const label = newItemLabel.trim();
     if (!label || !openChecklistId) return;
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       await api.addChecklistItem(openChecklistId, label);
       setNewItemLabel('');
-      await Promise.all([loadItems(), loadChecklists()]);
+      await Promise.all([itemsResource.reload(), checklistsResource.reload()]);
     } catch (e) {
       fail(e);
     } finally {
@@ -192,7 +187,7 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
   async function toggleItem(item: ChecklistItem) {
     try {
       await api.setChecklistItemChecked(item.id, item.checkedAt === null);
-      await Promise.all([loadItems(), loadChecklists()]);
+      await Promise.all([itemsResource.reload(), checklistsResource.reload()]);
     } catch (e) {
       fail(e);
     }
@@ -203,7 +198,7 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
     try {
       await api.renameChecklistItem(id, editDraft.trim());
       setEditingItemId(null);
-      await loadItems();
+      await itemsResource.reload();
     } catch (e) {
       fail(e);
     }
@@ -213,7 +208,7 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
     if (!confirm('Supprimer ce point ?')) return;
     try {
       await api.deleteChecklistItem(id);
-      await Promise.all([loadItems(), loadChecklists()]);
+      await Promise.all([itemsResource.reload(), checklistsResource.reload()]);
     } catch (e) {
       fail(e);
     }
@@ -231,7 +226,13 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
   return (
     <>
       {error && (
-        <div className="alert" onClick={() => setError(null)}>
+        <div
+          className="alert"
+          onClick={() => {
+            setActionError(null);
+            clearErrors(equipmentsResource, checklistsResource, itemsResource);
+          }}
+        >
           {error}
         </div>
       )}
@@ -240,7 +241,14 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
         <div className="row" style={{ alignItems: 'center' }}>
           <label className="field" style={{ flex: '0 0 auto', minWidth: '16rem' }}>
             Équipement
-            <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
+            <select
+              value={selectedId}
+              onChange={(e) => {
+                // La checklist ouverte appartient à l'équipement quitté : elle se referme ici.
+                setOpenChecklistId(null);
+                setSelectedId(e.target.value);
+              }}
+            >
               {equipments.map((e) => (
                 <option key={e.id} value={e.id}>
                   {e.name}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, setUnauthorizedHandler } from './api';
-import type { Member } from './api';
+import type { DirectoryMember, Member } from './api';
 import { EquipmentsPage } from './pages/EquipmentsPage';
 import { CalendarPage } from './pages/CalendarPage';
 import { UsagePage } from './pages/UsagePage';
@@ -85,7 +85,7 @@ export function App() {
 }
 
 function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut: () => void }) {
-  const [members, setMembers] = useState<Member[] | null>(null);
+  const [members, setMembers] = useState<DirectoryMember[] | null>(null);
   const [tab, setTab] = useState<Tab>('discussions');
   const [usageEquipmentId, setUsageEquipmentId] = useState<string | null>(null);
   const [discussionEquipmentId, setDiscussionEquipmentId] = useState<string | null>(null);

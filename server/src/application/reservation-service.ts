@@ -5,6 +5,7 @@ import { generateOccurrences } from '../domain/reservation/recurrence.js';
 import type { RecurrenceFrequency } from '../domain/reservation/recurrence.js';
 import { TimeRange } from '../domain/shared/time-range.js';
 import { NotFoundError } from '../domain/shared/domain-error.js';
+import { parseIsoDate } from '../domain/shared/iso-date.js';
 import { accessibleEquipmentIds, equipmentForMember } from './equipment-access.js';
 import type {
   Clock,
@@ -42,8 +43,8 @@ export class ReservationService {
     private readonly equipments: EquipmentRepository,
     private readonly idGenerator: IdGenerator,
     private readonly clock: Clock,
-    private readonly members?: MemberRepository,
-    private readonly notifier?: Notifier,
+    private readonly members: MemberRepository,
+    private readonly notifier: Notifier,
   ) {}
 
   async reserve(input: ReserveInput): Promise<ReserveResult> {
@@ -52,7 +53,7 @@ export class ReservationService {
       id: this.idGenerator.next(),
       equipmentId: input.equipmentId,
       memberId: input.memberId,
-      range: TimeRange.create(new Date(input.start), new Date(input.end)),
+      range: TimeRange.create(parseIsoDate(input.start, 'Le début'), parseIsoDate(input.end, 'La fin')),
       status: input.status,
       createdAt: this.clock.now(),
       notes: input.notes ?? null,
@@ -61,22 +62,20 @@ export class ReservationService {
     const conflicts = findConflicts(reservation, existing);
     await this.reservations.save(reservation);
 
-    if (this.notifier) {
-      const author = await this.members?.findById(input.memberId);
-      const recipientIds = equipment.memberIds.filter((id) => id !== input.memberId);
-      if (recipientIds.length > 0) {
-        const when = reservation.range.start.toLocaleDateString('fr-FR', {
-          day: 'numeric',
-          month: 'long',
-        });
-        await this.notifier.notify({
-          type: 'RESERVATION_CREATED',
-          recipientIds,
-          title: `📅 ${equipment.name}`,
-          body: `${author?.name ?? 'Un membre'} a réservé pour le ${when}.`,
-          link: `/?tab=calendar`,
-        });
-      }
+    const recipientIds = equipment.memberIds.filter((id) => id !== input.memberId);
+    if (recipientIds.length > 0) {
+      const author = await this.members.findById(input.memberId);
+      const when = reservation.range.start.toLocaleDateString('fr-FR', {
+        day: 'numeric',
+        month: 'long',
+      });
+      await this.notifier.notify({
+        type: 'RESERVATION_CREATED',
+        recipientIds,
+        title: `📅 ${equipment.name}`,
+        body: `${author?.name ?? 'Un membre'} a réservé pour le ${when}.`,
+        link: `/?tab=calendar`,
+      });
     }
     return { reservation, conflicts };
   }
@@ -85,10 +84,10 @@ export class ReservationService {
   async reserveRecurring(input: ReserveInput, recurrence: RecurrenceInput): Promise<ReserveResult[]> {
     await equipmentForMember(this.equipments, input.equipmentId, input.memberId);
     const until = /^\d{4}-\d{2}-\d{2}$/.test(recurrence.until)
-      ? new Date(`${recurrence.until}T23:59:59.999`)
-      : new Date(recurrence.until);
+      ? parseIsoDate(`${recurrence.until}T23:59:59.999`, 'La fin de la répétition')
+      : parseIsoDate(recurrence.until, 'La fin de la répétition');
     const occurrences = generateOccurrences(
-      TimeRange.create(new Date(input.start), new Date(input.end)),
+      TimeRange.create(parseIsoDate(input.start, 'Le début'), parseIsoDate(input.end, 'La fin')),
       recurrence.frequency,
       until,
     );
@@ -122,8 +121,8 @@ export class ReservationService {
       equipmentId: existing.equipmentId,
       memberId: existing.memberId,
       range: TimeRange.create(
-        changes.start ? new Date(changes.start) : existing.range.start,
-        changes.end ? new Date(changes.end) : existing.range.end,
+        changes.start ? parseIsoDate(changes.start, 'Le début') : existing.range.start,
+        changes.end ? parseIsoDate(changes.end, 'La fin') : existing.range.end,
       ),
       status: changes.status ?? existing.status,
       createdAt: existing.createdAt,
@@ -148,7 +147,7 @@ export class ReservationService {
   /** Vue calendrier partagée, cadrée sur les équipements du cercle du demandeur. */
   async calendar(requesterId: string): Promise<Reservation[]> {
     const accessible = await accessibleEquipmentIds(this.equipments, requesterId);
-    return (await this.reservations.findAll()).filter((r) => accessible.has(r.equipmentId));
+    return this.reservations.findByEquipmentIds([...accessible]);
   }
 
   /**

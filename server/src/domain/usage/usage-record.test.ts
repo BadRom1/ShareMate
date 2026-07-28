@@ -23,6 +23,10 @@ describe('UsageRecord', () => {
     expect(() => UsageRecord.create({ ...base, meterReading: -1 })).toThrow();
   });
 
+  it('rejette une date de relevé illisible', () => {
+    expect(() => UsageRecord.create({ ...base, recordedAt: new Date('0000-00-00') })).toThrow();
+  });
+
   it('rejette un carburant négatif', () => {
     expect(() => UsageRecord.create({ ...base, fuelAddedLiters: -2 })).toThrow();
   });

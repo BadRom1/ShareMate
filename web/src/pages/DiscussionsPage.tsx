@@ -1,19 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import type { Equipment, Member, Message, ThreadSummary } from '../api';
-import { formatDateTime, formatRelative } from '../format';
+import type { Member } from '../api';
+import { formatRelative } from '../format';
 import { pickInitialEquipmentId, setLastEquipmentId } from '../lastEquipment';
-import {
-  IconBack,
-  IconChat,
-  IconCheck,
-  IconClose,
-  IconEdit,
-  IconPlus,
-  IconReply,
-  IconSend,
-  IconTrash,
-} from '../components/icons';
+import { clearErrors, errorMessage, firstError, useApiResource } from '../useApiResource';
+import { IconBack, IconChat, IconCheck, IconClose, IconEdit, IconPlus, IconSend, IconTrash } from '../components/icons';
+import { MessageTree } from './discussions/MessageTree';
 
 interface Props {
   members: Member[];
@@ -26,12 +18,9 @@ interface Props {
 
 /** Discussions par équipement : liste de fils, puis vue d'un fil avec ses messages. */
 export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, initialThreadId }: Props) {
-  const [equipments, setEquipments] = useState<Equipment[]>([]);
   const [selectedId, setSelectedId] = useState('');
-  const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [openThreadId, setOpenThreadId] = useState<string | null>(initialThreadId ?? null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   // Formulaire de nouveau fil.
@@ -39,19 +28,34 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
   const [newTitle, setNewTitle] = useState('');
   const [newBody, setNewBody] = useState('');
 
-  // Édition inline (message ou titre de fil).
-  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState('');
+  // Renommage inline du titre du fil.
   const [renamingThread, setRenamingThread] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
 
-  // Réponse à un message précis (sous-fil) + repli des sous-fils.
-  const [replyingTo, setReplyingTo] = useState<string | null>(null);
-  const [replyDraft, setReplyDraft] = useState('');
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-
   const [draft, setDraft] = useState('');
-  const listEndRef = useRef<HTMLDivElement | null>(null);
+
+  const equipmentsResource = useApiResource(
+    useCallback(async () => {
+      const list = await api.listEquipments();
+      setSelectedId((id) =>
+        pickInitialEquipmentId(list, currentMemberId, { current: id, deepLink: initialEquipmentId }),
+      );
+      return list;
+    }, [currentMemberId, initialEquipmentId]),
+  );
+
+  const threadsResource = useApiResource(
+    useCallback(async () => (selectedId ? api.listThreads(selectedId) : []), [selectedId]),
+  );
+
+  const messagesResource = useApiResource(
+    useCallback(async () => (openThreadId ? api.listMessages(openThreadId) : []), [openThreadId]),
+  );
+
+  const equipments = equipmentsResource.data ?? [];
+  const threads = threadsResource.data ?? [];
+  const messages = useMemo(() => messagesResource.data ?? [], [messagesResource.data]);
+  const error = actionError ?? firstError(equipmentsResource, threadsResource, messagesResource);
 
   const selected = equipments.find((e) => e.id === selectedId) ?? null;
   const inCircle = selected?.memberIds.includes(currentMemberId) ?? false;
@@ -61,60 +65,16 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     [selected, members],
   );
 
-  // Arborescence des messages : enfants indexés par identifiant du message parent.
-  const childrenByParent = useMemo(() => {
-    const map = new Map<string | null, Message[]>();
-    for (const m of messages) {
-      const key = m.parentId ?? null;
-      const siblings = map.get(key) ?? [];
-      siblings.push(m);
-      map.set(key, siblings);
-    }
-    return map;
-  }, [messages]);
-
-  const loadEquipments = useCallback(async () => {
-    const list = await api.listEquipments();
-    setEquipments(list);
-    setSelectedId((id) => pickInitialEquipmentId(list, currentMemberId, { current: id, deepLink: initialEquipmentId }));
-  }, [currentMemberId, initialEquipmentId]);
-
-  const loadThreads = useCallback(async () => {
-    if (!selectedId) return;
-    setThreads(await api.listThreads(selectedId));
-  }, [selectedId]);
-
-  const loadMessages = useCallback(async () => {
-    if (!openThreadId) return;
-    setMessages(await api.listMessages(openThreadId));
-  }, [openThreadId]);
-
+  // Mémorise l'équipement consulté (partagé avec les autres onglets).
   useEffect(() => {
-    loadEquipments().catch((e: Error) => setError(e.message));
-  }, [loadEquipments]);
-
-  useEffect(() => {
-    loadThreads().catch((e: Error) => setError(e.message));
-  }, [loadThreads]);
-
-  useEffect(() => {
-    if (openThreadId) loadMessages().catch((e: Error) => setError(e.message));
-    // Changement de fil : on repart d'une vue propre (pas de réponse en cours, tout déplié).
-    setReplyingTo(null);
-    setReplyDraft('');
-    setEditingMessageId(null);
-    setCollapsed(new Set());
-  }, [openThreadId, loadMessages]);
-
-  useEffect(() => {
-    listEndRef.current?.scrollIntoView({ block: 'nearest' });
-  }, [messages]);
-
-  // Changement d'équipement : on referme le fil ouvert et on mémorise la consultation.
-  useEffect(() => {
-    setOpenThreadId(null);
     if (selectedId) setLastEquipmentId(selectedId);
   }, [selectedId]);
+
+  // Fil ciblé par un lien de notification, y compris quand un second lien arrive alors que
+  // l'onglet est déjà affiché : l'état initial ne suffit pas, le composant reste monté.
+  useEffect(() => {
+    if (initialThreadId) setOpenThreadId(initialThreadId);
+  }, [initialThreadId]);
 
   // Échap ferme la modale de création.
   useEffect(() => {
@@ -131,20 +91,20 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
   }
 
   function fail(e: unknown) {
-    setError(e instanceof Error ? e.message : 'Erreur.');
+    setActionError(errorMessage(e));
   }
 
   async function createThread(event: React.FormEvent) {
     event.preventDefault();
     if (!selectedId || !newTitle.trim()) return;
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       const thread = await api.createThread(selectedId, newTitle.trim(), newBody.trim() || undefined);
       setNewTitle('');
       setNewBody('');
       setShowNewThread(false);
-      await loadThreads();
+      await threadsResource.reload();
       setOpenThreadId(thread.id);
     } catch (e) {
       fail(e);
@@ -158,7 +118,7 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     try {
       await api.deleteThread(id);
       if (openThreadId === id) setOpenThreadId(null);
-      await loadThreads();
+      await threadsResource.reload();
     } catch (e) {
       fail(e);
     }
@@ -169,7 +129,7 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     try {
       await api.renameThread(openThread.id, renameDraft.trim());
       setRenamingThread(false);
-      await loadThreads();
+      await threadsResource.reload();
     } catch (e) {
       fail(e);
     }
@@ -180,11 +140,11 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     const body = draft.trim();
     if (!body || !openThreadId) return;
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       await api.postMessage(openThreadId, body);
       setDraft('');
-      await Promise.all([loadMessages(), loadThreads()]);
+      await Promise.all([messagesResource.reload(), threadsResource.reload()]);
     } catch (e) {
       fail(e);
     } finally {
@@ -192,23 +152,13 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     }
   }
 
-  async function sendReply(parentId: string) {
-    const body = replyDraft.trim();
-    if (!body || !openThreadId) return;
+  async function sendReply(parentId: string, body: string) {
+    if (!openThreadId) return;
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       await api.postMessage(openThreadId, body, parentId);
-      setReplyDraft('');
-      setReplyingTo(null);
-      // On s'assure que le sous-fil du parent est déplié pour voir la nouvelle réponse.
-      setCollapsed((prev) => {
-        if (!prev.has(parentId)) return prev;
-        const next = new Set(prev);
-        next.delete(parentId);
-        return next;
-      });
-      await Promise.all([loadMessages(), loadThreads()]);
+      await Promise.all([messagesResource.reload(), threadsResource.reload()]);
     } catch (e) {
       fail(e);
     } finally {
@@ -216,27 +166,10 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     }
   }
 
-  function toggleCollapse(id: string) {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function startReply(id: string) {
-    setEditingMessageId(null);
-    setReplyDraft('');
-    setReplyingTo(id);
-  }
-
-  async function saveEdit(id: string) {
-    if (!editDraft.trim()) return;
+  async function editMessage(id: string, body: string) {
     try {
-      await api.editMessage(id, editDraft.trim());
-      setEditingMessageId(null);
-      await loadMessages();
+      await api.editMessage(id, body);
+      await messagesResource.reload();
     } catch (e) {
       fail(e);
     }
@@ -246,7 +179,7 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     if (!confirm('Supprimer ce message ?')) return;
     try {
       await api.deleteMessage(id);
-      await Promise.all([loadMessages(), loadThreads()]);
+      await Promise.all([messagesResource.reload(), threadsResource.reload()]);
     } catch (e) {
       fail(e);
     }
@@ -264,7 +197,13 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
   return (
     <>
       {error && (
-        <div className="alert" onClick={() => setError(null)}>
+        <div
+          className="alert"
+          onClick={() => {
+            setActionError(null);
+            clearErrors(equipmentsResource, threadsResource, messagesResource);
+          }}
+        >
           {error}
         </div>
       )}
@@ -273,7 +212,15 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
         <div className="row" style={{ alignItems: 'center' }}>
           <label className="field" style={{ flex: '0 0 auto', minWidth: '16rem' }}>
             Équipement
-            <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
+            <select
+              value={selectedId}
+              onChange={(e) => {
+                // Le fil ouvert appartient à l'équipement quitté : il se referme ici, et non dans
+                // un effet sur `selectedId` qui écraserait aussi le fil ciblé par une notification.
+                setOpenThreadId(null);
+                setSelectedId(e.target.value);
+              }}
+            >
               {equipments.map((e) => (
                 <option key={e.id} value={e.id}>
                   {e.name}
@@ -412,132 +359,6 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     if (!openThread) return null;
     const isAuthor = openThread.authorId === currentMemberId;
 
-    // Rendu récursif d'un message et de son sous-fil de réponses (style Slack/Reddit).
-    function renderMessage(m: Message) {
-      const mine = m.authorId === currentMemberId;
-      const editing = editingMessageId === m.id;
-      const replying = replyingTo === m.id;
-      const replies = childrenByParent.get(m.id) ?? [];
-      const isCollapsed = collapsed.has(m.id);
-      return (
-        <li key={m.id} className="msg-node">
-          <div className={`message ${mine ? 'message-mine' : ''}`}>
-            <div className="message-meta">
-              <strong>{memberName(m.authorId)}</strong>
-              <span className="muted">
-                {formatDateTime(m.createdAt)}
-                {m.editedAt ? ' · modifié' : ''}
-              </span>
-              {!editing && (
-                <span className="message-actions">
-                  {inCircle && (
-                    <button className="icon-btn icon-edit" onClick={() => startReply(m.id)} title="Répondre">
-                      <IconReply size={16} />
-                    </button>
-                  )}
-                  {mine && (
-                    <>
-                      <button
-                        className="icon-btn icon-edit"
-                        onClick={() => {
-                          setReplyingTo(null);
-                          setEditingMessageId(m.id);
-                          setEditDraft(m.body);
-                        }}
-                        title="Modifier"
-                      >
-                        <IconEdit size={16} />
-                      </button>
-                      <button
-                        className="icon-btn icon-danger"
-                        onClick={() => void removeMessage(m.id)}
-                        title="Supprimer"
-                      >
-                        <IconTrash size={16} />
-                      </button>
-                    </>
-                  )}
-                </span>
-              )}
-            </div>
-            {editing ? (
-              <form
-                className="message-composer"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void saveEdit(m.id);
-                }}
-              >
-                <textarea
-                  value={editDraft}
-                  onChange={(e) => setEditDraft(e.target.value)}
-                  rows={2}
-                  maxLength={4000}
-                  autoFocus
-                />
-                <button type="submit" className="icon-btn icon-confirm" title="Enregistrer">
-                  <IconCheck size={18} />
-                </button>
-                <button type="button" className="icon-btn" onClick={() => setEditingMessageId(null)} title="Annuler">
-                  <IconClose size={18} />
-                </button>
-              </form>
-            ) : (
-              <p className="message-body">{m.body}</p>
-            )}
-            {replies.length > 0 && (
-              <button className="link reply-toggle" onClick={() => toggleCollapse(m.id)}>
-                {isCollapsed
-                  ? `▸ Afficher ${replies.length} réponse${replies.length > 1 ? 's' : ''}`
-                  : `▾ Masquer les réponses`}
-              </button>
-            )}
-          </div>
-
-          {replying && inCircle && (
-            <form
-              className="message-composer reply-composer"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void sendReply(m.id);
-              }}
-            >
-              <textarea
-                value={replyDraft}
-                onChange={(e) => setReplyDraft(e.target.value)}
-                placeholder={`Répondre à ${memberName(m.authorId)}…`}
-                rows={2}
-                maxLength={4000}
-                autoFocus
-              />
-              <button
-                type="submit"
-                className="icon-btn icon-primary"
-                disabled={busy || replyDraft.trim().length === 0}
-                title="Envoyer la réponse"
-                aria-label="Envoyer la réponse"
-              >
-                <IconSend size={18} />
-              </button>
-              <button
-                type="button"
-                className="icon-btn"
-                onClick={() => setReplyingTo(null)}
-                title="Annuler"
-                aria-label="Annuler"
-              >
-                <IconClose size={18} />
-              </button>
-            </form>
-          )}
-
-          {replies.length > 0 && !isCollapsed && (
-            <ul className="message-branch">{replies.map((child) => renderMessage(child))}</ul>
-          )}
-        </li>
-      );
-    }
-
     return (
       <div className="card">
         <div className="bell-head">
@@ -588,14 +409,20 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
           )}
         </div>
 
-        {messages.length === 0 ? (
-          <p className="empty">Aucun message. Écrivez le premier ci-dessous.</p>
-        ) : (
-          <div className="message-tree">
-            <ul className="message-branch">{(childrenByParent.get(null) ?? []).map((m) => renderMessage(m))}</ul>
-            <div ref={listEndRef} />
-          </div>
-        )}
+        {/* `key` : changer de fil démonte l'arbre, qui repart d'une vue propre — pas de réponse
+            en cours, aucun sous-fil replié. Sans elle, il faudrait remettre son état à zéro depuis
+            ici, sur un effet qui s'exécute aussi au montage. */}
+        <MessageTree
+          key={openThread.id}
+          messages={messages}
+          members={members}
+          currentMemberId={currentMemberId}
+          inCircle={inCircle}
+          busy={busy}
+          onReply={sendReply}
+          onEdit={editMessage}
+          onDelete={removeMessage}
+        />
 
         {inCircle ? (
           <form onSubmit={sendMessage} className="message-composer">

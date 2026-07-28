@@ -8,6 +8,7 @@ import {
   SqliteEquipmentRepository,
   SqliteExpenseRepository,
   SqliteMemberRepository,
+  SqliteNotificationPreferenceRepository,
   SqliteReimbursementRepository,
   SqliteReservationRepository,
   SqliteSessionRepository,
@@ -59,9 +60,39 @@ describe('SQLite — membres', () => {
     expect(m?.email).toBe('b@ex.fr');
   });
 
-  it('liste tous les membres triés par nom', async () => {
+  it('liste les membres demandés, triés par nom, en ignorant les inconnus', async () => {
     const { members } = await seedBase();
-    expect((await members.findAll()).map((m) => m.name)).toEqual(['Alice', 'Bruno']);
+    expect((await members.findByIds(['m2', 'm1', 'inconnu'])).map((m) => m.name)).toEqual(['Alice', 'Bruno']);
+    expect(await members.findByIds([])).toEqual([]);
+  });
+
+  it('liste les membres créés par un invitant', async () => {
+    const { members } = await seedBase();
+    await members.save(Member.create({ id: 'm4', name: 'David', invitedById: 'm1' }));
+    await members.save(Member.create({ id: 'm3', name: 'Chloé', invitedById: 'm1' }));
+    expect((await members.findInvitedBy('m1')).map((m) => m.name)).toEqual(['Chloé', 'David']);
+    expect(await members.findInvitedBy('m2')).toEqual([]);
+  });
+
+  it('retrouve par nom ou email, insensible à la casse, accents compris', async () => {
+    const { members } = await seedBase();
+    await members.save(Member.create({ id: 'm3', name: 'Chloé', email: 'Chloe@Example.FR' }));
+
+    expect((await members.findByNameOrEmail('bruno')).map((m) => m.id)).toEqual(['m2']);
+    expect((await members.findByNameOrEmail('  B@EX.FR ')).map((m) => m.id)).toEqual(['m2']);
+    // `lower()` de SQLite laisserait « CHLOÉ » distinct de « chloé » : la casse Unicode compte.
+    expect((await members.findByNameOrEmail('CHLOÉ')).map((m) => m.id)).toEqual(['m3']);
+    expect((await members.findByNameOrEmail('chloe@example.fr')).map((m) => m.id)).toEqual(['m3']);
+    expect(await members.findByNameOrEmail('personne')).toEqual([]);
+    // Un membre sans email ne doit pas être ramené par une recherche à vide.
+    expect(await members.findByNameOrEmail('')).toEqual([]);
+  });
+
+  it('conserve l’invitant, qui cadre l’annuaire avant tout cercle commun', async () => {
+    const { members } = await seedBase();
+    await members.save(Member.create({ id: 'm3', name: 'Chloé', invitedById: 'm1' }));
+    expect((await members.findById('m3'))?.invitedById).toBe('m1');
+    expect((await members.findById('m1'))?.invitedById).toBeNull();
   });
 });
 
@@ -89,6 +120,32 @@ describe('SQLite — accès (credentials)', () => {
     expect(await credentials.findByInviteCode('code-bruno')).toBeNull();
     expect((await credentials.findByMemberId('m2'))?.passwordHash).toBe('hash-bruno');
   });
+
+  it('conserve l’échéance d’une invitation', async () => {
+    await seedBase();
+    const credentials = new SqliteCredentialRepository(db);
+    const échéance = new Date('2026-07-09T10:00:00Z');
+    await credentials.save(
+      MemberCredential.create({ memberId: 'm2', inviteCode: 'code-bruno', inviteExpiresAt: échéance }),
+    );
+    const relu = (await credentials.findByInviteCode('code-bruno'))!;
+    expect(relu.inviteExpiresAt).toEqual(échéance);
+    expect(relu.isInviteValid(new Date('2026-07-02T10:00:00Z'))).toBe(true);
+    expect(relu.isInviteValid(new Date('2026-07-10T10:00:00Z'))).toBe(false);
+  });
+
+  it('saveFirst n’écrit que sur une table vide (garde atomique du bootstrap)', async () => {
+    await seedBase();
+    const credentials = new SqliteCredentialRepository(db);
+    expect(await credentials.saveFirst(MemberCredential.create({ memberId: 'm1', passwordHash: 'hash-alice' }))).toBe(
+      true,
+    );
+    expect(await credentials.saveFirst(MemberCredential.create({ memberId: 'm2', passwordHash: 'hash-bruno' }))).toBe(
+      false,
+    );
+    expect(await credentials.count()).toBe(1);
+    expect(await credentials.findByMemberId('m2')).toBeNull();
+  });
 });
 
 describe('SQLite — sessions', () => {
@@ -108,6 +165,21 @@ describe('SQLite — sessions', () => {
 
     await sessions.delete('t1');
     expect(await sessions.findByTokenHash('t1')).toBeNull();
+  });
+
+  it('révoque d’un coup toutes les sessions d’un membre', async () => {
+    await seedBase();
+    const sessions = new SqliteSessionRepository(db);
+    const expiresAt = new Date('2026-08-01T00:00:00Z');
+    await sessions.save({ tokenHash: 't1', memberId: 'm1', expiresAt });
+    await sessions.save({ tokenHash: 't2', memberId: 'm1', expiresAt });
+    await sessions.save({ tokenHash: 't3', memberId: 'm2', expiresAt });
+
+    await sessions.deleteByMemberId('m1');
+
+    expect(await sessions.findByTokenHash('t1')).toBeNull();
+    expect(await sessions.findByTokenHash('t2')).toBeNull();
+    expect(await sessions.findByTokenHash('t3')).not.toBeNull();
   });
 });
 
@@ -129,11 +201,31 @@ describe('SQLite — équipements', () => {
     expect((await equipments.findById('e1'))?.memberIds).toEqual(['m1', 'm2', 'm3']);
   });
 
-  it('liste tout et supprime', async () => {
-    const { equipments } = await seedBase();
-    expect(await equipments.findAll()).toHaveLength(1);
+  it('liste les équipements du cercle d’un membre, et eux seuls', async () => {
+    const { members, equipments } = await seedBase();
+    await members.save(Member.create({ id: 'm3', name: 'Chloé' }));
+    await equipments.save(
+      Equipment.create({
+        id: 'e2',
+        name: 'Broyeur',
+        category: 'Jardin',
+        acquisitionDate: new Date('2025-02-01T00:00:00Z'),
+        purchaseValue: Money.fromEuros(800),
+        meterUnit: 'HOURS',
+        memberIds: ['m3'],
+        maintenanceThreshold: null,
+      }),
+    );
+
+    const pourM1 = await equipments.findByMemberId('m1');
+    expect(pourM1.map((e) => e.id)).toEqual(['e1']);
+    // Le cercle complet remonte avec chaque équipement, dans l'ordre des positions.
+    expect(pourM1[0]?.memberIds).toEqual(['m1', 'm2']);
+    expect((await equipments.findByMemberId('m3')).map((e) => e.id)).toEqual(['e2']);
+    expect(await equipments.findByMemberId('inconnu')).toEqual([]);
+
     await equipments.delete('e1');
-    expect(await equipments.findAll()).toHaveLength(0);
+    expect(await equipments.findByMemberId('m1')).toHaveLength(0);
   });
 });
 
@@ -154,7 +246,9 @@ describe('SQLite — réservations', () => {
     expect(r?.range.start.toISOString()).toBe('2026-07-10T08:00:00.000Z');
     expect(r?.notes).toBe('tranchée');
     expect(await repo.findByEquipmentId('e1')).toHaveLength(1);
-    expect(await repo.findAll()).toHaveLength(1);
+    expect(await repo.findByEquipmentIds(['e1', 'e2'])).toHaveLength(1);
+    // Aucun équipement accessible : pas de requête à faire, et surtout pas un « tout lire ».
+    expect(await repo.findByEquipmentIds([])).toEqual([]);
     await repo.delete('r1');
     expect(await repo.findById('r1')).toBeNull();
   });
@@ -180,6 +274,8 @@ describe("SQLite — relevés d'usage", () => {
     expect(byEq[0]?.meterReading).toBe(120.5);
     expect(byEq[0]?.isMaintenance).toBe(true);
     expect(await repo.findByMemberId('m1')).toHaveLength(1);
+    expect(await repo.findByEquipmentIds(['e1', 'e2'])).toHaveLength(1);
+    expect(await repo.findByEquipmentIds([])).toEqual([]);
   });
 });
 
@@ -326,34 +422,7 @@ describe('SQLite — checklists', () => {
   });
 });
 
-describe("SQLite — migration depuis l'ancien modèle « collectif »", () => {
-  it("détecte l'ancien schéma et repart de zéro", async () => {
-    const fs = await import('node:fs');
-    const os = await import('node:os');
-    const path = await import('node:path');
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-test-'));
-    const file = path.join(dir, 'legacy.sqlite');
-    try {
-      const legacy = openDatabase(file);
-      legacy.exec(`
-        CREATE TABLE "groups" (id TEXT PRIMARY KEY, name TEXT NOT NULL);
-        INSERT INTO "groups" VALUES ('g1', 'Les voisins');
-      `);
-      legacy.close();
-      // Réouvre la même base : la migration doit purger l'ancien schéma.
-      const migrated = openDatabase(file);
-      expect(
-        migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'groups'`).get(),
-      ).toBeUndefined();
-      expect(
-        migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'equipment_members'`).get(),
-      ).toBeTruthy();
-      migrated.close();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
+describe('SQLite — migration des bases antérieures', () => {
   it('ajoute parent_id (et son index) à une base messages antérieure, sans perte de données', async () => {
     const fs = await import('node:fs');
     const os = await import('node:os');
@@ -402,5 +471,21 @@ describe("SQLite — migration depuis l'ancien modèle « collectif »", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('SqliteNotificationPreferenceRepository', () => {
+  it('ignore les rangées portant un type retiré du domaine', async () => {
+    await seedBase();
+    const preferences = new SqliteNotificationPreferenceRepository(db);
+    db.exec(`
+      INSERT INTO notification_preferences VALUES ('m1', 'MESSAGE_POSTED', 0, 1);
+      INSERT INTO notification_preferences VALUES ('m1', 'PIGEON_VOYAGEUR', 1, 1);
+    `);
+
+    // Sans le filtre, `NotificationPreference.create` lèverait sur la rangée orpheline et
+    // rendrait toutes les préférences du membre illisibles.
+    const lues = await preferences.findByMember('m1');
+    expect(lues.map((p) => p.type)).toEqual(['MESSAGE_POSTED']);
   });
 });

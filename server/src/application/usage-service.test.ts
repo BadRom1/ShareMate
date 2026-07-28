@@ -2,13 +2,14 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { makeFixture } from './testing/fixture.js';
 import { UsageService } from './usage-service.js';
 import { ForbiddenError } from '../domain/shared/domain-error.js';
+import { NullNotifier } from './testing/in-memory.js';
 
 let f: Awaited<ReturnType<typeof makeFixture>>;
 let service: UsageService;
 
 beforeEach(async () => {
   f = await makeFixture();
-  service = new UsageService(f.usageRecords, f.equipments, f.idGenerator, f.clock);
+  service = new UsageService(f.usageRecords, f.equipments, f.idGenerator, f.clock, new NullNotifier());
 });
 
 const input = {

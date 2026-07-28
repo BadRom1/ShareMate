@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { makeFixture } from './testing/fixture.js';
 import { ExpenseService } from './expense-service.js';
-import { ForbiddenError } from '../domain/shared/domain-error.js';
+import { ForbiddenError, NotFoundError } from '../domain/shared/domain-error.js';
+import { Expense } from '../domain/expense/expense.js';
+import { Money } from '../domain/shared/money.js';
 import { ReservationService } from './reservation-service.js';
+import { NullNotifier } from './testing/in-memory.js';
 
 let f: Awaited<ReturnType<typeof makeFixture>>;
 let service: ExpenseService;
@@ -10,8 +13,24 @@ let reservationService: ReservationService;
 
 beforeEach(async () => {
   f = await makeFixture();
-  service = new ExpenseService(f.expenses, f.reimbursements, f.equipments, f.reservations, f.idGenerator);
-  reservationService = new ReservationService(f.reservations, f.equipments, f.idGenerator, f.clock);
+  service = new ExpenseService(
+    f.expenses,
+    f.reimbursements,
+    f.equipments,
+    f.reservations,
+    f.idGenerator,
+    f.members,
+    new NullNotifier(),
+    f.receipts,
+  );
+  reservationService = new ReservationService(
+    f.reservations,
+    f.equipments,
+    f.idGenerator,
+    f.clock,
+    f.members,
+    new NullNotifier(),
+  );
 });
 
 // Le cercle de e1 est m1/m2 : les dépenses se répartissent entre eux.
@@ -181,5 +200,64 @@ describe('ExpenseService — soldes et remboursements', () => {
     const x = await service.addExpense({ ...base, split: { type: 'EQUAL' } }, 'm1');
     await service.deleteExpense(x.id, 'm1');
     expect(await service.listExpenses('e1', 'm1')).toHaveLength(0);
+  });
+});
+
+/** Chemin tel que produit par le téléversement d'un justificatif. */
+const RECEIPT = '/uploads/8f14e45f-ceea-467a-a3f6-9b1f3e2c7d40.png';
+
+describe('ExpenseService — justificatifs', () => {
+  /** Dépense sur e1 (cercle m1/m2) portant un justificatif déjà déposé. */
+  async function dépenseAvecJustificatif() {
+    f.receipts.add(RECEIPT);
+    return service.addExpense({ ...base, split: { type: 'EQUAL' }, receiptPath: RECEIPT }, 'm1');
+  }
+
+  it('supprime le fichier avec la dépense qui le portait', async () => {
+    const x = await dépenseAvecJustificatif();
+    await service.deleteExpense(x.id, 'm1');
+    expect(f.receipts.paths.has(RECEIPT)).toBe(false);
+  });
+
+  it('conserve le fichier tant qu’une autre dépense le porte', async () => {
+    const x = await dépenseAvecJustificatif();
+    // Doublon désormais impossible via addExpense : seules d'anciennes données en comptent.
+    await f.expenses.save(
+      Expense.create({
+        id: 'jumelle',
+        equipmentId: 'e1',
+        label: 'Même reçu',
+        amount: Money.fromEuros(10),
+        payerId: 'm1',
+        date: new Date('2026-07-02'),
+        category: 'FUEL',
+        split: { type: 'EQUAL', memberIds: ['m1'] },
+        receiptPath: RECEIPT,
+      }),
+    );
+    await service.deleteExpense(x.id, 'm1');
+    expect(f.receipts.paths.has(RECEIPT)).toBe(true);
+  });
+
+  it('refuse de rattacher un justificatif déjà porté par une dépense', async () => {
+    await dépenseAvecJustificatif();
+    await expect(service.addExpense({ ...base, split: { type: 'EQUAL' }, receiptPath: RECEIPT }, 'm2')).rejects.toThrow(
+      /déjà rattaché/i,
+    );
+  });
+
+  it('n’ouvre le justificatif qu’aux membres du cercle de sa dépense', async () => {
+    const x = await dépenseAvecJustificatif();
+    expect((await service.receiptOwner(RECEIPT, 'm2')).id).toBe(x.id);
+
+    // m3 est hors du cercle : refus masqué derrière l'absence, mot pour mot celle d'un
+    // justificatif jamais déposé (ForbiddenError et NotFoundError sont tous deux rendus en 404).
+    const jamaisDéposé = '/uploads/00000000-0000-4000-8000-000000000000.png';
+    await expect(service.receiptOwner(RECEIPT, 'm3')).rejects.toThrow(ForbiddenError);
+    await expect(service.receiptOwner(RECEIPT, 'm3')).rejects.toThrow(`Justificatif introuvable : ${RECEIPT}`);
+    await expect(service.receiptOwner(jamaisDéposé, 'm1')).rejects.toThrow(NotFoundError);
+    await expect(service.receiptOwner(jamaisDéposé, 'm1')).rejects.toThrow(
+      `Justificatif introuvable : ${jamaisDéposé}`,
+    );
   });
 });

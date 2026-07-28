@@ -41,9 +41,25 @@ export async function equipmentForMember(
 /**
  * Équipements dont le membre partage le cercle. Sert à cadrer les vues globales
  * (calendrier, alertes d'entretien, liste des équipements) sur son périmètre.
+ *
+ * Le cadrage est délégué au port : c'est la persistance qui sait le faire sans relire tout
+ * l'inventaire de l'instance. La couche application garde la règle, pas le balayage.
  */
 export async function equipmentsForMember(equipments: EquipmentRepository, memberId: string): Promise<Equipment[]> {
-  return (await equipments.findAll()).filter((e) => e.canBeUsedBy(memberId));
+  return equipments.findByMemberId(memberId);
+}
+
+/**
+ * Membres avec lesquels `memberId` partage au moins un cercle, lui-même compris. Étend la règle
+ * d'accès aux gestes qui visent une personne et non un équipement (annuaire, invitation) : hors de
+ * cet ensemble, un membre n'a aucune raison de savoir qu'un autre existe.
+ */
+export async function circleMemberIds(equipments: EquipmentRepository, memberId: string): Promise<Set<string>> {
+  const ids = new Set<string>([memberId]);
+  for (const equipment of await equipmentsForMember(equipments, memberId)) {
+    for (const id of equipment.memberIds) ids.add(id);
+  }
+  return ids;
 }
 
 /** Identifiants des équipements accessibles, pour filtrer une liste hétérogène. */

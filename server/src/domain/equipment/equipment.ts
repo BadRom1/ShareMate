@@ -1,4 +1,5 @@
 import { DomainError } from '../shared/domain-error.js';
+import { assertValidDate } from '../shared/iso-date.js';
 import type { Money } from '../shared/money.js';
 
 /** Unité du compteur : heures moteur ou kilométrage. */
@@ -50,6 +51,7 @@ export class Equipment {
     if (props.purchaseValue.isNegative()) {
       throw new DomainError("La valeur d'achat ne peut pas être négative.");
     }
+    assertValidDate(props.acquisitionDate, "La date d'acquisition");
     const memberIds = [...new Set(props.memberIds)];
     if (memberIds.length === 0) {
       throw new DomainError("Le cercle d'un équipement doit compter au moins un utilisateur.");

@@ -1,4 +1,5 @@
 import { DomainError } from '../shared/domain-error.js';
+import { assertValidDate } from '../shared/iso-date.js';
 import { Money } from '../shared/money.js';
 
 export const EXPENSE_CATEGORIES = ['PURCHASE', 'INSURANCE', 'FUEL', 'MAINTENANCE', 'REPAIR', 'OTHER'] as const;
@@ -44,6 +45,7 @@ export class Expense {
     if (!props.amount.isPositive()) {
       throw new DomainError('Le montant de la dépense doit être strictement positif.');
     }
+    assertValidDate(props.date, 'La date de la dépense');
     Expense.validateSplit(props.split, props.amount);
     return new Expense(
       props.id,

@@ -1,4 +1,6 @@
 import type {
+  AuditEntry,
+  AuditLogger,
   ChecklistItemRepository,
   ChecklistRepository,
   Clock,
@@ -13,9 +15,12 @@ import type {
   ThreadRepository,
   NotificationPreferenceRepository,
   NotificationRepository,
+  Notifier,
+  NotifyEvent,
   PasswordHasher,
   PushSender,
   PushSubscriptionRepository,
+  ReceiptStorage,
   ReimbursementRepository,
   ReservationRepository,
   SessionRepository,
@@ -23,6 +28,7 @@ import type {
   UsageRecordRepository,
   WebPushSubscription,
 } from '../ports.js';
+import { NOTIFICATION_PAGE_SIZE } from '../ports.js';
 import type { Member } from '../../domain/member/member.js';
 import type { MemberCredential } from '../../domain/auth/credential.js';
 import type { Session } from '../../domain/auth/session.js';
@@ -38,15 +44,38 @@ import type { ChecklistItem } from '../../domain/checklist/checklist-item.js';
 import type { Notification } from '../../domain/notification/notification.js';
 import type { NotificationPreference } from '../../domain/notification/preference.js';
 
-/** Adapters in-memory pour les tests (doubles des ports de persistance). */
+/**
+ * Adapters in-memory pour les tests (doubles des ports de persistance).
+ *
+ * Ces doubles n'ont d'intérêt que s'ils rendent exactement ce que rendrait l'adapter SQLite,
+ * ordre des listes compris (voir la tête de `ports.js`) : une divergence ferait passer au vert
+ * des services qui échoueraient en production. `port-contract.test.ts` confronte les deux.
+ */
+
+/** Ordre de `ORDER BY <texte>` en SQLite : comparaison des points de code, pas de la locale. */
+function byCodePoint(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
 
 export class InMemoryMemberRepository implements MemberRepository {
   private items = new Map<string, Member>();
   async findById(id: string) {
     return this.items.get(id) ?? null;
   }
-  async findAll() {
-    return [...this.items.values()];
+  async findByIds(ids: readonly string[]) {
+    const wanted = new Set(ids);
+    return [...this.items.values()].filter((m) => wanted.has(m.id)).sort((a, b) => byCodePoint(a.name, b.name));
+  }
+  async findInvitedBy(inviterId: string) {
+    return [...this.items.values()]
+      .filter((m) => m.invitedById === inviterId)
+      .sort((a, b) => byCodePoint(a.name, b.name));
+  }
+  async findByNameOrEmail(identifier: string) {
+    const wanted = identifier.trim().toLowerCase();
+    return [...this.items.values()]
+      .filter((m) => m.name.toLowerCase() === wanted || m.email?.toLowerCase() === wanted)
+      .sort((a, b) => byCodePoint(a.name, b.name));
   }
   async save(member: Member) {
     this.items.set(member.id, member);
@@ -58,8 +87,8 @@ export class InMemoryEquipmentRepository implements EquipmentRepository {
   async findById(id: string) {
     return this.items.get(id) ?? null;
   }
-  async findAll() {
-    return [...this.items.values()];
+  async findByMemberId(memberId: string) {
+    return [...this.items.values()].filter((e) => e.canBeUsedBy(memberId)).sort((a, b) => byCodePoint(a.name, b.name));
   }
   async save(equipment: Equipment) {
     this.items.set(equipment.id, equipment);
@@ -75,10 +104,15 @@ export class InMemoryReservationRepository implements ReservationRepository {
     return this.items.get(id) ?? null;
   }
   async findByEquipmentId(equipmentId: string) {
-    return [...this.items.values()].filter((r) => r.equipmentId === equipmentId);
+    return [...this.items.values()]
+      .filter((r) => r.equipmentId === equipmentId)
+      .sort((a, b) => a.range.start.getTime() - b.range.start.getTime());
   }
-  async findAll() {
-    return [...this.items.values()];
+  async findByEquipmentIds(equipmentIds: readonly string[]) {
+    const wanted = new Set(equipmentIds);
+    return [...this.items.values()]
+      .filter((r) => wanted.has(r.equipmentId))
+      .sort((a, b) => a.range.start.getTime() - b.range.start.getTime());
   }
   async save(reservation: Reservation) {
     this.items.set(reservation.id, reservation);
@@ -88,13 +122,22 @@ export class InMemoryReservationRepository implements ReservationRepository {
   }
 }
 
+/** `ORDER BY recorded_at` : les dates sont stockées en ISO 8601 UTC, dont l'ordre est chronologique. */
+function byRecordedAt(a: UsageRecord, b: UsageRecord): number {
+  return a.recordedAt.getTime() - b.recordedAt.getTime();
+}
+
 export class InMemoryUsageRecordRepository implements UsageRecordRepository {
   private items = new Map<string, UsageRecord>();
   async findByEquipmentId(equipmentId: string) {
-    return [...this.items.values()].filter((u) => u.equipmentId === equipmentId);
+    return [...this.items.values()].filter((u) => u.equipmentId === equipmentId).sort(byRecordedAt);
+  }
+  async findByEquipmentIds(equipmentIds: readonly string[]) {
+    const wanted = new Set(equipmentIds);
+    return [...this.items.values()].filter((u) => wanted.has(u.equipmentId)).sort(byRecordedAt);
   }
   async findByMemberId(memberId: string) {
-    return [...this.items.values()].filter((u) => u.memberId === memberId);
+    return [...this.items.values()].filter((u) => u.memberId === memberId).sort(byRecordedAt);
   }
   async save(record: UsageRecord) {
     this.items.set(record.id, record);
@@ -107,7 +150,12 @@ export class InMemoryExpenseRepository implements ExpenseRepository {
     return this.items.get(id) ?? null;
   }
   async findByEquipmentId(equipmentId: string) {
-    return [...this.items.values()].filter((x) => x.equipmentId === equipmentId);
+    return [...this.items.values()]
+      .filter((x) => x.equipmentId === equipmentId)
+      .sort((a, b) => b.date.getTime() - a.date.getTime());
+  }
+  async findByReceiptPath(receiptPath: string) {
+    return [...this.items.values()].filter((x) => x.receiptPath === receiptPath);
   }
   async save(expense: Expense) {
     this.items.set(expense.id, expense);
@@ -120,7 +168,9 @@ export class InMemoryExpenseRepository implements ExpenseRepository {
 export class InMemoryReimbursementRepository implements ReimbursementRepository {
   private items = new Map<string, Reimbursement>();
   async findByEquipmentId(equipmentId: string) {
-    return [...this.items.values()].filter((r) => r.equipmentId === equipmentId);
+    return [...this.items.values()]
+      .filter((r) => r.equipmentId === equipmentId)
+      .sort((a, b) => b.date.getTime() - a.date.getTime());
   }
   async save(reimbursement: Reimbursement) {
     this.items.set(reimbursement.id, reimbursement);
@@ -212,7 +262,7 @@ export class InMemoryNotificationRepository implements NotificationRepository {
       .filter((n) => n.recipientId === recipientId)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     if (options?.unreadOnly) list = list.filter((n) => !n.isRead);
-    return options?.limit ? list.slice(0, options.limit) : list;
+    return list.slice(0, options?.limit ?? NOTIFICATION_PAGE_SIZE);
   }
   async countUnread(recipientId: string) {
     return [...this.items.values()].filter((n) => n.recipientId === recipientId && !n.isRead).length;
@@ -252,8 +302,10 @@ export class InMemoryPushSubscriptionRepository implements PushSubscriptionRepos
   async save(subscription: WebPushSubscription) {
     this.items.set(subscription.endpoint, subscription);
   }
-  async deleteByEndpoint(endpoint: string) {
-    this.items.delete(endpoint);
+  async deleteByEndpoint(memberId: string, endpoint: string) {
+    if (this.items.get(endpoint)?.memberId === memberId) {
+      this.items.delete(endpoint);
+    }
   }
 }
 
@@ -265,8 +317,46 @@ export class InMemoryDeviceTokenRepository implements DeviceTokenRepository {
   async save(token: DeviceToken) {
     this.items.set(token.token, token);
   }
-  async deleteByToken(token: string) {
-    this.items.delete(token);
+  async deleteByToken(memberId: string, token: string) {
+    if (this.items.get(token)?.memberId === memberId) {
+      this.items.delete(token);
+    }
+  }
+}
+
+/** Justificatifs sans disque : `paths` expose ce qui reste stocké. */
+export class InMemoryReceiptStorage implements ReceiptStorage {
+  readonly paths = new Set<string>();
+  add(receiptPath: string) {
+    this.paths.add(receiptPath);
+  }
+  async delete(receiptPath: string) {
+    this.paths.delete(receiptPath);
+  }
+}
+
+/**
+ * Ne notifie personne. Le port `Notifier` est obligatoire — en production il est toujours branché
+ * sur `NotificationService` — donc les tests qui n'observent pas les notifications le déclarent
+ * explicitement ici plutôt que de laisser une branche « pas de notifier » dans le code de service.
+ */
+export class NullNotifier implements Notifier {
+  async notify() {}
+}
+
+/** Enregistre les événements notifiés au lieu de les délivrer, pour les assertions de test. */
+export class CapturingNotifier implements Notifier {
+  events: NotifyEvent[] = [];
+  async notify(event: NotifyEvent) {
+    this.events.push(event);
+  }
+}
+
+/** Journal en mémoire : `entries` expose ce qui a été tracé. */
+export class RecordingAuditLogger implements AuditLogger {
+  readonly entries: AuditEntry[] = [];
+  record(entry: AuditEntry) {
+    this.entries.push(entry);
   }
 }
 
@@ -288,11 +378,19 @@ export class InMemoryCredentialRepository implements CredentialRepository {
   async findByInviteCode(code: string) {
     return [...this.items.values()].find((c) => c.inviteCode === code) ?? null;
   }
+  async findMemberIdsWithPassword(memberIds: readonly string[]) {
+    return new Set(memberIds.filter((id) => this.items.get(id)?.hasPassword));
+  }
   async count() {
     return this.items.size;
   }
   async save(credential: MemberCredential) {
     this.items.set(credential.memberId, credential);
+  }
+  async saveFirst(credential: MemberCredential) {
+    if (this.items.size > 0) return false;
+    this.items.set(credential.memberId, credential);
+    return true;
   }
 }
 
@@ -307,6 +405,11 @@ export class InMemorySessionRepository implements SessionRepository {
   async delete(tokenHash: string) {
     this.items.delete(tokenHash);
   }
+  async deleteByMemberId(memberId: string) {
+    for (const [key, session] of this.items) {
+      if (session.memberId === memberId) this.items.delete(key);
+    }
+  }
   async deleteExpired(now: Date) {
     for (const [key, session] of this.items) {
       if (session.expiresAt.getTime() <= now.getTime()) this.items.delete(key);
@@ -314,13 +417,16 @@ export class InMemorySessionRepository implements SessionRepository {
   }
 }
 
-/** Hachage réversible à l'œil nu, réservé aux tests. */
+/** Hachage réversible à l'œil nu, réservé aux tests. `ancien:` simule un coût périmé. */
 export class FakePasswordHasher implements PasswordHasher {
   async hash(password: string) {
     return `plain:${password}`;
   }
   async verify(password: string, hash: string) {
-    return hash === `plain:${password}`;
+    return hash === `plain:${password}` || hash === `ancien:${password}`;
+  }
+  needsRehash(hash: string) {
+    return hash.startsWith('ancien:');
   }
 }
 

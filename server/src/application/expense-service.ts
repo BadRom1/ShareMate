@@ -4,13 +4,16 @@ import { Reimbursement } from '../domain/expense/reimbursement.js';
 import { computeBalances, settle } from '../domain/expense/settlement.js';
 import { Money } from '../domain/shared/money.js';
 import { DomainError, NotFoundError } from '../domain/shared/domain-error.js';
+import { parseIsoDate } from '../domain/shared/iso-date.js';
 import { equipmentForMember } from './equipment-access.js';
+import { expenseForReceipt, purgeOrphanReceipts } from './receipt-access.js';
 import type {
   EquipmentRepository,
   ExpenseRepository,
   IdGenerator,
   MemberRepository,
   Notifier,
+  ReceiptStorage,
   ReimbursementRepository,
   ReservationRepository,
 } from './ports.js';
@@ -60,26 +63,25 @@ export class ExpenseService {
     private readonly equipments: EquipmentRepository,
     private readonly reservations: ReservationRepository,
     private readonly idGenerator: IdGenerator,
-    private readonly members?: MemberRepository,
-    private readonly notifier?: Notifier,
+    private readonly members: MemberRepository,
+    private readonly notifier: Notifier,
+    private readonly receipts?: ReceiptStorage,
   ) {}
 
   private formatEuros(euros: number): string {
     return euros.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' });
   }
 
-  private async getEquipment(equipmentId: string) {
-    const equipment = await this.equipments.findById(equipmentId);
-    if (!equipment) {
-      throw new NotFoundError(`Équipement introuvable : ${equipmentId}`);
-    }
-    return equipment;
-  }
-
   async addExpense(input: AddExpenseInput, requesterId: string): Promise<Expense> {
     const equipment = await equipmentForMember(this.equipments, input.equipmentId, requesterId);
     if (!equipment.canBeUsedBy(input.payerId)) {
       throw new DomainError(`Le payeur ${input.payerId} ne fait pas partie du cercle de l'équipement.`);
+    }
+    // Un justificatif appartient à une seule dépense : chaque téléversement produit un nom neuf.
+    // Sans cette borne, recopier le chemin d'un fichier d'un autre cercle dans sa propre dépense
+    // suffirait à s'en ouvrir la lecture (voir receipt-access.ts), et sa purge deviendrait ambiguë.
+    if (input.receiptPath && (await this.expenses.findByReceiptPath(input.receiptPath)).length > 0) {
+      throw new DomainError('Ce justificatif est déjà rattaché à une dépense.');
     }
     const split = await this.resolveSplit(input, equipment.memberIds);
     const expense = Expense.create({
@@ -88,25 +90,23 @@ export class ExpenseService {
       label: input.label,
       amount: Money.fromEuros(input.amountEuros),
       payerId: input.payerId,
-      date: new Date(input.date),
+      date: parseIsoDate(input.date, 'La date de la dépense'),
       category: input.category,
       split,
       receiptPath: input.receiptPath ?? null,
     });
     await this.expenses.save(expense);
 
-    if (this.notifier) {
-      const payer = await this.members?.findById(input.payerId);
-      const recipientIds = equipment.memberIds.filter((id) => id !== input.payerId);
-      if (recipientIds.length > 0) {
-        await this.notifier.notify({
-          type: 'EXPENSE_ADDED',
-          recipientIds,
-          title: `💶 ${equipment.name}`,
-          body: `${payer?.name ?? 'Un membre'} a ajouté « ${expense.label} » (${this.formatEuros(input.amountEuros)}).`,
-          link: `/?tab=expenses&equipment=${equipment.id}`,
-        });
-      }
+    const recipientIds = equipment.memberIds.filter((id) => id !== input.payerId);
+    if (recipientIds.length > 0) {
+      const payer = await this.members.findById(input.payerId);
+      await this.notifier.notify({
+        type: 'EXPENSE_ADDED',
+        recipientIds,
+        title: `💶 ${equipment.name}`,
+        body: `${payer?.name ?? 'Un membre'} a ajouté « ${expense.label} » (${this.formatEuros(input.amountEuros)}).`,
+        link: `/?tab=expenses&equipment=${equipment.id}`,
+      });
     }
     return expense;
   }
@@ -159,6 +159,15 @@ export class ExpenseService {
     // Hors du cercle, la dépense se comporte comme inexistante (même réponse qu'un id inconnu).
     await equipmentForMember(this.equipments, existing.equipmentId, requesterId, absent);
     await this.expenses.delete(id);
+    await purgeOrphanReceipts(this.expenses, this.receipts, [existing]);
+  }
+
+  /**
+   * Dépense portant ce justificatif, si le demandeur y a accès. L'adapter HTTP s'en sert pour
+   * autoriser la lecture du fichier avant de le servir : lui seul sait où il est rangé.
+   */
+  async receiptOwner(receiptPath: string, requesterId: string): Promise<Expense> {
+    return expenseForReceipt(this.expenses, this.equipments, receiptPath, requesterId);
   }
 
   async listExpenses(equipmentId: string, requesterId: string): Promise<Expense[]> {
@@ -176,21 +185,19 @@ export class ExpenseService {
       fromMemberId: input.fromMemberId,
       toMemberId: input.toMemberId,
       amount: Money.fromEuros(input.amountEuros),
-      date: new Date(input.date),
+      date: parseIsoDate(input.date, 'La date du remboursement'),
       notes: input.notes ?? null,
     });
     await this.reimbursements.save(reimbursement);
 
-    if (this.notifier) {
-      const from = await this.members?.findById(input.fromMemberId);
-      await this.notifier.notify({
-        type: 'REIMBURSEMENT_RECORDED',
-        recipientIds: [input.toMemberId],
-        title: `✅ Remboursement — ${equipment.name}`,
-        body: `${from?.name ?? 'Un membre'} vous a remboursé ${this.formatEuros(input.amountEuros)}.`,
-        link: `/?tab=expenses&equipment=${equipment.id}`,
-      });
-    }
+    const from = await this.members.findById(input.fromMemberId);
+    await this.notifier.notify({
+      type: 'REIMBURSEMENT_RECORDED',
+      recipientIds: [input.toMemberId],
+      title: `✅ Remboursement — ${equipment.name}`,
+      body: `${from?.name ?? 'Un membre'} vous a remboursé ${this.formatEuros(input.amountEuros)}.`,
+      link: `/?tab=expenses&equipment=${equipment.id}`,
+    });
     return reimbursement;
   }
 
