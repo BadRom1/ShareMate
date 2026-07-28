@@ -199,13 +199,11 @@ export class AuthService {
 
   /** Session portée par ce jeton, avec prolongation glissante ; null si elle n'est plus valable. */
   async authenticate(token: string | undefined): Promise<AuthenticatedSession | null> {
-    // L'absence de jeton est traitée ici, et non chez l'appelant : une requête anonyme et une
-    // requête au jeton inconnu doivent suivre le même chemin, et le seul fait de porter un jeton
-    // ne doit jamais être ce qui décide de l'issue.
-    if (!token) {
-      return null;
-    }
-    const tokenHash = this.tokens.hash(token);
+    // Le jeton absent n'est pas court-circuité : il est haché et cherché comme un autre. Aucun
+    // branchement ne dépend donc de ce que porte l'appelant, et « pas de jeton » suit exactement
+    // le chemin — et le temps — de « jeton inconnu ». L'empreinte de la chaîne vide ne peut
+    // appareiller aucune session : elles portent toutes l'empreinte de 32 octets aléatoires.
+    const tokenHash = this.tokens.hash(token ?? '');
     const session = await this.sessions.findByTokenHash(tokenHash);
     const now = this.clock.now();
     if (!session || session.expiresAt.getTime() <= now.getTime()) {
