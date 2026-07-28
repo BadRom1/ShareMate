@@ -573,6 +573,20 @@ Ajouter une limite spécifique plus basse sur `POST /api/uploads/receipts` et
 > (`AppDependencies.rateLimits`) : les parcours d'intégration enchaînent des dizaines de requêtes
 > depuis la même adresse et les relèvent, mais chaque limite est testée pour elle-même, aux valeurs
 > de production, sur des apps dédiées.
+>
+> **Correction de la résolution (`45b9456`, troisième passe).** L'affirmation « global 300, toute
+> route » était fausse : le plafond ne couvrait pas les requêtes **anonymes sur les routes
+> protégées**, soit l'essentiel de la surface d'API. @fastify/rate-limit attache son compteur au
+> niveau de la route, et un hook de route s'exécute après les hooks de contexte — donc après la
+> garde de session, qui rendait 401 avant tout comptage. Sonde sur `/api/equipments` avec
+> global=5 : huit requêtes anonymes, huit 401, aucun 429. Le trou a été trouvé par CodeQL
+> (« missing rate limiting » sur le hook de session), pas par cet audit ni par les deux passes de
+> relecture, qui ont tous trois pris la limite globale pour acquise sans la sonder. Le comptage se
+> fait désormais en un point unique, en `onRequest` à la racine, avant l'authentification, avec un
+> plafond choisi par route (`config.limitPerMinute`) et une clé portant l'IP et le gabarit de route.
+> Empiler un hook racine sur les plafonds par route ne fonctionnait pas : le greffon marque la
+> requête (`rateLimitRan`) et refuse de la compter deux fois, ce qui désactivait silencieusement
+> tous les plafonds serrés — trois tests l'ont montré au premier essai.
 
 ### S7 — FAIBLE — L'en-tête `Authorization` n'est pas expurgé des logs
 
