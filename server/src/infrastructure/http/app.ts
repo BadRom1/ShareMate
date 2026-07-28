@@ -50,7 +50,7 @@ import type {
 } from '../../application/ports.js';
 import { CLIENT_HEADER, SESSION_COOKIE, sessionToken, setSessionCookie } from './session.js';
 import { AJV_OPTIONS, schemaErrorFormatter } from './schema.js';
-import { DEFAULT_RATE_LIMITS, RATE_WINDOW, keyPerRoute, maxFor, tooManyRequests } from './rate-limit.js';
+import { DEFAULT_RATE_LIMITS, RATE_WINDOW, keyPerRoute, tooManyRequests } from './rate-limit.js';
 import type { RateLimits } from './rate-limit.js';
 import { authRoutes } from './plugins/auth.js';
 import { memberRoutes } from './plugins/members.js';
@@ -148,19 +148,28 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       allowedHeaders: ['Content-Type', 'Authorization', CLIENT_HEADER],
     });
   }
+  // Chargé avant la déclaration des routes, sinon son hook onRoute ne s'applique pas.
+  // Global : chaque route est plafonnée par défaut, les plus exposées le sont plus bas
+  // via `config.rateLimit` (voir rate-limit.ts).
   const rateLimits = { ...DEFAULT_RATE_LIMITS, ...deps.rateLimits };
-  await app.register(rateLimit, { global: false, errorResponseBuilder: tooManyRequests });
+  await app.register(rateLimit, {
+    max: rateLimits.global,
+    timeWindow: RATE_WINDOW,
+    errorResponseBuilder: tooManyRequests,
+  });
 
   /**
-   * Point de comptage unique, en `onRequest` à la racine : il précède donc la garde de session et
-   * borne aussi les requêtes anonymes sur les routes protégées, que le mode par route laissait
-   * passer sans les compter (voir rate-limit.ts). Le plafond est choisi par route via
-   * `config.limitPerMinute`, la clé porte l'IP et le gabarit de route.
+   * Plafond du trafic rejeté faute de session. Le compteur du greffon est attaché au niveau de la
+   * route, donc **après** les hooks de contexte : la garde de session ci-dessous rendait 401 avant
+   * qu'il ne s'incrémente, et marteler une route protégée sans cookie valable n'était borné par
+   * rien. Ce compteur-ci est consommé sur ce seul chemin d'échec — le trafic authentifié garde
+   * donc intact le plafond de sa route, sans double comptage.
    */
-  app.addHook(
-    'onRequest',
-    app.rateLimit({ max: maxFor(rateLimits), keyGenerator: keyPerRoute, timeWindow: RATE_WINDOW }),
-  );
+  const rejectedTrafficLimit = app.createRateLimit({
+    max: rateLimits.global,
+    timeWindow: RATE_WINDOW,
+    keyGenerator: keyPerRoute,
+  });
 
   const noopPushSender: PushSender = {
     async sendWebPush() {
@@ -309,6 +318,14 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       const token = sessionToken(request);
       const session = await authService.authenticate(token);
       if (!session) {
+        // Le plafond de la route ne sera jamais atteint sur ce chemin : on consomme donc ici
+        // celui du trafic rejeté, sans quoi le refus lui-même serait gratuit et répétable.
+        const verdict = await rejectedTrafficLimit(request);
+        // `isAllowed` marque une IP en liste blanche : aucun compteur, donc rien à dépasser.
+        if (!verdict.isAllowed && verdict.isExceeded) {
+          const { message, statusCode } = tooManyRequests(request, { ttl: verdict.ttl, statusCode: 429 });
+          return reply.status(statusCode).send({ error: message });
+        }
         return reply.status(401).send({ error: 'Authentification requise.' });
       }
       // Prolongation glissante rendue au navigateur : sans cette repose, le cookie garderait

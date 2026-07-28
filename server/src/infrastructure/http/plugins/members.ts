@@ -3,6 +3,7 @@ import type { AuthService } from '../../../application/auth-service.js';
 import type { MemberService } from '../../../application/member-service.js';
 import { directoryMemberDto, memberDto } from '../dto.js';
 import { idParams, nullableText, object, text } from '../schema.js';
+import { limit } from '../rate-limit.js';
 import type { RateLimits } from '../rate-limit.js';
 import '../session.js'; // augmentation de type : request.authMember
 
@@ -21,7 +22,7 @@ export const memberRoutes: FastifyPluginAsync<MemberRoutesOptions> = async (
     '/api/members',
     {
       // Chaque appel ouvre un compte et émet un lien d'invitation : plafond serré.
-      config: { limitPerMinute: rateLimits.sensitive },
+      config: { rateLimit: limit(rateLimits.sensitive) },
       schema: { body: object({ name: text(120), email: nullableText(254) }, ['name']) },
     },
     async (request, reply) => {
