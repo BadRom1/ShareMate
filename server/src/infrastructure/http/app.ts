@@ -66,8 +66,10 @@ import { checklistRoutes } from './plugins/checklists.js';
 import { documentRoutes } from './plugins/documents.js';
 import { notificationRoutes } from './plugins/notifications.js';
 import { uploadRoutes } from './plugins/uploads.js';
-import { FileSystemReceiptStorage } from '../tech/receipt-storage.js';
+import { createReceiptStorage } from '../tech/receipt-storage.js';
+import type { ReceiptStorage } from '../tech/receipt-storage.js';
 import { createDocumentStorage } from '../tech/document-storage.js';
+import type { DocumentStorage } from '../tech/document-storage.js';
 import { MAX_DOCUMENT_SIZE_BYTES } from '../../domain/document/document.js';
 
 export interface AppDependencies {
@@ -98,15 +100,25 @@ export interface AppDependencies {
   logger?: FastifyServerOptions['logger'];
   /** Fait confiance aux en-têtes X-Forwarded-* (obligatoire derrière le proxy Railway pour le rate-limit par IP). */
   trustProxy?: boolean;
-  /** Répertoire de stockage des justificatifs (null = upload désactivé). */
+  /**
+   * Répertoire des justificatifs (null = upload désactivé). Quand un bucket est configuré, il ne
+   * sert plus qu'à relire les justificatifs déposés avant la bascule.
+   */
   uploadsDir?: string | null;
   /**
    * Répertoire de repli des documents, quand aucun bucket n'est configuré (null = seuls les liens
-   * sont gérés). Le bucket S3/R2, lui, est lu dans `documentStorageEnv`.
+   * sont gérés). Le bucket S3/R2, lui, est lu dans `objectStorageEnv`.
    */
   documentsDir?: string | null;
   /** Environnement où lire la configuration du bucket S3/R2 (`process.env` en production). */
-  documentStorageEnv?: NodeJS.ProcessEnv;
+  objectStorageEnv?: NodeJS.ProcessEnv;
+  /**
+   * Stockages déjà construits, qui l'emportent sur ce que l'environnement décrirait. Les tests
+   * d'intégration s'en servent pour jouer un bucket — dont la lecture est une redirection signée
+   * — sans réseau ; en production, ils sont toujours déduits des variables et des répertoires.
+   */
+  receiptStorage?: ReceiptStorage;
+  documentStorage?: DocumentStorage;
   /** Répertoire des fichiers statiques du front (null = API seule). */
   webDistDir?: string | null;
   /**
@@ -214,11 +226,13 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.clock,
   );
   const memberService = new MemberService(deps.members, deps.equipments, deps.credentials);
-  // Sans répertoire d'upload, il n'y a ni justificatif à servir ni fichier à purger.
-  const receiptStorage = deps.uploadsDir ? new FileSystemReceiptStorage(deps.uploadsDir) : undefined;
-  // Bucket S3/R2 dès que son environnement est complet, sinon le disque — et rien du tout si
-  // aucun des deux n'est fourni, auquel cas le dossier n'accepte que des liens.
-  const documentStorage = createDocumentStorage(deps.documentStorageEnv ?? {}, deps.documentsDir ?? null);
+  // Justificatifs et documents partagent le même bucket S3/R2 dès que son environnement est
+  // complet, et retombent chacun sur leur répertoire sinon. Sans ni l'un ni l'autre, il n'y a ni
+  // justificatif à servir ni fichier à purger, et le dossier n'accepte que des liens.
+  const objectStorageEnv = deps.objectStorageEnv ?? {};
+  const receiptStorage =
+    deps.receiptStorage ?? createReceiptStorage(objectStorageEnv, deps.uploadsDir ?? null) ?? undefined;
+  const documentStorage = deps.documentStorage ?? createDocumentStorage(objectStorageEnv, deps.documentsDir ?? null);
   // Le journal des gestes sensibles part dans les logs du serveur : hors de portée des membres
   // concernés, contrairement aux notifications qu'ils peuvent effacer.
   const auditLogger: AuditLogger = {

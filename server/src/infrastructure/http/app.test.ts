@@ -23,6 +23,9 @@ import {
 import { CryptoTokenGenerator, ScryptPasswordHasher, SystemClock, UuidGenerator } from '../tech/adapters.js';
 import { FixedClock } from '../../application/testing/in-memory.js';
 import { buildApp } from './app.js';
+import { ReceiptStorage } from '../tech/receipt-storage.js';
+import { DocumentStorage } from '../tech/document-storage.js';
+import type { ObjectStore } from '../tech/object-store.js';
 import { DEFAULT_RATE_LIMITS } from './rate-limit.js';
 import type { AppDependencies } from './app.js';
 import crypto from 'node:crypto';
@@ -1080,6 +1083,192 @@ describe('API — checklists (checklists + points de contrôle)', () => {
     expect(((await get(`/api/equipments/${equipment.id}/checklists`, alice.cookies)).json() as unknown[]).length).toBe(
       0,
     );
+  });
+});
+
+describe('API — stockage dans un bucket (justificatifs et documents)', () => {
+  let bucketApp: FastifyInstance;
+
+  /**
+   * Magasin qui se comporte comme un bucket : il garde les octets en mémoire et rend une URL
+   * signée au lieu d'un flux. Aucun réseau — c'est la décision « rediriger plutôt que servir »
+   * qui est testée ici, la signature elle-même l'étant dans tech/object-store.test.ts.
+   */
+  class MagasinFactice implements ObjectStore {
+    readonly objets = new Map<string, Buffer>();
+    async exists(key: string) {
+      return this.objets.has(key);
+    }
+    async put(key: string, content: Buffer) {
+      this.objets.set(key, content);
+    }
+    async signedUrl(key: string, _contentType: string, disposition: string, ttlSeconds: number) {
+      return `https://bucket.exemple/${key}?expire=${ttlSeconds}&disposition=${encodeURIComponent(disposition)}`;
+    }
+    async read() {
+      return null;
+    }
+    async remove(key: string) {
+      this.objets.delete(key);
+    }
+  }
+
+  let magasin: MagasinFactice;
+
+  beforeEach(async () => {
+    magasin = new MagasinFactice();
+    bucketApp = await buildTestApp({
+      receiptStorage: new ReceiptStorage(magasin),
+      documentStorage: new DocumentStorage(magasin),
+    });
+  });
+
+  afterEach(async () => {
+    await bucketApp.close();
+  });
+
+  it('redirige vers une URL signée plutôt que de servir le justificatif', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(bucketApp);
+    const { payload, headers } = filePayload('recu.png', Buffer.from('le reçu'));
+    const upload = await bucketApp.inject({
+      method: 'POST',
+      url: '/api/uploads/receipts',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+    expect(upload.statusCode).toBe(201);
+    const { path: receiptPath } = upload.json() as { path: string };
+    // Le chemin public n'a pas changé de forme : les dépenses existantes restent valides.
+    expect(receiptPath).toMatch(/^\/uploads\/[\w-]+\.png$/);
+    // L'objet, lui, est rangé sous son propre préfixe dans le bucket.
+    expect([...magasin.objets.keys()]).toEqual([`receipts/${receiptPath.slice('/uploads/'.length)}`]);
+
+    const dépense = await post(
+      '/api/expenses',
+      {
+        equipmentId: equipment.id,
+        label: 'Plein gasoil',
+        amountEuros: 90,
+        payerId: alice.id,
+        date: '2026-03-02',
+        category: 'FUEL',
+        split: { type: 'EQUAL' },
+        receiptPath,
+      },
+      alice.cookies,
+      bucketApp,
+    );
+    expect(dépense.statusCode).toBe(201);
+
+    const lecture = await get(receiptPath, alice.cookies, bucketApp);
+    expect(lecture.statusCode).toBe(302);
+    expect(lecture.headers.location).toContain(`receipts/${receiptPath.slice('/uploads/'.length)}`);
+    expect(lecture.headers['cache-control']).toBe('private, no-store');
+    // Le corps du justificatif ne transite pas par l'API : c'est le bucket qui le servira.
+    expect(lecture.body).not.toContain('le reçu');
+  });
+
+  it('la redirection reste refusée hors du cercle', async () => {
+    const { equipment, alice, chloe } = await setupMembersAndEquipment(bucketApp);
+    const { payload, headers } = filePayload('recu.png', Buffer.from('le reçu'));
+    const upload = await bucketApp.inject({
+      method: 'POST',
+      url: '/api/uploads/receipts',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+    const { path: receiptPath } = upload.json() as { path: string };
+    await post(
+      '/api/expenses',
+      {
+        equipmentId: equipment.id,
+        label: 'Plein gasoil',
+        amountEuros: 90,
+        payerId: alice.id,
+        date: '2026-03-02',
+        category: 'FUEL',
+        split: { type: 'EQUAL' },
+        receiptPath,
+      },
+      alice.cookies,
+      bucketApp,
+    );
+
+    // Détenir le chemin ne suffit pas : la signature n'est émise qu'après le contrôle du cercle.
+    const refusée = await get(receiptPath, chloe.cookies, bucketApp);
+    expect(refusée.statusCode).toBe(404);
+    expect(refusée.headers.location).toBeUndefined();
+  });
+
+  it('redirige aussi pour le contenu d’un document', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(bucketApp);
+    const boundary = '----sharemateBucketBoundary';
+    const corps = Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="equipmentId"\r\n\r\n${equipment.id}\r\n` +
+          `--${boundary}\r\nContent-Disposition: form-data; name="category"\r\n\r\nMANUAL\r\n` +
+          `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="manuel.pdf"\r\n` +
+          `Content-Type: application/pdf\r\n\r\n`,
+      ),
+      Buffer.from('%PDF-1.4'),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const déposé = await bucketApp.inject({
+      method: 'POST',
+      url: '/api/documents/file',
+      payload: corps,
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      cookies: alice.cookies,
+    });
+    expect(déposé.statusCode).toBe(201);
+    const { id } = déposé.json() as { id: string };
+
+    const contenu = await get(`/api/documents/${id}/content`, alice.cookies, bucketApp);
+    expect(contenu.statusCode).toBe(302);
+    expect(contenu.headers.location).toContain('documents/');
+    // Le nom d'origine voyage dans l'URL signée : le bucket ne connaît que l'UUID de la clé.
+    expect(decodeURIComponent(String(contenu.headers.location))).toContain('manuel.pdf');
+    expect(contenu.headers['cache-control']).toBe('private, no-store');
+  });
+
+  it('purge l’objet du bucket à la suppression de la dépense', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(bucketApp);
+    const { payload, headers } = filePayload('recu.png', Buffer.from('le reçu'));
+    const upload = await bucketApp.inject({
+      method: 'POST',
+      url: '/api/uploads/receipts',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+    const { path: receiptPath } = upload.json() as { path: string };
+    const dépense = await post(
+      '/api/expenses',
+      {
+        equipmentId: equipment.id,
+        label: 'Plein gasoil',
+        amountEuros: 90,
+        payerId: alice.id,
+        date: '2026-03-02',
+        category: 'FUEL',
+        split: { type: 'EQUAL' },
+        receiptPath,
+      },
+      alice.cookies,
+      bucketApp,
+    );
+    expect(magasin.objets.size).toBe(1);
+
+    const supprimée = await bucketApp.inject({
+      method: 'DELETE',
+      url: `/api/expenses/${(dépense.json() as { id: string }).id}`,
+      cookies: alice.cookies,
+    });
+    expect(supprimée.statusCode).toBe(204);
+    // Sans cette purge, l'objet resterait facturé alors que plus rien ne le nomme.
+    expect(magasin.objets.size).toBe(0);
   });
 });
 

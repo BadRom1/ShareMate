@@ -71,8 +71,9 @@ server/src/
 └── infrastructure/   # Adapters
     ├── http/         # Fastify : app.ts (transverse) + plugins/ (un fichier par domaine)
     ├── persistence/  # SQLite (better-sqlite3), migrations versionnées par PRAGMA user_version
-    └── tech/         # scrypt, UUID, horloge, stockage des justificatifs et des documents
-                      # (disque ou bucket S3/R2), push (Web Push + FCM)
+    └── tech/         # scrypt, UUID, horloge, push (Web Push + FCM)
+                      # object-store.ts : magasin d'objets brut (disque ou bucket S3/R2),
+                      # partagé par les justificatifs et les documents
 web/src/              # Front React (Vite) — adapter de présentation
 ```
 
@@ -92,9 +93,13 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
   et un tutoriel vidéo côte à côte, et le code n'a qu'une liste, qu'une règle d'accès, qu'une
   suppression. La table l'écrit aussi, par une contrainte `CHECK` qui exclut la rangée hybride.
 - Le stockage d'objets est **le même code pour R2 et S3** : R2 parle le protocole S3, seul
-  l'`endpoint` change. Un port `ObjectStorage` côté application, un adapter côté infrastructure,
-  et un repli disque quand les variables du bucket sont absentes — les tests et le développement
-  tournent sans bucket, comme le push tourne sans clés VAPID.
+  l'`endpoint` change. Un port `ObjectStorage` côté application, un magasin brut côté
+  infrastructure — que justificatifs et documents partagent —, et un repli disque quand les
+  variables du bucket sont absentes : les tests et le développement tournent sans bucket, comme le
+  push tourne sans clés VAPID.
+- Un chemin de justificatif (`/uploads/<uuid>.<ext>`) est **un identifiant, pas une adresse** : il
+  n'a pas changé au passage dans le bucket, où il devient la clé `receipts/<uuid>.<ext>`. C'est ce
+  qui permet de basculer sans réécrire une seule dépense, ni le schéma HTTP, ni le front.
 - Toutes les entrées HTTP sont validées par un **schéma JSON** (Ajv, embarqué dans Fastify) :
   objets fermés, bornes de longueur, énumérations tirées du domaine. Les types TypeScript des
   handlers décrivent donc ce qui arrive réellement.
@@ -103,12 +108,13 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 
 ```bash
 npm install
-npm test              # 520 tests : 430 serveur (Node) + 90 front (jsdom)
+npm test              # 546 tests : 456 serveur (Node) + 90 front (jsdom)
 npm run test:coverage # Tests + seuils de couverture (90 % lignes/fonctions, 85 % branches)
 npm run lint          # ESLint (frontières hexagonales + règles React hooks)
 npm run format        # Prettier (format:check en CI)
 npm run typecheck     # tsc sur les deux workspaces
 npm run audit:prod    # npm audit des dépendances de production (high+)
+npm run migrate:receipts -- --dry  # transfert des justificatifs du volume vers le bucket
 npm run dev:server    # API sur http://localhost:3000
 npm run dev:web       # Front Vite sur http://localhost:5173 (proxy /api → 3000)
 npm run build         # Build de production (server/dist + web/dist)
@@ -134,19 +140,20 @@ Variables d'environnement du serveur :
 | `PORT`           | `3000`                       | Port HTTP                                                   |
 | `DATA_DIR`       | `./data`                     | Répertoire des données persistantes                         |
 | `DATABASE_PATH`  | `$DATA_DIR/sharemate.sqlite` | Fichier SQLite                                              |
-| `UPLOADS_DIR`    | `$DATA_DIR/uploads`          | Justificatifs uploadés                                      |
+| `UPLOADS_DIR`    | `$DATA_DIR/uploads`          | Justificatifs, quand aucun bucket S3/R2 n'est configuré     |
 | `DOCUMENTS_DIR`  | `$DATA_DIR/documents`        | Documents, quand aucun bucket S3/R2 n'est configuré         |
-| `S3_*`           | — (repli sur le disque)      | Bucket des documents : voir ci-dessous                      |
+| `S3_*`           | — (repli sur le disque)      | Bucket des justificatifs et des documents : voir ci-dessous |
 | `WEB_DIST_DIR`   | `../web/dist`                | Front statique servi par le serveur                         |
 | `NODE_ENV`       | —                            | `production` : cookie `Secure`, `trustProxy`, logs JSON     |
 | `CORS_ORIGINS`   | — (vide : pas de CORS)       | Origines cross-origin autorisées, séparées par des virgules |
 | `VAPID_*`, `FCM` | — (push désactivé)           | Push : voir [docs/notifications.md](docs/notifications.md)  |
 
-### Stockage des documents (Cloudflare R2 ou Amazon S3)
+### Stockage des fichiers (Cloudflare R2 ou Amazon S3)
 
-Les fichiers du dossier d'un équipement vont dans un bucket compatible S3 dès que ces quatre
-variables sont présentes ; sinon ils tombent sur `DOCUMENTS_DIR`, ce qui permet de développer et de
-tester sans bucket.
+**Justificatifs de dépense et documents d'équipement** partagent le même bucket compatible S3, sous
+deux préfixes distincts (`receipts/`, `documents/`), dès que ces quatre variables sont présentes.
+Sinon ils tombent respectivement sur `UPLOADS_DIR` et `DOCUMENTS_DIR`, ce qui permet de développer
+et de tester sans bucket.
 
 | Variable               | Rôle                                                         |
 | ---------------------- | ------------------------------------------------------------ |
@@ -160,9 +167,38 @@ tester sans bucket.
 une URL signée valable cinq minutes, après avoir vérifié que le demandeur appartient au cercle de
 l'équipement. Un bucket ouvert rendrait ce contrôle décoratif.
 
-Plafonds : **25 Mo par fichier** et **500 Mo par équipement**, refusés avant que l'octet n'atteigne
-le bucket. Formats acceptés : PDF, images (png, jpg, webp, gif), bureautique (doc(x), xls(x),
-ppt(x), od[tsp]) et texte (txt, csv) — ni exécutables, ni archives, ni HTML.
+Plafonds et formats diffèrent selon la nature du fichier :
+
+|                  | Justificatif de dépense | Document d'équipement                            |
+| ---------------- | ----------------------- | ------------------------------------------------ |
+| Poids maximal    | 10 Mo                   | 25 Mo par fichier, 500 Mo par équipement         |
+| Formats acceptés | png, jpg, webp, pdf     | + gif, txt, csv, doc(x), xls(x), ppt(x), od[tsp] |
+
+Ni exécutables, ni archives, ni HTML, ni SVG : le contenu est servi depuis le domaine du bucket,
+distinct du nôtre, où une page fabriquée s'exécuterait dans son propre contexte.
+
+#### Faire passer les justificatifs existants dans le bucket
+
+La bascule **ne casse rien et ne demande aucune coupure** : dès que les variables sont posées, les
+nouveaux fichiers vont dans le bucket, et ceux restés sur le volume continuent d'être lus de là. Le
+chemin public d'un justificatif (`/uploads/<uuid>.<ext>`) ne change pas — c'est son identifiant,
+pas l'endroit où il dort — donc aucune dépense n'est à réécrire.
+
+Reste à vider le volume, quand on veut le démonter :
+
+```bash
+# Depuis un shell sur le service, variables S3_* et DATA_DIR en place :
+npm run migrate:receipts -- --dry   # dit ce qu'il ferait, sans rien écrire
+npm run migrate:receipts            # transfère
+```
+
+Le script copie, ne supprime rien, et se rejoue sans dommage : ce qui est déjà dans le bucket est
+laissé tel quel. Il signale à part les fichiers qu'aucune dépense ne nomme (orphelins d'anciennes
+suppressions) et ceux dont le nom n'est pas celui qu'un téléversement produit — ni les uns ni les
+autres ne sont transférés.
+
+**Supprimer les fichiers locaux reste un geste manuel**, après avoir rouvert quelques justificatifs
+depuis l'application : jusque-là, le volume en détient la seule autre copie.
 
 ## Sécurité
 
@@ -228,12 +264,14 @@ la confiance est totale et assumée. Le reste de cette section dit précisément
   produit le téléversement, ce qui interdit d'afficher une URL externe sous couvert de reçu.
 - **Justificatifs** : servis par une route applicative qui remonte à la dépense qui les porte,
   jamais mis en cache par le client (`Cache-Control: private, no-store`, `NetworkOnly` côté service
-  worker), supprimés avec la dépense. La déconnexion vide les caches `sharemate-*` de l'appareil.
-- **Documents** : le bucket n'est jamais public. Le contenu d'un fichier se demande par
-  l'identifiant de son document (`/api/documents/:id/content`), jamais par la clé de l'objet — qui
-  ne sort pas du serveur ; l'API vérifie le cercle, puis redirige vers une **URL signée de cinq
-  minutes**, jamais mise en cache (`Cache-Control: private, no-store`). Recopiée, elle expire ;
-  un lien de bucket ouvert, lui, n'expire jamais. Le type MIME servi est déduit de l'extension
+  worker), supprimés avec la dépense — du bucket **et** du volume, puisqu'après une bascule on ne
+  sait plus lequel des deux les porte. La déconnexion vide les caches `sharemate-*` de l'appareil.
+- **Bucket** : il n'est jamais public, ni pour les justificatifs ni pour les documents. Un contenu
+  se demande toujours par l'identifiant de la ressource applicative qui le porte — la dépense pour
+  un justificatif, le document pour un fichier du dossier — jamais par la clé de l'objet, qui ne
+  sort pas du serveur. L'API vérifie le cercle, puis redirige vers une **URL signée de cinq
+  minutes**, jamais mise en cache (`Cache-Control: private, no-store`). Recopiée, elle expire ; un
+  lien de bucket ouvert, lui, n'expire jamais. Le type MIME servi est déduit de l'extension
   acceptée et jamais celui annoncé par le client, et ni HTML, ni SVG, ni archive, ni exécutable
   n'entrent — servi depuis le domaine du bucket, un tel contenu s'y exécuterait.
 - **Liens du dossier** : seuls `http:` et `https:` sont acceptés. Un lien est cliquable par tout
@@ -260,9 +298,9 @@ la confiance est totale et assumée. Le reste de cette section dit précisément
   les témoins, et laisse une entrée dans le journal du serveur.
 - **Tout membre peut peupler l'instance** de nouveaux comptes. Cela ne lui ouvre aucun cercle
   existant, mais rien n'en borne le nombre au-delà du plafond par minute.
-- **Pas de chiffrement au repos.** La base SQLite, les justificatifs et les documents sont en clair
-  sur le volume — ou dans le bucket ; qui y a accès (ou à une sauvegarde) a accès à tout. Le
-  contrôle d'accès est applicatif.
+- **Pas de chiffrement au repos.** La base SQLite est en clair sur le volume, les justificatifs et
+  les documents le sont dans le bucket (ou sur le volume, à défaut) ; qui y a accès — ou à une
+  sauvegarde — a accès à tout. Le contrôle d'accès est applicatif, pas cryptographique.
 - **Un document appartient au cercle, pas à son déposant.** N'importe quel membre peut supprimer
   le manuel ou l'attestation d'assurance qu'un autre a déposés, définitivement. C'est le même
   parti que pour les checklists et les équipements : entre membres d'un cercle, la confiance est

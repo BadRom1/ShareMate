@@ -35,8 +35,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR ?? path.resolve(here, '../../data');
 const databasePath = process.env.DATABASE_PATH ?? path.join(dataDir, 'sharemate.sqlite');
 const uploadsDir = process.env.UPLOADS_DIR ?? path.join(dataDir, 'uploads');
-// Repli des documents quand aucun bucket S3/R2 n'est configuré (développement, ou déploiement
-// sur volume) : les documents vivent alors à côté des justificatifs.
+// Répertoires du volume. Ils restent la source quand aucun bucket S3/R2 n'est configuré, et
+// deviennent le repli en lecture dès qu'il l'est : les fichiers déposés avant la bascule y
+// dorment encore, jusqu'à `npm run migrate:receipts`.
 const documentsDir = process.env.DOCUMENTS_DIR ?? path.join(dataDir, 'documents');
 const webDistDir = process.env.WEB_DIST_DIR ?? path.resolve(here, '../../web/dist');
 const port = Number(process.env.PORT ?? 3000);
@@ -84,7 +85,7 @@ const app = await buildApp({
   trustProxy: isProduction,
   uploadsDir,
   documentsDir,
-  documentStorageEnv: process.env,
+  objectStorageEnv: process.env,
   webDistDir,
   corsOrigins,
   pushSender: pushSender ?? undefined,

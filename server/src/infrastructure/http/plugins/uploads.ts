@@ -3,7 +3,8 @@ import path from 'node:path';
 import { NotFoundError } from '../../../domain/shared/domain-error.js';
 import { receiptNotFound } from '../../../application/receipt-access.js';
 import type { ExpenseService } from '../../../application/expense-service.js';
-import { FileSystemReceiptStorage, RECEIPT_PREFIX } from '../../tech/receipt-storage.js';
+import { RECEIPT_PREFIX } from '../../tech/receipt-storage.js';
+import type { ReceiptStorage } from '../../tech/receipt-storage.js';
 import { limit } from '../rate-limit.js';
 import type { RateLimits } from '../rate-limit.js';
 import { receiptNameParams } from '../schema.js';
@@ -13,8 +14,8 @@ import '../session.js'; // augmentation de type : request.authMember
 const RECEIPT_MAX_BYTES = 10 * 1024 * 1024;
 
 export interface UploadRoutesOptions {
-  /** Stockage des justificatifs (répertoire de dépôt). */
-  storage: FileSystemReceiptStorage;
+  /** Stockage des justificatifs (bucket S3/R2, ou répertoire de dépôt). */
+  storage: ReceiptStorage;
   /** Porte la règle d'accès : un justificatif se lit par la dépense qui le porte. */
   expenseService: ExpenseService;
   rateLimits: RateLimits;
@@ -33,7 +34,7 @@ export const uploadRoutes: FastifyPluginAsync<UploadRoutesOptions> = async (
       return reply.status(400).send({ error: 'Aucun fichier reçu.' });
     }
     const extension = path.extname(file.filename).toLowerCase();
-    if (!FileSystemReceiptStorage.supports(extension)) {
+    if (!storage.supports(extension)) {
       return reply.status(400).send({ error: 'Format accepté : image (png, jpg, webp) ou PDF.' });
     }
     return reply.status(201).send({ path: await storage.save(await file.toBuffer(), extension) });
@@ -55,13 +56,14 @@ export const uploadRoutes: FastifyPluginAsync<UploadRoutesOptions> = async (
       if (!receipt) {
         throw new NotFoundError(receiptNotFound(receiptPath));
       }
-      // Jamais de copie durable côté client : la réponse dépend de droits qui peuvent changer,
-      // et le fichier survivrait à une déconnexion sur l'appareil.
-      return reply
-        .header('Cache-Control', 'private, no-store')
-        .header('Content-Length', receipt.size)
-        .type(receipt.contentType)
-        .send(receipt.stream);
+      // Jamais de copie durable côté client : la réponse dépend de droits qui peuvent changer, le
+      // fichier survivrait à une déconnexion sur l'appareil, et l'URL signée d'une redirection
+      // expire — la rejouer depuis un cache ne donnerait qu'un refus.
+      reply.header('Cache-Control', 'private, no-store');
+      if (receipt.kind === 'redirect') {
+        return reply.redirect(receipt.url, 302);
+      }
+      return reply.header('Content-Length', receipt.size).type(receipt.contentType).send(receipt.stream);
     },
   );
 };

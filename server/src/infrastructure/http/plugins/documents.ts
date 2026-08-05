@@ -5,11 +5,6 @@ import type { DocumentCategory } from '../../../domain/document/document.js';
 import { DomainError, NotFoundError } from '../../../domain/shared/domain-error.js';
 import { documentNotFound } from '../../../application/document-access.js';
 import type { DocumentService } from '../../../application/document-service.js';
-import {
-  acceptedDocumentExtensions,
-  documentContentType,
-  supportsDocumentExtension,
-} from '../../tech/document-storage.js';
 import type { DocumentStorage } from '../../tech/document-storage.js';
 import { documentDto } from '../dto.js';
 import { limit } from '../rate-limit.js';
@@ -131,10 +126,10 @@ export const documentRoutes: FastifyPluginAsync<DocumentRoutesOptions> = async (
       return reply.status(400).send({ error: 'Aucun fichier reçu.' });
     }
     const extension = path.extname(file.filename).toLowerCase();
-    if (!supportsDocumentExtension(extension)) {
+    if (!storage.supports(extension)) {
       return reply
         .status(400)
-        .send({ error: `Format non accepté. Formats gérés : ${acceptedDocumentExtensions().join(', ')}.` });
+        .send({ error: `Format non accepté. Formats gérés : ${storage.extensions().join(', ')}.` });
     }
     const equipmentId = requiredField(fields, 'equipmentId');
     const category = requiredCategory(fields);
@@ -155,7 +150,7 @@ export const documentRoutes: FastifyPluginAsync<DocumentRoutesOptions> = async (
             fileName: file.filename,
             // Le type est déduit de l'extension acceptée, jamais celui annoncé par le client :
             // c'est lui qui sera servi en retour, et un `text/html` déclaré s'exécuterait.
-            contentType: documentContentType(extension),
+            contentType: storage.contentType(extension),
             sizeBytes: file.content.length,
           },
         },
