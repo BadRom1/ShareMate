@@ -10,8 +10,8 @@ import { RECEIPT_PREFIX, receiptStorageKey } from './infrastructure/tech/receipt
  * Transfert des justificatifs restés sur le volume vers le bucket S3/R2.
  *
  * L'application n'en a pas besoin pour fonctionner : tant que le volume est monté, elle relit de
- * là ce qui y dort (voir `createReceiptStorage`). Ce script sert à **vider le volume**, une fois,
- * pour pouvoir le démonter.
+ * là ce qui y dort (voir `createReceiptStorage`). Ce script sert à ne plus laisser de fichiers
+ * dessus — le volume reste indispensable, il porte la base SQLite.
  *
  * Il est sans risque et rejouable : il copie, ne supprime rien, et repasse sur ce qui est déjà
  * dans le bucket sans le réécrire. Supprimer les fichiers locaux reste un geste de l'opérateur,

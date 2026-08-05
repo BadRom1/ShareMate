@@ -191,7 +191,8 @@ nouveaux fichiers vont dans le bucket, et ceux restés sur le volume continuent 
 chemin public d'un justificatif (`/uploads/<uuid>.<ext>`) ne change pas — c'est son identifiant,
 pas l'endroit où il dort — donc aucune dépense n'est à réécrire.
 
-Reste à vider le volume, quand on veut le démonter :
+Reste à retirer du volume les fichiers qui y dorment encore. **Le volume, lui, reste indispensable :
+il porte la base SQLite.** Le transfert ne fait que lui enlever ce qui n'a plus à y être.
 
 ```bash
 # Depuis un shell sur le service, variables S3_* et DATA_DIR en place :
