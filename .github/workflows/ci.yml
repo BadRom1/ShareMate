@@ -48,6 +48,9 @@ jobs:
   docker:
     name: Build de l'image Docker
     runs-on: ubuntu-latest
+    env:
+      IMAGE: sharemate:ci
+      CONTAINER: sharemate-ci
     steps:
       - uses: actions/checkout@v7
 
@@ -58,5 +61,54 @@ jobs:
         with:
           context: .
           push: false
+          # `load` charge l'image dans le démon local pour l'étape de démarrage ci-dessous.
+          # Incompatible avec un build multi-plateforme : ne pas ajouter `platforms:` ici.
+          load: true
+          tags: ${{ env.IMAGE }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Une image qui se construit n'est pas une image qui démarre : le passage à Node 24 avec
+      # better-sqlite3 11 produisait un binaire natif qui segfaultait au démarrage (exit 139)
+      # alors que le build restait vert. On lance donc réellement le conteneur.
+      - name: Démarrage du conteneur et santé
+        run: |
+          set -euo pipefail
+          docker run -d --name "$CONTAINER" -e DATA_DIR=/tmp/data -p 3000:3000 "$IMAGE"
+
+          pret=0
+          for _ in $(seq 1 30); do
+            if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER")" != "true" ]; then
+              echo "::error::Le conteneur s'est arrêté avant de répondre."
+              break
+            fi
+            if [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/health || true)" = "200" ]; then
+              pret=1
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$pret" != "1" ]; then
+            echo "::error::/api/health n'a pas répondu 200 en 30 s."
+            exit 1
+          fi
+          echo "Santé OK : /api/health répond 200."
+
+          # Arrêt propre (SIGTERM, comme Railway au redéploiement) : le teardown natif de
+          # better-sqlite3 doit rendre 0, un plantage se lirait ici en 139 (SIGSEGV).
+          docker stop "$CONTAINER" >/dev/null
+          code=$(docker inspect -f '{{.State.ExitCode}}' "$CONTAINER")
+          if [ "$code" != "0" ]; then
+            echo "::error::Arrêt du conteneur avec le code $code (139 = segfault, 137 = SIGTERM ignoré)."
+            exit 1
+          fi
+          echo "Arrêt propre : code de sortie 0."
+
+      - name: Logs du conteneur (en cas d'échec)
+        if: failure()
+        run: docker logs "$CONTAINER" 2>&1 || true
+
+      - name: Nettoyage du conteneur
+        if: always()
+        run: docker rm -f "$CONTAINER" 2>/dev/null || true
