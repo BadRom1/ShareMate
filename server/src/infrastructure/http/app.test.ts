@@ -24,7 +24,9 @@ import { CryptoTokenGenerator, ScryptPasswordHasher, SystemClock, UuidGenerator 
 import { FixedClock } from '../../application/testing/in-memory.js';
 import { buildApp } from './app.js';
 import { ReceiptStorage } from '../tech/receipt-storage.js';
-import { DocumentStorage } from '../tech/document-storage.js';
+import { DOCUMENT_PREFIX, RICH_CONTENT_TYPES } from '../tech/document-storage.js';
+import { ATTACHMENT_PREFIX } from '../tech/attachment-storage.js';
+import { MediaStorage } from '../tech/object-store.js';
 import type { ObjectStore } from '../tech/object-store.js';
 import { DEFAULT_RATE_LIMITS } from './rate-limit.js';
 import type { AppDependencies } from './app.js';
@@ -1086,6 +1088,191 @@ describe('API — checklists (checklists + points de contrôle)', () => {
   });
 });
 
+describe('API — pièces jointes des discussions', () => {
+  let filesApp: FastifyInstance;
+  let attachmentsDir: string;
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-jointes-'));
+    attachmentsDir = path.join(tmpRoot, 'attachments');
+    filesApp = await buildTestApp({ attachmentsDir });
+  });
+
+  afterEach(async () => {
+    await filesApp.close();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  /** Corps multipart : champs puis fichier. */
+  function corps(champs: Record<string, string>, filename = 'panne.png', contenu = Buffer.from('PNGPANNE')) {
+    const boundary = '----sharemateAttachmentBoundary';
+    const morceaux = Object.entries(champs).map(([nom, valeur]) =>
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${nom}"\r\n\r\n${valeur}\r\n`),
+    );
+    morceaux.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+          `Content-Type: image/png\r\n\r\n`,
+      ),
+      contenu,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    );
+    return {
+      payload: Buffer.concat(morceaux),
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    };
+  }
+
+  async function joindre(champs: Record<string, string>, cookies: Cookies, filename = 'panne.png') {
+    const { payload, headers } = corps(champs, filename);
+    return filesApp.inject({ method: 'POST', url: '/api/messages/file', payload, headers, cookies });
+  }
+
+  /** Fil ouvert par Alice sur un équipement partagé avec Bruno. */
+  async function unFil() {
+    const contexte = await setupMembersAndEquipment(filesApp);
+    const fil = await post(
+      '/api/threads',
+      { equipmentId: contexte.equipment.id, title: 'Panne moteur' },
+      contexte.alice.cookies,
+      filesApp,
+    );
+    expect(fil.statusCode).toBe(201);
+    return { ...contexte, thread: fil.json() as { id: string } };
+  }
+
+  function objetsStockés(): string[] {
+    return fs.existsSync(attachmentsDir) ? fs.readdirSync(attachmentsDir) : [];
+  }
+
+  it('joint un fichier à un message, le sert au cercle, puis le supprime avec lui', async () => {
+    const { thread, alice, bruno, chloe } = await unFil();
+
+    const posté = await joindre({ threadId: thread.id, body: 'Regardez ce bruit' }, alice.cookies);
+    expect(posté.statusCode).toBe(201);
+    const message = posté.json() as Record<string, unknown>;
+    expect(message.attachment).toEqual({ fileName: 'panne.png', contentType: 'image/png', sizeBytes: 8 });
+    // La clé de l'objet ne sort jamais de l'API : le contenu se lit par l'identifiant du message.
+    expect(JSON.stringify(message)).not.toContain('attachments/');
+    expect(objetsStockés()).toHaveLength(1);
+
+    const contenu = await get(`/api/messages/${message.id}/attachment`, bruno.cookies, filesApp);
+    expect(contenu.statusCode).toBe(200);
+    expect(contenu.body).toBe('PNGPANNE');
+    expect(contenu.headers['content-type']).toBe('image/png');
+    expect(contenu.headers['cache-control']).toBe('private, no-store');
+
+    // Chloé est hors du cercle : le message n'existe pas pour elle.
+    expect((await get(`/api/messages/${message.id}/attachment`, chloe.cookies, filesApp)).statusCode).toBe(404);
+
+    const supprimé = await filesApp.inject({
+      method: 'DELETE',
+      url: `/api/messages/${message.id}`,
+      cookies: alice.cookies,
+    });
+    expect(supprimé.statusCode).toBe(204);
+    expect(objetsStockés()).toEqual([]);
+  });
+
+  it('accepte un message sans texte quand un fichier l’accompagne', async () => {
+    const { thread, alice } = await unFil();
+    const posté = await joindre({ threadId: thread.id }, alice.cookies);
+    expect(posté.statusCode).toBe(201);
+    expect((posté.json() as { body: string }).body).toBe('');
+  });
+
+  it('joint un fichier à une réponse, dans le bon sous-fil', async () => {
+    const { thread, alice, bruno } = await unFil();
+    const racine = await post(
+      '/api/messages',
+      { threadId: thread.id, body: 'Quelqu’un a une photo ?' },
+      alice.cookies,
+      filesApp,
+    );
+    const parentId = (racine.json() as { id: string }).id;
+
+    const réponse = await joindre({ threadId: thread.id, body: 'La voilà', parentId }, bruno.cookies);
+    expect(réponse.statusCode).toBe(201);
+    expect((réponse.json() as { parentId: string }).parentId).toBe(parentId);
+  });
+
+  // Supprimer un message emporte ses réponses : leurs fichiers doivent partir avec elles.
+  it('purge les pièces jointes des réponses emportées', async () => {
+    const { thread, alice, bruno } = await unFil();
+    const racine = await joindre({ threadId: thread.id, body: 'Le bruit' }, alice.cookies);
+    const parentId = (racine.json() as { id: string }).id;
+    expect((await joindre({ threadId: thread.id, body: 'Idem', parentId }, bruno.cookies)).statusCode).toBe(201);
+    expect(objetsStockés()).toHaveLength(2);
+
+    await filesApp.inject({ method: 'DELETE', url: `/api/messages/${parentId}`, cookies: alice.cookies });
+
+    expect(objetsStockés()).toEqual([]);
+  });
+
+  it('purge les pièces jointes quand le fil entier est supprimé', async () => {
+    const { thread, alice } = await unFil();
+    expect((await joindre({ threadId: thread.id, body: 'Le bruit' }, alice.cookies)).statusCode).toBe(201);
+
+    await filesApp.inject({ method: 'DELETE', url: `/api/threads/${thread.id}`, cookies: alice.cookies });
+
+    expect(objetsStockés()).toEqual([]);
+  });
+
+  it('purge les pièces jointes quand l’équipement est supprimé', async () => {
+    const { thread, equipment, alice } = await unFil();
+    expect((await joindre({ threadId: thread.id, body: 'Le bruit' }, alice.cookies)).statusCode).toBe(201);
+
+    const supprimé = await filesApp.inject({
+      method: 'DELETE',
+      url: `/api/equipments/${equipment.id}`,
+      cookies: alice.cookies,
+    });
+    expect(supprimé.statusCode).toBe(204);
+    expect(objetsStockés()).toEqual([]);
+  });
+
+  it('refuse un format non géré et le hors-cercle, sans rien écrire', async () => {
+    const { thread, alice, chloe } = await unFil();
+    expect((await joindre({ threadId: thread.id }, alice.cookies, 'page.html')).statusCode).toBe(400);
+    expect((await joindre({ threadId: thread.id }, chloe.cookies)).statusCode).toBe(404);
+    expect((await joindre({}, alice.cookies)).statusCode).toBe(400);
+    expect(objetsStockés()).toEqual([]);
+  });
+
+  it('un message sans pièce jointe n’a pas de contenu à servir', async () => {
+    const { thread, alice } = await unFil();
+    const sansFichier = await post(
+      '/api/messages',
+      { threadId: thread.id, body: 'Texte seul' },
+      alice.cookies,
+      filesApp,
+    );
+    const { id } = sansFichier.json() as { id: string };
+    expect((await get(`/api/messages/${id}/attachment`, alice.cookies, filesApp)).statusCode).toBe(404);
+  });
+
+  it('sans stockage configuré, la pièce jointe n’est pas offerte et les messages restent en texte', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment();
+    const fil = await post('/api/threads', { equipmentId: equipment.id, title: 'Panne' }, alice.cookies);
+    const { id: threadId } = fil.json() as { id: string };
+    const { payload, headers } = corps({ threadId });
+
+    const refusé = await app.inject({
+      method: 'POST',
+      url: '/api/messages/file',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+    expect(refusé.statusCode).toBe(404);
+
+    const texte = await post('/api/messages', { threadId, body: 'Texte seul' }, alice.cookies);
+    expect(texte.statusCode).toBe(201);
+    expect((texte.json() as { attachment: unknown }).attachment).toBeNull();
+  });
+});
+
 describe('API — stockage dans un bucket (justificatifs et documents)', () => {
   let bucketApp: FastifyInstance;
 
@@ -1119,7 +1306,8 @@ describe('API — stockage dans un bucket (justificatifs et documents)', () => {
     magasin = new MagasinFactice();
     bucketApp = await buildTestApp({
       receiptStorage: new ReceiptStorage(magasin),
-      documentStorage: new DocumentStorage(magasin),
+      documentStorage: new MediaStorage(magasin, { keyPrefix: DOCUMENT_PREFIX, contentTypes: RICH_CONTENT_TYPES }),
+      attachmentStorage: new MediaStorage(magasin, { keyPrefix: ATTACHMENT_PREFIX, contentTypes: RICH_CONTENT_TYPES }),
     });
   });
 

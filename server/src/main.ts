@@ -39,6 +39,7 @@ const uploadsDir = process.env.UPLOADS_DIR ?? path.join(dataDir, 'uploads');
 // deviennent le repli en lecture dès qu'il l'est : les fichiers déposés avant la bascule y
 // dorment encore, jusqu'à `npm run migrate:receipts`.
 const documentsDir = process.env.DOCUMENTS_DIR ?? path.join(dataDir, 'documents');
+const attachmentsDir = process.env.ATTACHMENTS_DIR ?? path.join(dataDir, 'attachments');
 const webDistDir = process.env.WEB_DIST_DIR ?? path.resolve(here, '../../web/dist');
 const port = Number(process.env.PORT ?? 3000);
 const isProduction = process.env.NODE_ENV === 'production';
@@ -85,6 +86,7 @@ const app = await buildApp({
   trustProxy: isProduction,
   uploadsDir,
   documentsDir,
+  attachmentsDir,
   objectStorageEnv: process.env,
   webDistDir,
   corsOrigins,

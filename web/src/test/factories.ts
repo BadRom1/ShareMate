@@ -75,6 +75,7 @@ export function aMessage(over: Partial<Message> = {}): Message {
     createdAt: '2026-03-01T08:00:00.000Z',
     editedAt: null,
     parentId: null,
+    attachment: null,
     ...over,
   };
 }
@@ -203,6 +204,7 @@ export function createApiStub() {
 
     listThreads: vi.fn(async (_equipmentId: string) => [] as ThreadSummary[]),
     listMessages: vi.fn(async (_threadId: string) => [] as Message[]),
+    postMessageWithFile: vi.fn(async (_threadId: string, _file: File, _options?: unknown) => aMessage()),
     createThread: vi.fn(async (_equipmentId: string, _title: string, _body?: string) => aThread()),
     renameThread: vi.fn(async (_id: string, _title: string) => aThread()),
     deleteThread: vi.fn(async (_id: string) => {}),

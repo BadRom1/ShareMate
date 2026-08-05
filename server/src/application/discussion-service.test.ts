@@ -2,13 +2,19 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { DiscussionService } from './discussion-service.js';
 import { AuthorizationError, DomainError, ForbiddenError } from '../domain/shared/domain-error.js';
 import { makeFixture } from './testing/fixture.js';
-import { CapturingNotifier, InMemoryMessageRepository, InMemoryThreadRepository } from './testing/in-memory.js';
+import {
+  CapturingNotifier,
+  InMemoryMessageRepository,
+  InMemoryObjectStorage,
+  InMemoryThreadRepository,
+} from './testing/in-memory.js';
 
 async function setup() {
   const fx = await makeFixture();
   const threads = new InMemoryThreadRepository();
-  const messages = new InMemoryMessageRepository();
+  const messages = new InMemoryMessageRepository(threads);
   const notifier = new CapturingNotifier();
+  const attachments = new InMemoryObjectStorage();
   const service = new DiscussionService(
     threads,
     messages,
@@ -17,8 +23,9 @@ async function setup() {
     fx.idGenerator,
     fx.clock,
     notifier,
+    attachments,
   );
-  return { service, threads, messages, notifier };
+  return { service, threads, messages, notifier, attachments };
 }
 
 describe('DiscussionService', () => {
@@ -115,5 +122,124 @@ describe('DiscussionService', () => {
     expect(await ctx.service.listThreads('e1', 'm1')).toHaveLength(0);
     // Le fil n'existe plus : on constate la cascade directement sur le dépôt.
     expect(await ctx.messages.findByThreadId(thread.id)).toHaveLength(0);
+  });
+});
+
+describe('DiscussionService — pièces jointes', () => {
+  let ctx: Awaited<ReturnType<typeof setup>>;
+  beforeEach(async () => {
+    ctx = await setup();
+  });
+
+  let clés = 0;
+
+  /** Fichier joint, dont la clé est neuve à chaque appel (comme un téléversement). */
+  function fichier() {
+    clés += 1;
+    const attachment = {
+      storageKey: `attachments/joint-${clés}.png`,
+      fileName: 'panne.png',
+      contentType: 'image/png',
+      sizeBytes: 240_000,
+    };
+    ctx.attachments.add(attachment.storageKey);
+    return attachment;
+  }
+
+  async function filAvecPièceJointe(body = 'Regardez ça') {
+    const thread = await ctx.service.createThread({ equipmentId: 'e1', authorId: 'm1', title: 'Panne' });
+    const attachment = fichier();
+    const message = await ctx.service.postMessage({ threadId: thread.id, authorId: 'm1', body, attachment });
+    return { thread, message, attachment };
+  }
+
+  it('joint un fichier à un message, et le relit', async () => {
+    const { thread, message, attachment } = await filAvecPièceJointe();
+    expect(message.attachment).toEqual(attachment);
+    const [relu] = await ctx.service.listMessages(thread.id, 'm2');
+    expect(relu!.attachment).toEqual(attachment);
+  });
+
+  it('accepte un message sans texte quand un fichier l’accompagne', async () => {
+    const { message } = await filAvecPièceJointe('   ');
+    expect(message.body).toBe('');
+  });
+
+  // Un message sans corps n'est pas vide : il porte un fichier, qu'on annonce par son nom.
+  it('annonce la pièce jointe dans la notification d’un message sans texte', async () => {
+    await filAvecPièceJointe('   ');
+    expect(ctx.notifier.events.at(-1)?.body).toContain('panne.png');
+  });
+
+  it('purge l’objet quand le message est supprimé', async () => {
+    const { message, attachment } = await filAvecPièceJointe();
+    await ctx.service.deleteMessage(message.id, 'm1');
+    expect(ctx.attachments.keys.has(attachment.storageKey)).toBe(false);
+  });
+
+  // Supprimer un message emporte ses réponses : leurs fichiers doivent partir avec elles.
+  it('purge aussi les objets des réponses emportées', async () => {
+    const { thread, message, attachment } = await filAvecPièceJointe();
+    const réponse = fichier();
+    await ctx.service.postMessage({
+      threadId: thread.id,
+      authorId: 'm2',
+      body: 'Vu',
+      parentId: message.id,
+      attachment: réponse,
+    });
+
+    await ctx.service.deleteMessage(message.id, 'm1');
+
+    expect(ctx.attachments.keys.has(attachment.storageKey)).toBe(false);
+    expect(ctx.attachments.keys.has(réponse.storageKey)).toBe(false);
+  });
+
+  it('purge les objets de tout le fil quand le fil est supprimé', async () => {
+    const { thread } = await filAvecPièceJointe();
+    await ctx.service.deleteThread(thread.id, 'm1');
+    expect(ctx.attachments.keys.size).toBe(0);
+    expect(await ctx.service.listMessages(thread.id, 'm1').catch(() => 'absent')).toBe('absent');
+  });
+
+  it('garde la pièce jointe à l’édition du corps', async () => {
+    const { message, attachment } = await filAvecPièceJointe();
+    const édité = await ctx.service.editMessage(message.id, 'm1', 'Texte corrigé');
+    expect(édité.attachment).toEqual(attachment);
+  });
+
+  describe('cercle du fil', () => {
+    it('refuse de joindre un fichier hors du cercle', async () => {
+      const thread = await ctx.service.createThread({ equipmentId: 'e1', authorId: 'm1', title: 'Panne' });
+      await expect(ctx.service.assertCanAttach(thread.id, 'm3')).rejects.toThrow(ForbiddenError);
+      await expect(ctx.service.messageForMember('nope', 'm1')).rejects.toThrow(/introuvable/);
+    });
+
+    it('refuse la lecture d’une pièce jointe hors du cercle', async () => {
+      const { message } = await filAvecPièceJointe();
+      await expect(ctx.service.messageForMember(message.id, 'm3')).rejects.toThrow(ForbiddenError);
+      // Le refus porte le message de l'absence : détenir un identifiant ne doit rien apprendre.
+      await expect(ctx.service.messageForMember(message.id, 'm3')).rejects.toThrow(
+        `Message introuvable : ${message.id}`,
+      );
+    });
+  });
+
+  it('sans stockage configuré, la suppression reste possible', async () => {
+    const fx = await makeFixture();
+    const threads = new InMemoryThreadRepository();
+    const messages = new InMemoryMessageRepository(threads);
+    const sansStockage = new DiscussionService(
+      threads,
+      messages,
+      fx.equipments,
+      fx.members,
+      fx.idGenerator,
+      fx.clock,
+      new CapturingNotifier(),
+    );
+    const thread = await sansStockage.createThread({ equipmentId: 'e1', authorId: 'm1', title: 'Panne' });
+    const message = await sansStockage.postMessage({ threadId: thread.id, authorId: 'm1', body: 'Bonjour' });
+    await expect(sansStockage.deleteMessage(message.id, 'm1')).resolves.toBeUndefined();
   });
 });

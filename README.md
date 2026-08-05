@@ -39,9 +39,10 @@ partage des frais façon Tricount.
   membre peut le renommer, le reclasser et le supprimer, et le nom du déposant reste affiché. Les
   fichiers vivent dans un **stockage d'objets S3/R2** (repli sur le disque si aucun bucket n'est
   configuré) ; la base n'en garde que les métadonnées.
-- **Discussions** : fils de discussion par équipement, avec sous-fils de réponses. Le fil et le
-  message se renomment, s'éditent et se suppriment **par leur auteur seul** ; tout le cercle lit et
-  répond.
+- **Discussions** : fils de discussion par équipement, avec sous-fils de réponses. Un message peut
+  porter **un fichier joint** — la photo d'une panne, un devis — envoyé avec lui ou seul, sans
+  texte. Le fil et le message se renomment, s'éditent et se suppriment **par leur auteur seul** ;
+  tout le cercle lit et répond.
 - **Notifications** : centre in-app (cloche), Web Push (PWA) et push natif Android, réglables par
   type d'événement et par membre. Détail et configuration dans [docs/notifications.md](docs/notifications.md).
 
@@ -52,7 +53,8 @@ DDD + architecture hexagonale, TypeScript de bout en bout, développé en TDD st
 ```
 server/src/
 ├── domain/           # Entités, value objects, règles métier pures — AUCUNE dépendance externe
-│   ├── shared/       # Money (centimes entiers), TimeRange (fin exclusive), erreurs métier
+│   ├── shared/       # Money (centimes entiers), TimeRange (fin exclusive), erreurs métier,
+│   │                 # StoredFile (référence d'un objet stocké, et ses bornes)
 │   ├── member/       # Member (email validé : il sert d'identifiant de connexion)
 │   ├── auth/         # MemberCredential (mot de passe, invitation datée), Session
 │   ├── equipment/    # Equipment (cercle des membres, compteur heures/km, seuil d'entretien)
@@ -60,7 +62,7 @@ server/src/
 │   ├── usage/        # UsageRecord + calcul des alertes de maintenance
 │   ├── expense/      # Expense (règles de répartition), Reimbursement,
 │   │                 # calcul des soldes + minimisation des transactions (type Tricount)
-│   ├── discussion/   # Thread + Message (sous-fils de réponses)
+│   ├── discussion/   # Thread + Message (sous-fils de réponses, fichier joint)
 │   ├── checklist/    # Checklist + ChecklistItem (points cochés, traçabilité de la coche)
 │   ├── document/     # Document (fichier déposé ou lien externe, catégorie, borne de poids)
 │   └── notification/ # Notification, NotificationPreference, types notifiables
@@ -89,6 +91,10 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 - Le relevé de compteur est **monotone** : un relevé inférieur au dernier connu est refusé.
 - Le **cercle est porté par l'équipement**, pas par une entité « groupe ». Deux personnes sans
   équipement commun ne se voient pas, ce qui donne le multi-cercles sans multi-tenant.
+- Une **pièce jointe suit son message** : au plus une, jamais remplacée par une édition (elle a
+  déjà été vue par le cercle), et emportée par la suppression du message, de ses réponses, de son
+  fil ou de l'équipement. Elle n'entre pas dans le dossier de l'équipement — ce sont deux gestes
+  différents, montrer et ranger.
 - Un document est **une entité, deux natures** (`FILE` ou `LINK`) : le membre range un manuel PDF
   et un tutoriel vidéo côte à côte, et le code n'a qu'une liste, qu'une règle d'accès, qu'une
   suppression. La table l'écrit aussi, par une contrainte `CHECK` qui exclut la rangée hybride.
@@ -108,7 +114,7 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 
 ```bash
 npm install
-npm test              # 546 tests : 456 serveur (Node) + 90 front (jsdom)
+npm test              # 579 tests : 483 serveur (Node) + 96 front (jsdom)
 npm run test:coverage # Tests + seuils de couverture (90 % lignes/fonctions, 85 % branches)
 npm run lint          # ESLint (frontières hexagonales + règles React hooks)
 npm run format        # Prettier (format:check en CI)
@@ -135,18 +141,19 @@ npm start             # Sert l'API + le front buildé
 
 Variables d'environnement du serveur :
 
-| Variable         | Défaut                       | Rôle                                                        |
-| ---------------- | ---------------------------- | ----------------------------------------------------------- |
-| `PORT`           | `3000`                       | Port HTTP                                                   |
-| `DATA_DIR`       | `./data`                     | Répertoire des données persistantes                         |
-| `DATABASE_PATH`  | `$DATA_DIR/sharemate.sqlite` | Fichier SQLite                                              |
-| `UPLOADS_DIR`    | `$DATA_DIR/uploads`          | Justificatifs, quand aucun bucket S3/R2 n'est configuré     |
-| `DOCUMENTS_DIR`  | `$DATA_DIR/documents`        | Documents, quand aucun bucket S3/R2 n'est configuré         |
-| `S3_*`           | — (repli sur le disque)      | Bucket des justificatifs et des documents : voir ci-dessous |
-| `WEB_DIST_DIR`   | `../web/dist`                | Front statique servi par le serveur                         |
-| `NODE_ENV`       | —                            | `production` : cookie `Secure`, `trustProxy`, logs JSON     |
-| `CORS_ORIGINS`   | — (vide : pas de CORS)       | Origines cross-origin autorisées, séparées par des virgules |
-| `VAPID_*`, `FCM` | — (push désactivé)           | Push : voir [docs/notifications.md](docs/notifications.md)  |
+| Variable          | Défaut                       | Rôle                                                        |
+| ----------------- | ---------------------------- | ----------------------------------------------------------- |
+| `PORT`            | `3000`                       | Port HTTP                                                   |
+| `DATA_DIR`        | `./data`                     | Répertoire des données persistantes                         |
+| `DATABASE_PATH`   | `$DATA_DIR/sharemate.sqlite` | Fichier SQLite                                              |
+| `UPLOADS_DIR`     | `$DATA_DIR/uploads`          | Justificatifs, quand aucun bucket S3/R2 n'est configuré     |
+| `DOCUMENTS_DIR`   | `$DATA_DIR/documents`        | Documents, quand aucun bucket S3/R2 n'est configuré         |
+| `ATTACHMENTS_DIR` | `$DATA_DIR/attachments`      | Pièces jointes, quand aucun bucket S3/R2 n'est configuré    |
+| `S3_*`            | — (repli sur le disque)      | Bucket des justificatifs et des documents : voir ci-dessous |
+| `WEB_DIST_DIR`    | `../web/dist`                | Front statique servi par le serveur                         |
+| `NODE_ENV`        | —                            | `production` : cookie `Secure`, `trustProxy`, logs JSON     |
+| `CORS_ORIGINS`    | — (vide : pas de CORS)       | Origines cross-origin autorisées, séparées par des virgules |
+| `VAPID_*`, `FCM`  | — (push désactivé)           | Push : voir [docs/notifications.md](docs/notifications.md)  |
 
 ### Stockage des fichiers (Cloudflare R2 ou Amazon S3)
 
@@ -266,10 +273,10 @@ la confiance est totale et assumée. Le reste de cette section dit précisément
   jamais mis en cache par le client (`Cache-Control: private, no-store`, `NetworkOnly` côté service
   worker), supprimés avec la dépense — du bucket **et** du volume, puisqu'après une bascule on ne
   sait plus lequel des deux les porte. La déconnexion vide les caches `sharemate-*` de l'appareil.
-- **Bucket** : il n'est jamais public, ni pour les justificatifs ni pour les documents. Un contenu
-  se demande toujours par l'identifiant de la ressource applicative qui le porte — la dépense pour
-  un justificatif, le document pour un fichier du dossier — jamais par la clé de l'objet, qui ne
-  sort pas du serveur. L'API vérifie le cercle, puis redirige vers une **URL signée de cinq
+- **Bucket** : il n'est jamais public. Un contenu se demande toujours par l'identifiant de la
+  ressource applicative qui le porte — la dépense pour un justificatif, le document pour un fichier
+  du dossier, le message pour une pièce jointe — jamais par la clé de l'objet, qui ne sort pas du
+  serveur. L'API vérifie le cercle, puis redirige vers une **URL signée de cinq
   minutes**, jamais mise en cache (`Cache-Control: private, no-store`). Recopiée, elle expire ; un
   lien de bucket ouvert, lui, n'expire jamais. Le type MIME servi est déduit de l'extension
   acceptée et jamais celui annoncé par le client, et ni HTML, ni SVG, ni archive, ni exécutable
@@ -310,9 +317,10 @@ la confiance est totale et assumée. Le reste de cette section dit précisément
 - **`trustProxy` fait confiance à toute la chaîne `X-Forwarded-For`.** Si le service devient
   joignable autrement que par le proxy Railway, un client peut forger l'en-tête et contourner le
   plafond par IP. Tant que l'accès passe exclusivement par le proxy, le risque est nul.
-- **Pas de quota de stockage par membre** : 10 Mo par justificatif et 20 téléversements par minute,
-  mais rien ne borne le total. Les documents, eux, sont bornés par équipement (500 Mo) — un membre
-  peut néanmoins remplir ce quota et empêcher les autres de déposer quoi que ce soit.
+- **Pas de quota de stockage par membre** : 10 Mo par justificatif, 25 Mo par pièce jointe et 20
+  téléversements par minute, mais rien ne borne leur total. Seuls les documents sont bornés par
+  équipement (500 Mo) — et un membre peut y remplir ce quota, empêchant les autres de déposer quoi
+  que ce soit. Une discussion nourrie de photos, elle, fait grossir le bucket sans plafond.
 
 ## Déploiement sur Railway
 

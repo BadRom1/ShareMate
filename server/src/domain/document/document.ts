@@ -1,5 +1,7 @@
 import { DomainError } from '../shared/domain-error.js';
 import { assertValidDate } from '../shared/iso-date.js';
+import { MAX_STORED_FILE_BYTES, validateStoredFile } from '../shared/stored-file.js';
+import type { StoredFile as StoredFileProps } from '../shared/stored-file.js';
 
 /** Familles d'un dossier d'équipement, dans l'ordre d'affichage. Fixes, comme celles des dépenses. */
 export type DocumentCategory = 'MANUAL' | 'INSURANCE' | 'PURCHASE' | 'MAINTENANCE' | 'PHOTO' | 'OTHER';
@@ -13,17 +15,9 @@ export const DOCUMENT_CATEGORIES: readonly DocumentCategory[] = [
   'OTHER',
 ];
 
-/**
- * Fichier déposé dans le stockage d'objets. `storageKey` est opaque pour le domaine : où et
- * comment l'objet est rangé ne le regarde pas, il n'en garde que la référence et ce qu'il faut
- * pour l'annoncer (nom d'origine, type, poids).
- */
-export interface StoredFile {
+/** Fichier déposé dans le stockage d'objets (voir `domain/shared/stored-file.ts`). */
+export interface StoredFile extends StoredFileProps {
   type: 'FILE';
-  storageKey: string;
-  fileName: string;
-  contentType: string;
-  sizeBytes: number;
 }
 
 /** Lien externe : ShareMate n'en stocke que l'adresse, jamais le contenu. */
@@ -51,12 +45,10 @@ export interface DocumentUpdate {
 }
 
 const MAX_NAME_LENGTH = 200;
-const MAX_FILE_NAME_LENGTH = 255;
-const MAX_CONTENT_TYPE_LENGTH = 100;
 const MAX_URL_LENGTH = 2000;
 
-/** Poids maximal d'un fichier déposé (25 Mo) : borne du domaine, doublée côté téléversement. */
-export const MAX_DOCUMENT_SIZE_BYTES = 25 * 1024 * 1024;
+/** Poids maximal d'un document déposé : celui de tout fichier stocké. */
+export const MAX_DOCUMENT_SIZE_BYTES = MAX_STORED_FILE_BYTES;
 
 /**
  * Seuls schémas qu'un lien peut porter. Un lien du dossier est rendu cliquable pour tout le
@@ -100,24 +92,7 @@ function validateContent(content: DocumentContent): DocumentContent {
   if (content.type === 'LINK') {
     return { type: 'LINK', url: normalizeDocumentUrl(content.url) };
   }
-  const storageKey = content.storageKey.trim();
-  const fileName = content.fileName.trim();
-  if (storageKey.length === 0) {
-    throw new DomainError('La référence du fichier stocké est requise.');
-  }
-  if (fileName.length === 0 || fileName.length > MAX_FILE_NAME_LENGTH) {
-    throw new DomainError(`Le nom de fichier est requis (max ${MAX_FILE_NAME_LENGTH} caractères).`);
-  }
-  if (content.contentType.trim().length === 0 || content.contentType.length > MAX_CONTENT_TYPE_LENGTH) {
-    throw new DomainError('Le type de contenu du fichier est requis.');
-  }
-  if (!Number.isInteger(content.sizeBytes) || content.sizeBytes <= 0) {
-    throw new DomainError('Le poids du fichier doit être un nombre entier d’octets strictement positif.');
-  }
-  if (content.sizeBytes > MAX_DOCUMENT_SIZE_BYTES) {
-    throw new DomainError(`Le fichier dépasse ${MAX_DOCUMENT_SIZE_BYTES / (1024 * 1024)} Mo.`);
-  }
-  return { ...content, storageKey, fileName, contentType: content.contentType.trim() };
+  return { type: 'FILE', ...validateStoredFile(content, 'le fichier stocké') };
 }
 
 /**

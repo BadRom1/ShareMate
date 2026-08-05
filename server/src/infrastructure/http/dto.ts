@@ -135,6 +135,10 @@ export function messageDto(m: Message) {
     createdAt: m.createdAt.toISOString(),
     editedAt: m.editedAt ? m.editedAt.toISOString() : null,
     parentId: m.parentId,
+    // La clé de l'objet n'en sort jamais : le contenu se lit par `/api/messages/:id/attachment`.
+    attachment: m.attachment
+      ? { fileName: m.attachment.fileName, contentType: m.attachment.contentType, sizeBytes: m.attachment.sizeBytes }
+      : null,
   };
 }
 

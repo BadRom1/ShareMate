@@ -117,6 +117,12 @@ export interface MessageRepository {
   findById(id: string): Promise<Message | null>;
   /** Messages d'un fil, triés du plus ancien au plus récent. */
   findByThreadId(threadId: string): Promise<Message[]>;
+  /**
+   * Messages de tous les fils d'un équipement, du plus ancien au plus récent. Sert à retrouver
+   * les pièces jointes qu'emporte la suppression de l'équipement : sans cette question, il
+   * faudrait parcourir les fils un à un pour ne récupérer que des clés d'objets à purger.
+   */
+  findByEquipmentId(equipmentId: string): Promise<Message[]>;
   countByThreadId(threadId: string): Promise<number>;
   save(message: Message): Promise<void>;
   delete(id: string): Promise<void>;

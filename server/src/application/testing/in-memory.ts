@@ -200,12 +200,20 @@ export class InMemoryThreadRepository implements ThreadRepository {
 
 export class InMemoryMessageRepository implements MessageRepository {
   private items = new Map<string, Message>();
+  /** Fils connus, pour répondre « les messages de cet équipement » comme le ferait la jointure SQL. */
+  constructor(private readonly threads?: InMemoryThreadRepository) {}
   async findById(id: string) {
     return this.items.get(id) ?? null;
   }
   async findByThreadId(threadId: string) {
     return [...this.items.values()]
       .filter((m) => m.threadId === threadId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  }
+  async findByEquipmentId(equipmentId: string) {
+    const threadIds = new Set((await this.threads?.findByEquipmentId(equipmentId))?.map((t) => t.id) ?? []);
+    return [...this.items.values()]
+      .filter((m) => threadIds.has(m.threadId))
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   }
   async countByThreadId(threadId: string) {

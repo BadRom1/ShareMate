@@ -51,7 +51,7 @@ export default defineConfig({
             // dans le service worker généré, où une constante déclarée ici n'existerait pas.
             urlPattern: ({ url, request }) =>
               url.pathname.startsWith('/api/') &&
-              !/^\/api\/documents\/[^/]+\/content$/.test(url.pathname) &&
+              !/^\/api\/(documents\/[^/]+\/content|messages\/[^/]+\/attachment)$/.test(url.pathname) &&
               request.method === 'GET',
             handler: 'NetworkFirst',
             options: {
@@ -62,13 +62,14 @@ export default defineConfig({
             },
           },
           {
-            // Justificatifs et contenus de documents : jamais conservés sur l'appareil. Leur
+            // Justificatifs, contenus de documents et pièces jointes : jamais conservés sur l'appareil. Leur
             // lecture dépend du cercle de l'équipement, contrôlé à chaque requête côté serveur ;
             // un cache les rendrait à un droit révoqué, et les laisserait lisibles après une
             // déconnexion. Depuis le bucket, la réponse est en outre une redirection signée dont
             // l'URL expire : la rejouer ne donnerait qu'un refus.
             urlPattern: ({ url }) =>
-              url.pathname.startsWith('/uploads/') || /^\/api\/documents\/[^/]+\/content$/.test(url.pathname),
+              url.pathname.startsWith('/uploads/') ||
+              /^\/api\/(documents\/[^/]+\/content|messages\/[^/]+\/attachment)$/.test(url.pathname),
             handler: 'NetworkOnly',
           },
         ],

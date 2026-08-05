@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DOCUMENT_PREFIX, DocumentStorage, createDocumentStorage } from './document-storage.js';
-import { FileObjectStore } from './object-store.js';
+import { DOCUMENT_PREFIX, RICH_CONTENT_TYPES, createDocumentStorage } from './document-storage.js';
+import type { DocumentStorage } from './document-storage.js';
+import { FileObjectStore, MediaStorage } from './object-store.js';
 
 /** Consomme un flux jusqu'au bout : un flux laissé ouvert survivrait au nettoyage du répertoire. */
 async function lire(stream: NodeJS.ReadableStream): Promise<string> {
@@ -17,7 +18,10 @@ let stockage: DocumentStorage;
 
 beforeEach(() => {
   répertoire = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-documents-'));
-  stockage = new DocumentStorage(new FileObjectStore(répertoire, DOCUMENT_PREFIX));
+  stockage = new MediaStorage(new FileObjectStore(répertoire, DOCUMENT_PREFIX), {
+    keyPrefix: DOCUMENT_PREFIX,
+    contentTypes: RICH_CONTENT_TYPES,
+  });
 });
 
 afterEach(() => {
@@ -92,8 +96,8 @@ describe('createDocumentStorage', () => {
   };
 
   it('choisit le bucket dès que ses variables sont là, le disque sinon', () => {
-    expect(createDocumentStorage(BUCKET, répertoire)).toBeInstanceOf(DocumentStorage);
-    expect(createDocumentStorage({}, répertoire)).toBeInstanceOf(DocumentStorage);
+    expect(createDocumentStorage(BUCKET, répertoire)).toBeInstanceOf(MediaStorage);
+    expect(createDocumentStorage({}, répertoire)).toBeInstanceOf(MediaStorage);
   });
 
   it('sans bucket ni répertoire, il n’y a pas de stockage', () => {

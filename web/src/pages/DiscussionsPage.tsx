@@ -6,6 +6,7 @@ import { pickInitialEquipmentId, setLastEquipmentId } from '../lastEquipment';
 import { clearErrors, errorMessage, firstError, useApiResource } from '../useApiResource';
 import { IconBack, IconChat, IconCheck, IconClose, IconEdit, IconPlus, IconSend, IconTrash } from '../components/icons';
 import { MessageTree } from './discussions/MessageTree';
+import { AttachmentDraft, AttachmentField } from './discussions/AttachmentField';
 
 interface Props {
   members: Member[];
@@ -33,6 +34,8 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
   const [renameDraft, setRenameDraft] = useState('');
 
   const [draft, setDraft] = useState('');
+  /** Fichier retenu pour le prochain message, tant qu'il n'est pas parti. */
+  const [file, setFile] = useState<File | null>(null);
 
   const equipmentsResource = useApiResource(
     useCallback(async () => {
@@ -138,12 +141,16 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
   async function sendMessage(event: React.FormEvent) {
     event.preventDefault();
     const body = draft.trim();
-    if (!body || !openThreadId) return;
+    // Un fichier seul fait un message : le texte n'est exigé que sans lui.
+    if ((!body && !file) || !openThreadId) return;
     setBusy(true);
     setActionError(null);
     try {
-      await api.postMessage(openThreadId, body);
+      // Un fichier seul fait un message : le corps peut alors partir vide.
+      if (file) await api.postMessageWithFile(openThreadId, file, { body });
+      else await api.postMessage(openThreadId, body);
       setDraft('');
+      setFile(null);
       await Promise.all([messagesResource.reload(), threadsResource.reload()]);
     } catch (e) {
       fail(e);
@@ -152,12 +159,13 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     }
   }
 
-  async function sendReply(parentId: string, body: string) {
+  async function sendReply(parentId: string, body: string, file: File | null) {
     if (!openThreadId) return;
     setBusy(true);
     setActionError(null);
     try {
-      await api.postMessage(openThreadId, body, parentId);
+      if (file) await api.postMessageWithFile(openThreadId, file, { body, parentId });
+      else await api.postMessage(openThreadId, body, parentId);
       await Promise.all([messagesResource.reload(), threadsResource.reload()]);
     } catch (e) {
       fail(e);
@@ -426,6 +434,7 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
 
         {inCircle ? (
           <form onSubmit={sendMessage} className="message-composer">
+            {file && <AttachmentDraft file={file} onClear={() => setFile(null)} />}
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -433,10 +442,11 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
               rows={2}
               maxLength={4000}
             />
+            <AttachmentField onPick={setFile} disabled={busy} label="Joindre un fichier au message" />
             <button
               type="submit"
               className="icon-btn icon-primary"
-              disabled={busy || draft.trim().length === 0}
+              disabled={busy || (draft.trim().length === 0 && !file)}
               title="Envoyer"
               aria-label="Envoyer"
             >

@@ -669,6 +669,10 @@ interface MessageRow {
   created_at: string;
   edited_at: string | null;
   parent_id: string | null;
+  attachment_key: string | null;
+  attachment_name: string | null;
+  attachment_type: string | null;
+  attachment_size: number | null;
 }
 
 export class SqliteMessageRepository implements MessageRepository {
@@ -683,6 +687,15 @@ export class SqliteMessageRepository implements MessageRepository {
       createdAt: new Date(row.created_at),
       editedAt: row.edited_at ? new Date(row.edited_at) : null,
       parentId: row.parent_id,
+      // Les quatre colonnes vont ensemble : la clé présente, les trois autres le sont aussi.
+      attachment: row.attachment_key
+        ? {
+            storageKey: row.attachment_key,
+            fileName: row.attachment_name!,
+            contentType: row.attachment_type!,
+            sizeBytes: row.attachment_size!,
+          }
+        : null,
     });
   }
 
@@ -698,6 +711,17 @@ export class SqliteMessageRepository implements MessageRepository {
     return rows.map((r) => this.toEntity(r));
   }
 
+  async findByEquipmentId(equipmentId: string): Promise<Message[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT messages.* FROM messages
+         JOIN threads ON threads.id = messages.thread_id
+         WHERE threads.equipment_id = ? ORDER BY messages.created_at`,
+      )
+      .all(equipmentId) as MessageRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
   async countByThreadId(threadId: string): Promise<number> {
     const row = this.db.prepare('SELECT COUNT(*) AS count FROM messages WHERE thread_id = ?').get(threadId) as {
       count: number;
@@ -708,8 +732,9 @@ export class SqliteMessageRepository implements MessageRepository {
   async save(message: Message): Promise<void> {
     this.db
       .prepare(
-        `INSERT INTO messages (id, thread_id, author_id, body, created_at, edited_at, parent_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO messages (id, thread_id, author_id, body, created_at, edited_at, parent_id,
+           attachment_key, attachment_name, attachment_type, attachment_size)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET body = excluded.body, edited_at = excluded.edited_at`,
       )
       .run(
@@ -720,6 +745,10 @@ export class SqliteMessageRepository implements MessageRepository {
         message.createdAt.toISOString(),
         message.editedAt ? message.editedAt.toISOString() : null,
         message.parentId,
+        message.attachment?.storageKey ?? null,
+        message.attachment?.fileName ?? null,
+        message.attachment?.contentType ?? null,
+        message.attachment?.sizeBytes ?? null,
       );
   }
 

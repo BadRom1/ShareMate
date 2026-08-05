@@ -70,6 +70,8 @@ import { createReceiptStorage } from '../tech/receipt-storage.js';
 import type { ReceiptStorage } from '../tech/receipt-storage.js';
 import { createDocumentStorage } from '../tech/document-storage.js';
 import type { DocumentStorage } from '../tech/document-storage.js';
+import { createAttachmentStorage } from '../tech/attachment-storage.js';
+import type { AttachmentStorage } from '../tech/attachment-storage.js';
 import { MAX_DOCUMENT_SIZE_BYTES } from '../../domain/document/document.js';
 
 export interface AppDependencies {
@@ -110,6 +112,8 @@ export interface AppDependencies {
    * sont gérés). Le bucket S3/R2, lui, est lu dans `objectStorageEnv`.
    */
   documentsDir?: string | null;
+  /** Répertoire de repli des pièces jointes (null = les messages n'en acceptent pas). */
+  attachmentsDir?: string | null;
   /** Environnement où lire la configuration du bucket S3/R2 (`process.env` en production). */
   objectStorageEnv?: NodeJS.ProcessEnv;
   /**
@@ -119,6 +123,7 @@ export interface AppDependencies {
    */
   receiptStorage?: ReceiptStorage;
   documentStorage?: DocumentStorage;
+  attachmentStorage?: AttachmentStorage;
   /** Répertoire des fichiers statiques du front (null = API seule). */
   webDistDir?: string | null;
   /**
@@ -233,6 +238,8 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   const receiptStorage =
     deps.receiptStorage ?? createReceiptStorage(objectStorageEnv, deps.uploadsDir ?? null) ?? undefined;
   const documentStorage = deps.documentStorage ?? createDocumentStorage(objectStorageEnv, deps.documentsDir ?? null);
+  const attachmentStorage =
+    deps.attachmentStorage ?? createAttachmentStorage(objectStorageEnv, deps.attachmentsDir ?? null);
   // Le journal des gestes sensibles part dans les logs du serveur : hors de portée des membres
   // concernés, contrairement aux notifications qu'ils peuvent effacer.
   const auditLogger: AuditLogger = {
@@ -248,6 +255,8 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     receiptStorage,
     deps.documents,
     documentStorage ?? undefined,
+    deps.messages,
+    attachmentStorage ?? undefined,
   );
   const reservationService = new ReservationService(
     deps.reservations,
@@ -282,6 +291,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.idGenerator,
     deps.clock,
     notificationService,
+    attachmentStorage ?? undefined,
   );
   const checklistService = new ChecklistService(
     deps.checklists,
@@ -389,7 +399,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     await protectedScope.register(reservationRoutes, { reservationService });
     await protectedScope.register(usageRoutes, { usageService });
     await protectedScope.register(expenseRoutes, { expenseService });
-    await protectedScope.register(discussionRoutes, { discussionService });
+    await protectedScope.register(discussionRoutes, {
+      discussionService,
+      storage: attachmentStorage ?? undefined,
+      rateLimits,
+    });
     await protectedScope.register(checklistRoutes, { checklistService });
     await protectedScope.register(documentRoutes, {
       documentService,

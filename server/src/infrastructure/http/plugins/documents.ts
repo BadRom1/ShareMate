@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import path from 'node:path';
 import { DOCUMENT_CATEGORIES, MAX_DOCUMENT_SIZE_BYTES } from '../../../domain/document/document.js';
 import type { DocumentCategory } from '../../../domain/document/document.js';
@@ -7,6 +7,7 @@ import { documentNotFound } from '../../../application/document-access.js';
 import type { DocumentService } from '../../../application/document-service.js';
 import type { DocumentStorage } from '../../tech/document-storage.js';
 import { documentDto } from '../dto.js';
+import { enumField, readUpload, requiredField } from '../multipart.js';
 import { limit } from '../rate-limit.js';
 import type { RateLimits } from '../rate-limit.js';
 import { enumOf, id, idParams, nullableText, object, text } from '../schema.js';
@@ -24,46 +25,6 @@ const name = nullableText(200);
 const category = enumOf(DOCUMENT_CATEGORIES);
 /** Même borne que le domaine : le refus vient du schéma avant d'atteindre `new URL`. */
 const url = text(2000);
-
-/** Un téléversement porte ses métadonnées en champs multipart, hors de portée d'un schéma JSON. */
-interface MultipartUpload {
-  fields: Record<string, string>;
-  file: { filename: string; content: Buffer } | null;
-}
-
-/**
- * Lit le corps multipart en entier — champs et fichier, dans n'importe quel ordre. `request.file()`
- * n'expose que les champs reçus **avant** le fichier : l'ordre des parties dépendrait alors du
- * client, et un formulaire réordonné perdrait silencieusement la catégorie.
- */
-async function readUpload(request: FastifyRequest): Promise<MultipartUpload> {
-  const upload: MultipartUpload = { fields: {}, file: null };
-  for await (const part of request.parts({ limits: { fileSize: MAX_DOCUMENT_SIZE_BYTES, files: 1, fields: 10 } })) {
-    if (part.type === 'file') {
-      upload.file = { filename: part.filename, content: await part.toBuffer() };
-    } else if (typeof part.value === 'string' && part.value.length <= 2000) {
-      upload.fields[part.fieldname] = part.value;
-    }
-  }
-  return upload;
-}
-
-function requiredField(fields: Record<string, string>, field: string): string {
-  const value = fields[field]?.trim();
-  if (!value) {
-    throw new DomainError(`Le champ « ${field} » est obligatoire.`);
-  }
-  return value;
-}
-
-/** Les champs multipart échappent au schéma JSON : l'énumération est vérifiée à la main. */
-function requiredCategory(fields: Record<string, string>): DocumentCategory {
-  const value = requiredField(fields, 'category') as DocumentCategory;
-  if (!DOCUMENT_CATEGORIES.includes(value)) {
-    throw new DomainError(`Le champ « category » n’accepte que : ${DOCUMENT_CATEGORIES.join(', ')}`);
-  }
-  return value;
-}
 
 export const documentRoutes: FastifyPluginAsync<DocumentRoutesOptions> = async (
   app,
@@ -121,7 +82,7 @@ export const documentRoutes: FastifyPluginAsync<DocumentRoutesOptions> = async (
   if (!storage) return;
 
   app.post('/api/documents/file', { config: { rateLimit: limit(rateLimits.sensitive) } }, async (request, reply) => {
-    const { fields, file } = await readUpload(request);
+    const { fields, file } = await readUpload(request, MAX_DOCUMENT_SIZE_BYTES);
     if (!file) {
       return reply.status(400).send({ error: 'Aucun fichier reçu.' });
     }
@@ -132,7 +93,7 @@ export const documentRoutes: FastifyPluginAsync<DocumentRoutesOptions> = async (
         .send({ error: `Format non accepté. Formats gérés : ${storage.extensions().join(', ')}.` });
     }
     const equipmentId = requiredField(fields, 'equipmentId');
-    const category = requiredCategory(fields);
+    const category = enumField(fields, 'category', DOCUMENT_CATEGORIES);
     // Cercle et place disponible d'abord : refuser après l'écriture laisserait dans le bucket un
     // objet que plus aucun document ne nommerait, c'est-à-dire hors de portée de la purge.
     await documentService.assertCanStore(equipmentId, request.authMember.id, file.content.length);

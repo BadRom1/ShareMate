@@ -1,4 +1,5 @@
 import { Message } from '../domain/discussion/message.js';
+import type { MessageAttachment } from '../domain/discussion/message.js';
 import { Thread } from '../domain/discussion/thread.js';
 import { AuthorizationError, DomainError, NotFoundError } from '../domain/shared/domain-error.js';
 import { equipmentForMember } from './equipment-access.js';
@@ -10,6 +11,7 @@ import type {
   MemberRepository,
   MessageRepository,
   Notifier,
+  ObjectStorage,
   ThreadRepository,
 } from './ports.js';
 
@@ -27,6 +29,8 @@ export interface PostMessageInput {
   body: string;
   /** Message auquel on répond (crée un sous-fil). Absent = message racine du fil. */
   parentId?: string | null;
+  /** Fichier joint, déjà déposé dans le stockage. Un message en porte au plus un. */
+  attachment?: MessageAttachment | null;
 }
 
 /** Fil + nombre de messages, pour l'affichage de la liste des fils. */
@@ -45,6 +49,8 @@ export class DiscussionService {
     private readonly idGenerator: IdGenerator,
     private readonly clock: Clock,
     private readonly notifier: Notifier,
+    /** Absent, les messages n'acceptent pas de pièce jointe et il n'y a rien à purger. */
+    private readonly attachments?: ObjectStorage,
   ) {}
 
   // --- Fils ---
@@ -102,10 +108,12 @@ export class DiscussionService {
     const thread = await this.getThreadForMember(id, requesterId);
     this.assertAuthor(thread.authorId, requesterId, 'Seul l’auteur peut supprimer ce fil.');
     // Supprime d'abord les messages (le cascade SQL couvre aussi, mais on reste cohérent en in-memory).
-    for (const message of await this.messages.findByThreadId(id)) {
+    const doomed = await this.messages.findByThreadId(id);
+    for (const message of doomed) {
       await this.messages.delete(message.id);
     }
     await this.threads.delete(id);
+    await this.purgeAttachments(doomed);
   }
 
   // --- Messages ---
@@ -128,6 +136,7 @@ export class DiscussionService {
       body: input.body,
       createdAt: now,
       parentId,
+      attachment: input.attachment ?? null,
     });
     await this.messages.save(message);
     await this.threads.save(thread.touch(now));
@@ -135,10 +144,28 @@ export class DiscussionService {
     const author = await this.authorName(input.authorId);
     await this.notifyCircle(equipment, input.authorId, {
       title: `💬 ${equipment.name} — ${thread.title}`,
-      body: parentId ? `${author} a répondu : ${excerpt(message.body)}` : `${author} : ${excerpt(message.body)}`,
+      body: parentId ? `${author} a répondu : ${excerpt(message)}` : `${author} : ${excerpt(message)}`,
       thread: thread.id,
     });
     return message;
+  }
+
+  /**
+   * Autorise une pièce jointe **avant** que l'octet n'atteigne le stockage : le demandeur doit
+   * appartenir au cercle du fil. Refuser après coup laisserait dans le bucket un objet que plus
+   * aucun message ne nommerait, c'est-à-dire hors de portée de la purge.
+   */
+  async assertCanAttach(threadId: string, requesterId: string): Promise<void> {
+    await this.getThreadForMember(threadId, requesterId);
+  }
+
+  /**
+   * Message demandé, une fois le demandeur reconnu dans le cercle. L'adapter HTTP s'en sert pour
+   * autoriser la lecture d'une pièce jointe avant de la servir : lui seul sait où l'objet est
+   * rangé, la règle d'accès reste ici.
+   */
+  async messageForMember(id: string, requesterId: string): Promise<Message> {
+    return this.getMessageForMember(id, requesterId);
   }
 
   async listMessages(threadId: string, requesterId: string): Promise<Message[]> {
@@ -161,6 +188,18 @@ export class DiscussionService {
     await this.deleteWithReplies(message.threadId, id);
   }
 
+  /**
+   * Retire du stockage les fichiers des messages effacés. Une clé n'appartient qu'à un message —
+   * elle est produite à son dépôt et ne sort jamais du serveur — donc rien d'autre ne peut la
+   * nommer : il n'y a pas de survivant à chercher avant de purger.
+   */
+  private async purgeAttachments(deleted: readonly Message[]): Promise<void> {
+    if (!this.attachments) return;
+    for (const message of deleted) {
+      if (message.storageKey) await this.attachments.delete(message.storageKey);
+    }
+  }
+
   /** Supprime un message et, récursivement, tous les messages qui lui répondent. */
   private async deleteWithReplies(threadId: string, id: string): Promise<void> {
     const all = await this.messages.findByThreadId(threadId);
@@ -180,9 +219,11 @@ export class DiscussionService {
       stack.push(...(childrenOf.get(current) ?? []));
     }
     // Supprime les descendants avant le parent pour rester cohérent.
+    const doomed = new Set(toDelete);
     for (const messageId of toDelete.reverse()) {
       await this.messages.delete(messageId);
     }
+    await this.purgeAttachments(all.filter((m) => doomed.has(m.id)));
   }
 
   // --- Helpers ---
@@ -252,8 +293,12 @@ export class DiscussionService {
   }
 }
 
-/** Aperçu du corps du message pour le texte de la notification. */
-function excerpt(body: string, max = 120): string {
-  const oneLine = body.replace(/\s+/g, ' ').trim();
-  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
+/**
+ * Aperçu du message pour le texte de la notification. Un message sans corps n'est pas vide pour
+ * autant : il porte un fichier, qu'on annonce par son nom plutôt que par du silence.
+ */
+function excerpt(message: Message, max = 120): string {
+  const oneLine = message.body.replace(/\s+/g, ' ').trim();
+  const texte = oneLine.length > 0 ? oneLine : `📎 ${message.attachment?.fileName ?? 'fichier'}`;
+  return texte.length > max ? `${texte.slice(0, max - 1)}…` : texte;
 }

@@ -208,6 +208,7 @@ export function contentDisposition(fileName: string, inline: boolean): string {
  */
 export class MediaStorage {
   private readonly ttl: number;
+  private readonly keyShape: RegExp;
 
   constructor(
     private readonly primary: ObjectStore,
@@ -215,6 +216,19 @@ export class MediaStorage {
     private readonly legacy?: ObjectStore,
   ) {
     this.ttl = policy.signedUrlTtlSeconds ?? 300;
+    // Forme exacte de ce que `save` produit. Une clé qui ne la respecte pas n'atteint aucun
+    // magasin : la traversée de répertoire est fermée par construction, pas par filtrage.
+    this.keyShape = new RegExp(
+      `^${policy.keyPrefix}[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}` +
+        `\\.(${Object.keys(policy.contentTypes)
+          .map((extension) => extension.slice(1))
+          .join('|')})$`,
+    );
+  }
+
+  /** La clé a-t-elle la forme que ce dépôt produit ? */
+  knows(key: string): boolean {
+    return this.keyShape.test(key);
   }
 
   /** Extension (avec le point) acceptée au dépôt ; la casse n'entre pas en compte. */
@@ -249,8 +263,8 @@ export class MediaStorage {
 
   /** Contenu prêt à être servi, ou `null` si aucun magasin ne connaît cette clé. */
   async open(key: string, fileName: string): Promise<MediaDelivery | null> {
+    if (!this.knows(key)) return null;
     const extension = path.extname(key).toLowerCase();
-    if (!(extension in this.policy.contentTypes)) return null;
     const contentType = this.contentType(extension);
     const disposition = contentDisposition(fileName, this.policy.contentTypes[extension]!.inline);
 
@@ -266,6 +280,7 @@ export class MediaStorage {
 
   /** Retire l'objet des deux magasins : après une bascule, on ne sait plus lequel le porte. */
   async delete(key: string): Promise<void> {
+    if (!this.knows(key)) return;
     for (const store of this.stores()) {
       await store.remove(key);
     }

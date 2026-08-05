@@ -346,6 +346,31 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    // Pièce jointe d'un message de discussion : au plus une par message, décrite par les quatre
+    // colonnes d'un fichier stocké. Les quatre vont ensemble — une ligne n'en portant qu'une
+    // partie serait impossible à charger —, d'où l'index partiel plutôt qu'une table à part :
+    // une pièce jointe n'a pas d'existence propre, elle suit son message.
+    description: 'pièce jointe des messages',
+    apply(db) {
+      const existantes = columns(db, 'messages');
+      for (const [colonne, type] of [
+        ['attachment_key', 'TEXT'],
+        ['attachment_name', 'TEXT'],
+        ['attachment_type', 'TEXT'],
+        ['attachment_size', 'INTEGER'],
+      ] as const) {
+        if (!existantes.includes(colonne)) {
+          db.exec(`ALTER TABLE messages ADD COLUMN ${colonne} ${type};`);
+        }
+      }
+      // La purge d'un objet remonte au message qui le nomme, par cette clé.
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_messages_attachment ON messages(attachment_key)
+           WHERE attachment_key IS NOT NULL;`,
+      );
+    },
+  },
 ];
 
 /** Version de schéma attendue par ce code : rank de la dernière migration connue. */

@@ -5,10 +5,14 @@ import { DomainError, ForbiddenError } from '../domain/shared/domain-error.js';
 import { Expense } from '../domain/expense/expense.js';
 import { Money } from '../domain/shared/money.js';
 import { Document } from '../domain/document/document.js';
+import { Message } from '../domain/discussion/message.js';
+import { Thread } from '../domain/discussion/thread.js';
 import {
   CapturingNotifier,
   InMemoryDocumentRepository,
+  InMemoryMessageRepository,
   InMemoryObjectStorage,
+  InMemoryThreadRepository,
   RecordingAuditLogger,
 } from './testing/in-memory.js';
 
@@ -18,6 +22,9 @@ let notifier: CapturingNotifier;
 let audit: RecordingAuditLogger;
 let documents: InMemoryDocumentRepository;
 let objects: InMemoryObjectStorage;
+let threads: InMemoryThreadRepository;
+let messages: InMemoryMessageRepository;
+let attachments: InMemoryObjectStorage;
 
 beforeEach(async () => {
   f = await makeFixture();
@@ -25,6 +32,9 @@ beforeEach(async () => {
   audit = new RecordingAuditLogger();
   documents = new InMemoryDocumentRepository();
   objects = new InMemoryObjectStorage();
+  threads = new InMemoryThreadRepository();
+  messages = new InMemoryMessageRepository(threads);
+  attachments = new InMemoryObjectStorage();
   service = new EquipmentService(
     f.equipments,
     f.members,
@@ -35,6 +45,8 @@ beforeEach(async () => {
     f.receipts,
     documents,
     objects,
+    messages,
+    attachments,
   );
 });
 
@@ -154,6 +166,29 @@ describe('EquipmentService', () => {
     );
     await service.delete('e1', 'm1');
     expect(objects.keys.has(storageKey)).toBe(false);
+  });
+
+  it('purge les pièces jointes des discussions emportées par la suppression', async () => {
+    const storageKey = 'attachments/8f14e45f-ceea-467a-a3f6-9b1f3e2c7d40.png';
+    attachments.add(storageKey);
+    await threads.save(
+      Thread.create({ id: 't1', equipmentId: 'e1', authorId: 'm1', title: 'Panne', createdAt: new Date('2026-07-01') }),
+    );
+    await messages.save(
+      Message.create({
+        id: 'msg1',
+        threadId: 't1',
+        authorId: 'm1',
+        body: 'Regardez',
+        createdAt: new Date('2026-07-01'),
+        attachment: { storageKey, fileName: 'panne.png', contentType: 'image/png', sizeBytes: 1000 },
+      }),
+    );
+
+    await service.delete('e1', 'm1');
+
+    // La cascade efface fils et messages ; les objets, eux, n'ont que cette purge.
+    expect(attachments.keys.has(storageKey)).toBe(false);
   });
 
   it('ne liste que les équipements du cercle du demandeur', async () => {

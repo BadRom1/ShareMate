@@ -3,6 +3,8 @@ import { openDatabase } from './database.js';
 import {
   SqliteDocumentRepository,
   SqliteEquipmentRepository,
+  SqliteMessageRepository,
+  SqliteThreadRepository,
   SqliteExpenseRepository,
   SqliteMemberRepository,
   SqliteNotificationRepository,
@@ -13,6 +15,8 @@ import {
 import {
   InMemoryDocumentRepository,
   InMemoryEquipmentRepository,
+  InMemoryMessageRepository,
+  InMemoryThreadRepository,
   InMemoryExpenseRepository,
   InMemoryMemberRepository,
   InMemoryNotificationRepository,
@@ -24,6 +28,8 @@ import { NOTIFICATION_PAGE_SIZE } from '../../../application/ports.js';
 import type {
   DocumentRepository,
   EquipmentRepository,
+  MessageRepository,
+  ThreadRepository,
   ExpenseRepository,
   MemberRepository,
   NotificationRepository,
@@ -37,6 +43,8 @@ import { Reservation } from '../../../domain/reservation/reservation.js';
 import { UsageRecord } from '../../../domain/usage/usage-record.js';
 import { Expense } from '../../../domain/expense/expense.js';
 import { Document } from '../../../domain/document/document.js';
+import { Message } from '../../../domain/discussion/message.js';
+import { Thread } from '../../../domain/discussion/thread.js';
 import { Reimbursement } from '../../../domain/expense/reimbursement.js';
 import { Notification } from '../../../domain/notification/notification.js';
 import { Money } from '../../../domain/shared/money.js';
@@ -60,6 +68,8 @@ interface Dépôts {
   expenses: ExpenseRepository;
   reimbursements: ReimbursementRepository;
   documents: DocumentRepository;
+  threads: ThreadRepository;
+  messages: MessageRepository;
   notifications: NotificationRepository;
 }
 
@@ -76,6 +86,8 @@ const IMPLÉMENTATIONS: { nom: string; ouvrir: () => Dépôts }[] = [
         expenses: new SqliteExpenseRepository(db),
         reimbursements: new SqliteReimbursementRepository(db),
         documents: new SqliteDocumentRepository(db),
+        threads: new SqliteThreadRepository(db),
+        messages: new SqliteMessageRepository(db),
         notifications: new SqliteNotificationRepository(db),
       };
     },
@@ -90,6 +102,12 @@ const IMPLÉMENTATIONS: { nom: string; ouvrir: () => Dépôts }[] = [
       expenses: new InMemoryExpenseRepository(),
       reimbursements: new InMemoryReimbursementRepository(),
       documents: new InMemoryDocumentRepository(),
+      ...(() => {
+        // Le double doit répondre « les messages de cet équipement » comme le fait la jointure
+        // SQL : il lui faut donc connaître les fils.
+        const threads = new InMemoryThreadRepository();
+        return { threads, messages: new InMemoryMessageRepository(threads) };
+      })(),
       notifications: new InMemoryNotificationRepository(),
     }),
   },
@@ -269,6 +287,31 @@ describe.each(IMPLÉMENTATIONS)('Contrat des ports — $nom', ({ ouvrir }) => {
     expect((await dépôts.documents.findByStorageKey('documents/a.pdf')).map((d) => d.id).sort()).toEqual(['d1', 'd2']);
     // Un lien ne nomme aucun objet : il ne doit jamais remonter par cette question.
     expect(await dépôts.documents.findByStorageKey('documents/inconnu.pdf')).toEqual([]);
+  });
+
+  it('rend les messages d’un équipement, tous fils confondus, du plus ancien au plus récent', async () => {
+    for (const [id, equipmentId, quand] of [
+      ['t1', 'e2', '2026-01-01T00:00:00.000Z'],
+      ['t2', 'e2', '2026-01-02T00:00:00.000Z'],
+      ['t3', 'e1', '2026-01-03T00:00:00.000Z'],
+    ] as const) {
+      await dépôts.threads.save(
+        Thread.create({ id, equipmentId, authorId: 'm1', title: `Fil ${id}`, createdAt: new Date(quand) }),
+      );
+    }
+    for (const [id, threadId, quand] of [
+      ['g1', 't2', '2026-03-01T00:00:00.000Z'],
+      ['g2', 't1', '2026-02-01T00:00:00.000Z'],
+      ['g3', 't3', '2026-01-15T00:00:00.000Z'],
+    ] as const) {
+      await dépôts.messages.save(
+        Message.create({ id, threadId, authorId: 'm1', body: `Message ${id}`, createdAt: new Date(quand) }),
+      );
+    }
+
+    expect((await dépôts.messages.findByEquipmentId('e2')).map((m) => m.id)).toEqual(['g2', 'g1']);
+    expect((await dépôts.messages.findByEquipmentId('e1')).map((m) => m.id)).toEqual(['g3']);
+    expect(await dépôts.messages.findByEquipmentId('e3')).toEqual([]);
   });
 
   it('rend les notifications de la plus récente à la plus ancienne, plafonnées sans `limit`', async () => {

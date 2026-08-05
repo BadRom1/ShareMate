@@ -226,3 +226,12 @@ export function IconFolder(props: IconProps) {
     </svg>
   );
 }
+
+/** Trombone (joindre un fichier à un message). */
+export function IconPaperclip(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M21 12.5 12.6 21a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8" />
+    </svg>
+  );
+}
