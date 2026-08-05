@@ -35,9 +35,23 @@ if (!bucket) {
   );
   process.exit(1);
 }
-if (!fs.existsSync(uploadsDir)) {
-  console.log(`Rien à transférer : ${uploadsDir} n’existe pas.`);
-  process.exit(0);
+/**
+ * Contenu du répertoire, chaque entrée sachant déjà si elle est un fichier : `withFileTypes` le
+ * tient de la lecture du répertoire elle-même.
+ *
+ * Ni `existsSync` avant la lecture, ni `statSync` avant chaque copie — demander au disque si
+ * quelque chose est là, puis agir en supposant que la réponse tient encore, c'est poser une
+ * question dont la réponse peut changer entre les deux appels. On lit, et l'absence est une
+ * réponse comme une autre.
+ */
+function entréesDuRépertoire(): fs.Dirent[] {
+  try {
+    return fs.readdirSync(uploadsDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    console.log(`Rien à transférer : ${uploadsDir} n’existe pas.`);
+    process.exit(0);
+  }
 }
 
 const db = openDatabase(databasePath);
@@ -50,11 +64,12 @@ async function estRéférencé(receiptPath: string): Promise<boolean> {
   return (await expenses.findByReceiptPath(receiptPath)).length > 0;
 }
 
-for (const nom of fs.readdirSync(uploadsDir)) {
+for (const entrée of entréesDuRépertoire()) {
+  if (!entrée.isFile()) continue;
+  const nom = entrée.name;
   const receiptPath = `${RECEIPT_PREFIX}${nom}`;
   const fichier = path.join(uploadsDir, nom);
 
-  if (!fs.statSync(fichier).isFile()) continue;
   // Un fichier dont le nom n'est pas celui qu'un téléversement produit n'a rien à faire dans le
   // bucket : le stockage refuserait de le relire, il ne serait de toute façon plus servi.
   const key = receiptStorageKey(receiptPath);
