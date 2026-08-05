@@ -1327,3 +1327,239 @@ th {
 .check-add input {
   flex: 1;
 }
+
+/* --- Documents (dossier d'un équipement) --- */
+
+.doc-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.doc-head h3 {
+  margin: 0;
+  flex: 1;
+  min-width: 8rem;
+}
+
+/* Loupe posée dans le champ, sans le rétrécir. */
+.doc-search {
+  position: relative;
+  flex: 1 1 12rem;
+  min-width: 9rem;
+  display: flex;
+  align-items: center;
+}
+
+.doc-search > svg {
+  position: absolute;
+  left: 0.55rem;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.doc-search input {
+  width: 100%;
+  padding-left: 2rem;
+}
+
+/* Filtres de catégorie. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.85rem;
+}
+
+.chip {
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 0.2rem 0.7rem;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chip:hover {
+  border-color: var(--green);
+  color: var(--green-dark);
+}
+
+.chip.active {
+  background: var(--green-light);
+  border-color: var(--green);
+  color: var(--green-dark);
+  font-weight: 600;
+}
+
+.chip .count {
+  opacity: 0.65;
+  margin-left: 0.3rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.doc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.doc-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.55rem 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.doc-row:last-child {
+  border-bottom: none;
+}
+
+/* Pastille de nature : la teinte dit fichier (vert) ou lien (ardoise), d'un coup d'œil. */
+.doc-icon {
+  flex: 0 0 auto;
+  width: 2.15rem;
+  height: 2.15rem;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: var(--green-light);
+  color: var(--green-dark);
+}
+
+.doc-icon.is-link {
+  background: #eaeff7;
+  color: #3d5a8a;
+}
+
+.doc-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.doc-open:hover .doc-name {
+  color: var(--green-dark);
+  text-decoration: underline;
+}
+
+.doc-name {
+  display: block;
+  font-weight: 600;
+  font-size: 0.93rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-sub {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-sub .host {
+  color: #3d5a8a;
+}
+
+/* Renommage en ligne : seul le champ s'étire. */
+.doc-edit {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 0.25rem;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.doc-edit input {
+  flex: 1;
+  min-width: 0;
+}
+
+.doc-edit > button,
+.doc-edit > select {
+  flex: 0 0 auto;
+}
+
+/* Bascule fichier / lien, dans la modale d'ajout. */
+.nature {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  align-self: flex-start;
+}
+
+.nature button {
+  border: none;
+  background: none;
+  padding: 0.4rem 0.9rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.nature button.active {
+  background: var(--green);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* Zone de choix du fichier. */
+.dropzone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  background: none;
+  padding: 1.4rem 1rem;
+  text-align: center;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.dropzone:hover {
+  border-color: var(--green);
+  color: var(--green-dark);
+}
+
+.dropzone.filled {
+  flex-direction: row;
+  align-items: center;
+  text-align: left;
+  gap: 0.7rem;
+  padding: 0.7rem 0.85rem;
+  border-style: solid;
+  border-color: var(--green);
+  background: var(--green-light);
+  color: var(--green-dark);
+}
+
+.dropzone.filled > span {
+  min-width: 0;
+}

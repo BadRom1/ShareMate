@@ -27,6 +27,35 @@ export const CATEGORY_LABELS: Record<string, string> = {
   OTHER: 'Autre',
 };
 
+export const DOCUMENT_CATEGORY_LABELS: Record<string, string> = {
+  MANUAL: 'Manuel',
+  INSURANCE: 'Assurance',
+  PURCHASE: 'Achat & garantie',
+  MAINTENANCE: 'Entretien',
+  PHOTO: 'Photos',
+  OTHER: 'Autre',
+};
+
+/**
+ * Poids d'un fichier, à l'unité qui se lit (« 4,2 Mo » plutôt que « 4200000 octets »).
+ * Unités décimales, comme le veut le préfixe SI : un « Mo » vaut ici 10⁶ octets, pas 2²⁰.
+ */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1000) return `${bytes} o`;
+  const ko = bytes / 1000;
+  if (ko < 1000) return `${ko.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} Ko`;
+  return `${(ko / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Mo`;
+}
+
+/** Domaine d'un lien, affiché à la place du poids d'un fichier. */
+export function linkHost(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
 export function meterLabel(unit: 'HOURS' | 'KILOMETERS'): string {
   return unit === 'HOURS' ? 'h' : 'km';
 }

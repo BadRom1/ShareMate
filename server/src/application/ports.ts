@@ -10,6 +10,7 @@ import type { Message } from '../domain/discussion/message.js';
 import type { Thread } from '../domain/discussion/thread.js';
 import type { Checklist } from '../domain/checklist/checklist.js';
 import type { ChecklistItem } from '../domain/checklist/checklist-item.js';
+import type { Document } from '../domain/document/document.js';
 import type { Notification } from '../domain/notification/notification.js';
 import type { NotificationPreference } from '../domain/notification/preference.js';
 import type { NotificationType } from '../domain/notification/notification-type.js';
@@ -137,6 +138,24 @@ export interface ChecklistItemRepository {
   delete(id: string): Promise<void>;
 }
 
+export interface DocumentRepository {
+  findById(id: string): Promise<Document | null>;
+  /**
+   * Documents de l'équipement, du plus récent au plus ancien. À dépôt simultané, l'identifiant
+   * départage : sans cela l'ordre de deux documents déposés dans la même milliseconde dépendrait
+   * de l'implémentation, et le port promettrait un ordre qu'il ne tient pas.
+   */
+  findByEquipmentId(equipmentId: string): Promise<Document[]>;
+  /**
+   * Documents portant cette référence de stockage. Renvoie une liste et non un document : c'est
+   * ce qui permet à `DocumentService` de refuser un dépôt qui réutilise la référence d'un autre,
+   * et à la purge de ne supprimer un objet que lorsque plus rien ne le nomme.
+   */
+  findByStorageKey(storageKey: string): Promise<Document[]>;
+  save(document: Document): Promise<void>;
+  delete(id: string): Promise<void>;
+}
+
 /** Plafond du centre de notifications, faute de `limit` : la cloche pagine, la base non. */
 export const NOTIFICATION_PAGE_SIZE = 100;
 
@@ -223,6 +242,16 @@ export interface SessionRepository {
 export interface ReceiptStorage {
   /** Supprime le justificatif ; sans effet s'il a déjà disparu (purge idempotente). */
   delete(receiptPath: string): Promise<void>;
+}
+
+/**
+ * Port de stockage des documents d'équipement. Même partage des rôles que pour les justificatifs :
+ * la couche application décide quel objet devient orphelin, l'infrastructure sait seule où il est
+ * rangé (disque local en développement, bucket S3/R2 en production) et comment il est servi.
+ */
+export interface ObjectStorage {
+  /** Supprime l'objet ; sans effet s'il a déjà disparu (purge idempotente). */
+  delete(storageKey: string): Promise<void>;
 }
 
 /** Ports techniques. */

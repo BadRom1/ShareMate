@@ -31,6 +31,14 @@ partage des frais façon Tricount.
   points et la supprimer entièrement. Chaque coche garde la trace de qui l'a validée et quand, et le
   créateur reste affiché. Avancement affiché (`3/7`) et remise à zéro en un geste pour réutiliser la
   checklist à la prochaine sortie.
+- **Documents** : un dossier par équipement, où le cercle range ce qui s'y rattache — manuel
+  d'utilisation, certificat d'assurance, facture d'achat, photos — sous forme de **fichiers
+  déposés** ou de **liens externes**, dans une même liste. Chaque document porte une catégorie
+  choisie à la main (Manuel, Assurance, Achat & garantie, Entretien, Photos, Autre) et se
+  renomme. Comme une checklist, un document **appartient au cercle et non à son déposant** : tout
+  membre peut le renommer, le reclasser et le supprimer, et le nom du déposant reste affiché. Les
+  fichiers vivent dans un **stockage d'objets S3/R2** (repli sur le disque si aucun bucket n'est
+  configuré) ; la base n'en garde que les métadonnées.
 - **Discussions** : fils de discussion par équipement, avec sous-fils de réponses. Le fil et le
   message se renomment, s'éditent et se suppriment **par leur auteur seul** ; tout le cercle lit et
   répond.
@@ -54,14 +62,17 @@ server/src/
 │   │                 # calcul des soldes + minimisation des transactions (type Tricount)
 │   ├── discussion/   # Thread + Message (sous-fils de réponses)
 │   ├── checklist/    # Checklist + ChecklistItem (points cochés, traçabilité de la coche)
+│   ├── document/     # Document (fichier déposé ou lien externe, catégorie, borne de poids)
 │   └── notification/ # Notification, NotificationPreference, types notifiables
 ├── application/      # Use cases + ports (repositories, Clock, IdGenerator, Notifier, AuditLogger)
 │                     # equipment-access.ts : règle d'accès unique (cercle de l'équipement)
 │                     # receipt-access.ts   : un justificatif suit la dépense qui le porte
+│                     # document-access.ts  : purge des objets qu'aucun document ne nomme plus
 └── infrastructure/   # Adapters
     ├── http/         # Fastify : app.ts (transverse) + plugins/ (un fichier par domaine)
     ├── persistence/  # SQLite (better-sqlite3), migrations versionnées par PRAGMA user_version
-    └── tech/         # scrypt, UUID, horloge, stockage des justificatifs, push (Web Push + FCM)
+    └── tech/         # scrypt, UUID, horloge, stockage des justificatifs et des documents
+                      # (disque ou bucket S3/R2), push (Web Push + FCM)
 web/src/              # Front React (Vite) — adapter de présentation
 ```
 
@@ -77,6 +88,13 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 - Le relevé de compteur est **monotone** : un relevé inférieur au dernier connu est refusé.
 - Le **cercle est porté par l'équipement**, pas par une entité « groupe ». Deux personnes sans
   équipement commun ne se voient pas, ce qui donne le multi-cercles sans multi-tenant.
+- Un document est **une entité, deux natures** (`FILE` ou `LINK`) : le membre range un manuel PDF
+  et un tutoriel vidéo côte à côte, et le code n'a qu'une liste, qu'une règle d'accès, qu'une
+  suppression. La table l'écrit aussi, par une contrainte `CHECK` qui exclut la rangée hybride.
+- Le stockage d'objets est **le même code pour R2 et S3** : R2 parle le protocole S3, seul
+  l'`endpoint` change. Un port `ObjectStorage` côté application, un adapter côté infrastructure,
+  et un repli disque quand les variables du bucket sont absentes — les tests et le développement
+  tournent sans bucket, comme le push tourne sans clés VAPID.
 - Toutes les entrées HTTP sont validées par un **schéma JSON** (Ajv, embarqué dans Fastify) :
   objets fermés, bornes de longueur, énumérations tirées du domaine. Les types TypeScript des
   handlers décrivent donc ce qui arrive réellement.
@@ -85,7 +103,7 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 
 ```bash
 npm install
-npm test              # 440 tests : 361 serveur (Node) + 79 front (jsdom)
+npm test              # 520 tests : 430 serveur (Node) + 90 front (jsdom)
 npm run test:coverage # Tests + seuils de couverture (90 % lignes/fonctions, 85 % branches)
 npm run lint          # ESLint (frontières hexagonales + règles React hooks)
 npm run format        # Prettier (format:check en CI)
@@ -117,10 +135,34 @@ Variables d'environnement du serveur :
 | `DATA_DIR`       | `./data`                     | Répertoire des données persistantes                         |
 | `DATABASE_PATH`  | `$DATA_DIR/sharemate.sqlite` | Fichier SQLite                                              |
 | `UPLOADS_DIR`    | `$DATA_DIR/uploads`          | Justificatifs uploadés                                      |
+| `DOCUMENTS_DIR`  | `$DATA_DIR/documents`        | Documents, quand aucun bucket S3/R2 n'est configuré         |
+| `S3_*`           | — (repli sur le disque)      | Bucket des documents : voir ci-dessous                      |
 | `WEB_DIST_DIR`   | `../web/dist`                | Front statique servi par le serveur                         |
 | `NODE_ENV`       | —                            | `production` : cookie `Secure`, `trustProxy`, logs JSON     |
 | `CORS_ORIGINS`   | — (vide : pas de CORS)       | Origines cross-origin autorisées, séparées par des virgules |
 | `VAPID_*`, `FCM` | — (push désactivé)           | Push : voir [docs/notifications.md](docs/notifications.md)  |
+
+### Stockage des documents (Cloudflare R2 ou Amazon S3)
+
+Les fichiers du dossier d'un équipement vont dans un bucket compatible S3 dès que ces quatre
+variables sont présentes ; sinon ils tombent sur `DOCUMENTS_DIR`, ce qui permet de développer et de
+tester sans bucket.
+
+| Variable               | Rôle                                                         |
+| ---------------------- | ------------------------------------------------------------ |
+| `S3_BUCKET`            | Nom du bucket                                                |
+| `S3_ENDPOINT`          | `https://<id-de-compte>.r2.cloudflarestorage.com` pour R2    |
+| `S3_ACCESS_KEY_ID`     | Identifiant du jeton d'accès                                 |
+| `S3_SECRET_ACCESS_KEY` | Secret du jeton d'accès                                      |
+| `S3_REGION`            | `auto` par défaut (valeur documentée par Cloudflare pour R2) |
+
+**Le bucket doit rester privé.** L'application ne s'appuie jamais sur un accès public : elle émet
+une URL signée valable cinq minutes, après avoir vérifié que le demandeur appartient au cercle de
+l'équipement. Un bucket ouvert rendrait ce contrôle décoratif.
+
+Plafonds : **25 Mo par fichier** et **500 Mo par équipement**, refusés avant que l'octet n'atteigne
+le bucket. Formats acceptés : PDF, images (png, jpg, webp, gif), bureautique (doc(x), xls(x),
+ppt(x), od[tsp]) et texte (txt, csv) — ni exécutables, ni archives, ni HTML.
 
 ## Sécurité
 
@@ -155,7 +197,7 @@ la confiance est totale et assumée. Le reste de cette section dit précisément
   des cercles qu'il partage, et ceux qu'il a invités tant qu'aucun équipement ne les réunit encore.
   Hors de ce périmètre, un membre n'apprend ni l'existence, ni le nom, ni l'email des autres.
 - Tout ce qui pend à un équipement (réservations, usage, dépenses, soldes, justificatifs,
-  discussions, checklists) n'est lisible et modifiable que par les membres de son cercle. La règle
+  discussions, checklists, documents) n'est lisible et modifiable que par les membres de son cercle. La règle
   est unique et vit dans la couche application (`equipment-access.ts`, `receipt-access.ts`) ; les
   tests d'intégration la vérifient route par route. Les vues transverses (liste des équipements,
   calendrier, alertes d'entretien, historique d'un membre) sont cadrées sur le périmètre du
@@ -187,6 +229,16 @@ la confiance est totale et assumée. Le reste de cette section dit précisément
 - **Justificatifs** : servis par une route applicative qui remonte à la dépense qui les porte,
   jamais mis en cache par le client (`Cache-Control: private, no-store`, `NetworkOnly` côté service
   worker), supprimés avec la dépense. La déconnexion vide les caches `sharemate-*` de l'appareil.
+- **Documents** : le bucket n'est jamais public. Le contenu d'un fichier se demande par
+  l'identifiant de son document (`/api/documents/:id/content`), jamais par la clé de l'objet — qui
+  ne sort pas du serveur ; l'API vérifie le cercle, puis redirige vers une **URL signée de cinq
+  minutes**, jamais mise en cache (`Cache-Control: private, no-store`). Recopiée, elle expire ;
+  un lien de bucket ouvert, lui, n'expire jamais. Le type MIME servi est déduit de l'extension
+  acceptée et jamais celui annoncé par le client, et ni HTML, ni SVG, ni archive, ni exécutable
+  n'entrent — servi depuis le domaine du bucket, un tel contenu s'y exécuterait.
+- **Liens du dossier** : seuls `http:` et `https:` sont acceptés. Un lien est cliquable par tout
+  le cercle : `javascript:` y exécuterait du code dans la session de celui qui clique, et `data:`
+  y afficherait une page fabriquée sous l'apparence de l'application.
 - **Rate-limit** par IP et par minute : 300 en global sur toute route, 10 sur les routes
   d'authentification publiques (force brute), 20 sur la création de compte et le téléversement.
   `trustProxy` est activé en production pour lire la vraie IP derrière le proxy Railway.
@@ -208,15 +260,21 @@ la confiance est totale et assumée. Le reste de cette section dit précisément
   les témoins, et laisse une entrée dans le journal du serveur.
 - **Tout membre peut peupler l'instance** de nouveaux comptes. Cela ne lui ouvre aucun cercle
   existant, mais rien n'en borne le nombre au-delà du plafond par minute.
-- **Pas de chiffrement au repos.** La base SQLite et les justificatifs sont en clair sur le volume ;
-  qui a accès au volume (ou à une sauvegarde) a accès à tout. Le contrôle d'accès est applicatif.
+- **Pas de chiffrement au repos.** La base SQLite, les justificatifs et les documents sont en clair
+  sur le volume — ou dans le bucket ; qui y a accès (ou à une sauvegarde) a accès à tout. Le
+  contrôle d'accès est applicatif.
+- **Un document appartient au cercle, pas à son déposant.** N'importe quel membre peut supprimer
+  le manuel ou l'attestation d'assurance qu'un autre a déposés, définitivement. C'est le même
+  parti que pour les checklists et les équipements : entre membres d'un cercle, la confiance est
+  totale et assumée. Ce qui est fait, en revanche, est visible — le nom du déposant reste affiché.
 - **Pas de vérification d'email.** L'adresse sert d'identifiant de connexion, elle n'est jamais
   confirmée — d'où l'absence de réinitialisation de mot de passe.
 - **`trustProxy` fait confiance à toute la chaîne `X-Forwarded-For`.** Si le service devient
   joignable autrement que par le proxy Railway, un client peut forger l'en-tête et contourner le
   plafond par IP. Tant que l'accès passe exclusivement par le proxy, le risque est nul.
 - **Pas de quota de stockage par membre** : 10 Mo par justificatif et 20 téléversements par minute,
-  mais rien ne borne le total.
+  mais rien ne borne le total. Les documents, eux, sont bornés par équipement (500 Mo) — un membre
+  peut néanmoins remplir ce quota et empêcher les autres de déposer quoi que ce soit.
 
 ## Déploiement sur Railway
 

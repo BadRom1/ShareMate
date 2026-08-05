@@ -12,6 +12,7 @@ import type { ThreadSummary } from '../../application/discussion-service.js';
 import type { Checklist } from '../../domain/checklist/checklist.js';
 import type { ChecklistItem } from '../../domain/checklist/checklist-item.js';
 import type { ChecklistSummary } from '../../application/checklist-service.js';
+import type { Document } from '../../domain/document/document.js';
 import type { Notification } from '../../domain/notification/notification.js';
 import type { NotificationPreference } from '../../domain/notification/preference.js';
 
@@ -160,6 +161,28 @@ export function checklistItemDto(i: ChecklistItem) {
     position: i.position,
     checkedAt: i.checkedAt ? i.checkedAt.toISOString() : null,
     checkedById: i.checkedById,
+  };
+}
+
+/**
+ * Document du dossier d'un équipement. La clé de stockage n'en sort jamais : le contenu se lit par
+ * `/api/documents/:id/content`, qui repasse par le cercle. Les deux natures partagent la même
+ * forme, champs de l'autre à `null` — le front en fait une seule liste.
+ */
+export function documentDto(d: Document) {
+  const file = d.content.type === 'FILE' ? d.content : null;
+  return {
+    id: d.id,
+    equipmentId: d.equipmentId,
+    authorId: d.authorId,
+    name: d.name,
+    category: d.category,
+    createdAt: d.createdAt.toISOString(),
+    kind: d.content.type,
+    fileName: file?.fileName ?? null,
+    contentType: file?.contentType ?? null,
+    sizeBytes: file?.sizeBytes ?? null,
+    url: d.content.type === 'LINK' ? d.content.url : null,
   };
 }
 

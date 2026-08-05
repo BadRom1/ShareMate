@@ -4,18 +4,38 @@ import { EquipmentService } from './equipment-service.js';
 import { DomainError, ForbiddenError } from '../domain/shared/domain-error.js';
 import { Expense } from '../domain/expense/expense.js';
 import { Money } from '../domain/shared/money.js';
-import { CapturingNotifier, RecordingAuditLogger } from './testing/in-memory.js';
+import { Document } from '../domain/document/document.js';
+import {
+  CapturingNotifier,
+  InMemoryDocumentRepository,
+  InMemoryObjectStorage,
+  RecordingAuditLogger,
+} from './testing/in-memory.js';
 
 let f: Awaited<ReturnType<typeof makeFixture>>;
 let service: EquipmentService;
 let notifier: CapturingNotifier;
 let audit: RecordingAuditLogger;
+let documents: InMemoryDocumentRepository;
+let objects: InMemoryObjectStorage;
 
 beforeEach(async () => {
   f = await makeFixture();
   notifier = new CapturingNotifier();
   audit = new RecordingAuditLogger();
-  service = new EquipmentService(f.equipments, f.members, f.idGenerator, f.expenses, notifier, audit, f.receipts);
+  documents = new InMemoryDocumentRepository();
+  objects = new InMemoryObjectStorage();
+  service = new EquipmentService(
+    f.equipments,
+    f.members,
+    f.idGenerator,
+    f.expenses,
+    notifier,
+    audit,
+    f.receipts,
+    documents,
+    objects,
+  );
 });
 
 describe('EquipmentService', () => {
@@ -116,6 +136,24 @@ describe('EquipmentService', () => {
     await service.delete('e1', 'm1');
     // La cascade de la persistance efface les dépenses ; le fichier, lui, n'est atteint que d'ici.
     expect(f.receipts.paths.has(receiptPath)).toBe(false);
+  });
+
+  it('purge les objets des documents emportés par la suppression', async () => {
+    const storageKey = 'documents/8f14e45f-ceea-467a-a3f6-9b1f3e2c7d40.pdf';
+    objects.add(storageKey);
+    await documents.save(
+      Document.create({
+        id: 'd1',
+        equipmentId: 'e1',
+        authorId: 'm1',
+        name: 'Manuel',
+        category: 'MANUAL',
+        content: { type: 'FILE', storageKey, fileName: 'manuel.pdf', contentType: 'application/pdf', sizeBytes: 1000 },
+        createdAt: new Date('2026-07-01'),
+      }),
+    );
+    await service.delete('e1', 'm1');
+    expect(objects.keys.has(storageKey)).toBe(false);
   });
 
   it('ne liste que les équipements du cercle du demandeur', async () => {

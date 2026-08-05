@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyServerOptions } from 'fastify';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
+import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import fs from 'node:fs';
@@ -23,6 +24,7 @@ import { UsageService } from '../../application/usage-service.js';
 import { ExpenseService } from '../../application/expense-service.js';
 import { DiscussionService } from '../../application/discussion-service.js';
 import { ChecklistService } from '../../application/checklist-service.js';
+import { DocumentService } from '../../application/document-service.js';
 import { NotificationService } from '../../application/notification-service.js';
 import type {
   AuditLogger,
@@ -31,6 +33,7 @@ import type {
   Clock,
   CredentialRepository,
   DeviceTokenRepository,
+  DocumentRepository,
   EquipmentRepository,
   ExpenseRepository,
   IdGenerator,
@@ -60,9 +63,12 @@ import { usageRoutes } from './plugins/usage.js';
 import { expenseRoutes } from './plugins/expenses.js';
 import { discussionRoutes } from './plugins/discussions.js';
 import { checklistRoutes } from './plugins/checklists.js';
+import { documentRoutes } from './plugins/documents.js';
 import { notificationRoutes } from './plugins/notifications.js';
 import { uploadRoutes } from './plugins/uploads.js';
 import { FileSystemReceiptStorage } from '../tech/receipt-storage.js';
+import { createDocumentStorage } from '../tech/document-storage.js';
+import { MAX_DOCUMENT_SIZE_BYTES } from '../../domain/document/document.js';
 
 export interface AppDependencies {
   members: MemberRepository;
@@ -75,6 +81,7 @@ export interface AppDependencies {
   messages: MessageRepository;
   checklists: ChecklistRepository;
   checklistItems: ChecklistItemRepository;
+  documents: DocumentRepository;
   notifications: NotificationRepository;
   notificationPreferences: NotificationPreferenceRepository;
   pushSubscriptions: PushSubscriptionRepository;
@@ -93,6 +100,13 @@ export interface AppDependencies {
   trustProxy?: boolean;
   /** Répertoire de stockage des justificatifs (null = upload désactivé). */
   uploadsDir?: string | null;
+  /**
+   * Répertoire de repli des documents, quand aucun bucket n'est configuré (null = seuls les liens
+   * sont gérés). Le bucket S3/R2, lui, est lu dans `documentStorageEnv`.
+   */
+  documentsDir?: string | null;
+  /** Environnement où lire la configuration du bucket S3/R2 (`process.env` en production). */
+  documentStorageEnv?: NodeJS.ProcessEnv;
   /** Répertoire des fichiers statiques du front (null = API seule). */
   webDistDir?: string | null;
   /**
@@ -202,6 +216,9 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   const memberService = new MemberService(deps.members, deps.equipments, deps.credentials);
   // Sans répertoire d'upload, il n'y a ni justificatif à servir ni fichier à purger.
   const receiptStorage = deps.uploadsDir ? new FileSystemReceiptStorage(deps.uploadsDir) : undefined;
+  // Bucket S3/R2 dès que son environnement est complet, sinon le disque — et rien du tout si
+  // aucun des deux n'est fourni, auquel cas le dossier n'accepte que des liens.
+  const documentStorage = createDocumentStorage(deps.documentStorageEnv ?? {}, deps.documentsDir ?? null);
   // Le journal des gestes sensibles part dans les logs du serveur : hors de portée des membres
   // concernés, contrairement aux notifications qu'ils peuvent effacer.
   const auditLogger: AuditLogger = {
@@ -215,6 +232,8 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     notificationService,
     auditLogger,
     receiptStorage,
+    deps.documents,
+    documentStorage ?? undefined,
   );
   const reservationService = new ReservationService(
     deps.reservations,
@@ -256,6 +275,13 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.equipments,
     deps.idGenerator,
     deps.clock,
+  );
+  const documentService = new DocumentService(
+    deps.documents,
+    deps.equipments,
+    deps.idGenerator,
+    deps.clock,
+    documentStorage ?? undefined,
   );
 
   app.decorateRequest('authMember', null as unknown as Member);
@@ -311,6 +337,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
    * Les routes hors de ce contexte (front statique, santé) sont publiques par construction.
    */
   await app.register(async (protectedScope) => {
+    // Transverse : deux domaines téléversent (justificatifs, documents) et le greffon ne peut être
+    // enregistré qu'une fois par contexte. Le plafond global est celui du plus gros dépôt accepté ;
+    // chaque route resserre le sien à la lecture du corps.
+    await protectedScope.register(multipart, { limits: { fileSize: MAX_DOCUMENT_SIZE_BYTES } });
+
     protectedScope.addHook('onRequest', async (request, reply) => {
       if (request.routeOptions?.config?.public) {
         return;
@@ -346,6 +377,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     await protectedScope.register(expenseRoutes, { expenseService });
     await protectedScope.register(discussionRoutes, { discussionService });
     await protectedScope.register(checklistRoutes, { checklistService });
+    await protectedScope.register(documentRoutes, {
+      documentService,
+      storage: documentStorage ?? undefined,
+      rateLimits,
+    });
     await protectedScope.register(notificationRoutes, {
       notificationService,
       vapidPublicKey: deps.vapidPublicKey ?? null,

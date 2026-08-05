@@ -5,6 +5,7 @@ import {
   SqliteChecklistItemRepository,
   SqliteChecklistRepository,
   SqliteCredentialRepository,
+  SqliteDocumentRepository,
   SqliteEquipmentRepository,
   SqliteExpenseRepository,
   SqliteMemberRepository,
@@ -23,6 +24,7 @@ import { Expense } from '../../../domain/expense/expense.js';
 import { Reimbursement } from '../../../domain/expense/reimbursement.js';
 import { Checklist } from '../../../domain/checklist/checklist.js';
 import { ChecklistItem } from '../../../domain/checklist/checklist-item.js';
+import { Document } from '../../../domain/document/document.js';
 import { Money } from '../../../domain/shared/money.js';
 import { TimeRange } from '../../../domain/shared/time-range.js';
 
@@ -487,5 +489,94 @@ describe('SqliteNotificationPreferenceRepository', () => {
     // rendrait toutes les préférences du membre illisibles.
     const lues = await preferences.findByMember('m1');
     expect(lues.map((p) => p.type)).toEqual(['MESSAGE_POSTED']);
+  });
+});
+
+describe('SqliteDocumentRepository', () => {
+  /** Colonnes d'une rangée `documents`, dans l'ordre de la table. */
+  function rangée(id: string, storageKey: string | null, url: string | null) {
+    const fichier = storageKey === null ? [null, null, null] : ['manuel.pdf', 'application/pdf', 1000];
+    return [id, 'e1', 'm1', 'Manuel', 'MANUAL', '2026-07-01T08:00:00.000Z', storageKey, ...fichier, url];
+  }
+
+  function insérer(id: string, storageKey: string | null, url: string | null) {
+    db.prepare(`INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...rangée(id, storageKey, url));
+  }
+
+  it('restitue un fichier et un lien tels qu’ils ont été enregistrés', async () => {
+    await seedBase();
+    const documents = new SqliteDocumentRepository(db);
+    await documents.save(
+      Document.create({
+        id: 'd1',
+        equipmentId: 'e1',
+        authorId: 'm1',
+        name: 'Manuel',
+        category: 'MANUAL',
+        content: {
+          type: 'FILE',
+          storageKey: 'documents/a.pdf',
+          fileName: 'manuel.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 4242,
+        },
+        createdAt: new Date('2026-07-01T08:00:00.000Z'),
+      }),
+    );
+    await documents.save(
+      Document.create({
+        id: 'd2',
+        equipmentId: 'e1',
+        authorId: 'm2',
+        name: 'Pièces',
+        category: 'OTHER',
+        content: { type: 'LINK', url: 'https://kubota-eu.com/pieces' },
+        createdAt: new Date('2026-07-02T08:00:00.000Z'),
+      }),
+    );
+
+    expect((await documents.findById('d1'))?.content).toEqual({
+      type: 'FILE',
+      storageKey: 'documents/a.pdf',
+      fileName: 'manuel.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 4242,
+    });
+    expect((await documents.findById('d2'))?.content).toEqual({ type: 'LINK', url: 'https://kubota-eu.com/pieces' });
+  });
+
+  // Le renommage ne réécrit ni la nature, ni la date de dépôt : `ON CONFLICT DO UPDATE` ne touche
+  // qu'au nom et à la catégorie, et un `INSERT OR REPLACE` aurait perdu le reste de la rangée.
+  it('ne réécrit que le nom et la catégorie à la mise à jour', async () => {
+    await seedBase();
+    const documents = new SqliteDocumentRepository(db);
+    insérer('d1', 'documents/a.pdf', null);
+    const document = (await documents.findById('d1'))!;
+
+    await documents.save(document.update({ name: 'Attestation', category: 'INSURANCE' }));
+
+    const relu = (await documents.findById('d1'))!;
+    expect(relu.name).toBe('Attestation');
+    expect(relu.category).toBe('INSURANCE');
+    expect(relu.storageKey).toBe('documents/a.pdf');
+    expect(relu.createdAt).toEqual(new Date('2026-07-01T08:00:00.000Z'));
+  });
+
+  // Une rangée hybride serait impossible à charger et rendrait le dossier illisible pour tout le
+  // cercle : la table refuse de l'écrire, sans dépendre du seul domaine.
+  it('refuse une rangée qui porte les deux natures, ou aucune', async () => {
+    await seedBase();
+    expect(() => insérer('d1', 'documents/a.pdf', 'https://exemple.fr')).toThrow(/CHECK/i);
+    expect(() => insérer('d2', null, null)).toThrow(/CHECK/i);
+  });
+
+  it('emporte les documents avec leur équipement (cascade)', async () => {
+    await seedBase();
+    const documents = new SqliteDocumentRepository(db);
+    insérer('d1', 'documents/a.pdf', null);
+
+    await new SqliteEquipmentRepository(db).delete('e1');
+
+    expect(await documents.findById('d1')).toBeNull();
   });
 });

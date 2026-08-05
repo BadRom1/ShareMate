@@ -6,13 +6,16 @@ import { parseIsoDate } from '../domain/shared/iso-date.js';
 import { equipmentForMember, equipmentsForMember } from './equipment-access.js';
 import { visibleMemberIds } from './member-scope.js';
 import { purgeOrphanReceipts } from './receipt-access.js';
+import { purgeOrphanObjects } from './document-access.js';
 import type {
   AuditLogger,
+  DocumentRepository,
   EquipmentRepository,
   ExpenseRepository,
   IdGenerator,
   MemberRepository,
   Notifier,
+  ObjectStorage,
   ReceiptStorage,
 } from './ports.js';
 
@@ -55,6 +58,9 @@ export class EquipmentService {
     private readonly notifier: Notifier,
     private readonly audit: AuditLogger,
     private readonly receipts?: ReceiptStorage,
+    // Même raison pour les documents du dossier : la cascade efface les lignes, pas les objets.
+    private readonly documents?: DocumentRepository,
+    private readonly objects?: ObjectStorage,
   ) {}
 
   /**
@@ -212,10 +218,14 @@ export class EquipmentService {
 
   async delete(id: string, requesterId: string): Promise<void> {
     await equipmentForMember(this.equipments, id, requesterId);
-    // Relevées avant : la cascade les efface avec l'équipement, et plus rien ne nommera leurs fichiers.
-    const doomed = await this.expenses.findByEquipmentId(id);
+    // Relevés avant : la cascade les efface avec l'équipement, et plus rien ne nommera leurs fichiers.
+    const doomedExpenses = await this.expenses.findByEquipmentId(id);
+    const doomedDocuments = this.documents ? await this.documents.findByEquipmentId(id) : [];
     await this.equipments.delete(id);
-    await purgeOrphanReceipts(this.expenses, this.receipts, doomed);
+    await purgeOrphanReceipts(this.expenses, this.receipts, doomedExpenses);
+    if (this.documents) {
+      await purgeOrphanObjects(this.documents, this.objects, doomedDocuments);
+    }
   }
 
   async getById(id: string, requesterId: string): Promise<Equipment> {

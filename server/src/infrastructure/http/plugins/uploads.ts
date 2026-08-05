@@ -1,5 +1,4 @@
 import type { FastifyPluginAsync } from 'fastify';
-import multipart from '@fastify/multipart';
 import path from 'node:path';
 import { NotFoundError } from '../../../domain/shared/domain-error.js';
 import { receiptNotFound } from '../../../application/receipt-access.js';
@@ -9,6 +8,9 @@ import { limit } from '../rate-limit.js';
 import type { RateLimits } from '../rate-limit.js';
 import { receiptNameParams } from '../schema.js';
 import '../session.js'; // augmentation de type : request.authMember
+
+/** Poids maximal d'un justificatif de dépense. */
+const RECEIPT_MAX_BYTES = 10 * 1024 * 1024;
 
 export interface UploadRoutesOptions {
   /** Stockage des justificatifs (répertoire de dépôt). */
@@ -22,11 +24,11 @@ export const uploadRoutes: FastifyPluginAsync<UploadRoutesOptions> = async (
   app,
   { storage, expenseService, rateLimits },
 ) => {
-  await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });
-
-  // 10 Mo par fichier : plafond serré, sinon le disque se remplit à volonté.
+  // 10 Mo par fichier : plafond serré, sinon le disque se remplit à volonté. Il est posé ici et
+  // non à l'enregistrement du greffon multipart, désormais transverse : un justificatif et un
+  // document du dossier n'ont pas le même plafond.
   app.post('/api/uploads/receipts', { config: { rateLimit: limit(rateLimits.sensitive) } }, async (request, reply) => {
-    const file = await request.file();
+    const file = await request.file({ limits: { fileSize: RECEIPT_MAX_BYTES } });
     if (!file) {
       return reply.status(400).send({ error: 'Aucun fichier reçu.' });
     }

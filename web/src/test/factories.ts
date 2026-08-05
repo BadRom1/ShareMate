@@ -7,6 +7,7 @@ import type {
   ChecklistItem,
   ChecklistSummary,
   DirectoryMember,
+  EquipmentDocument,
   Equipment,
   Expense,
   MaintenanceStatus,
@@ -106,6 +107,38 @@ export function aReimbursement(over: Partial<Reimbursement> = {}): Reimbursement
   };
 }
 
+export function aDocument(over: Partial<EquipmentDocument> = {}): EquipmentDocument {
+  return {
+    id: 'd1',
+    equipmentId: 'e1',
+    authorId: 'm1',
+    name: 'Manuel d’utilisation',
+    category: 'MANUAL',
+    createdAt: '2026-03-01T08:00:00.000Z',
+    kind: 'FILE',
+    fileName: 'manuel.pdf',
+    contentType: 'application/pdf',
+    sizeBytes: 4_200_000,
+    url: null,
+    ...over,
+  };
+}
+
+/** Lien externe : la nature bascule, et les champs de fichier retombent à `null`. */
+export function aDocumentLink(over: Partial<EquipmentDocument> = {}): EquipmentDocument {
+  return aDocument({
+    id: 'd2',
+    name: 'Catalogue de pièces',
+    category: 'OTHER',
+    kind: 'LINK',
+    fileName: null,
+    contentType: null,
+    sizeBytes: null,
+    url: 'https://kubota-eu.com/pieces',
+    ...over,
+  });
+}
+
 export function aMaintenanceStatus(over: Partial<MaintenanceStatus> = {}): MaintenanceStatus {
   return {
     equipmentId: 'e1',
@@ -179,6 +212,12 @@ export function createApiStub() {
 
     listChecklists: vi.fn(async (_equipmentId: string) => [] as ChecklistSummary[]),
     listChecklistItems: vi.fn(async (_checklistId: string) => [] as ChecklistItem[]),
+
+    listDocuments: vi.fn(async (_equipmentId: string) => [] as EquipmentDocument[]),
+    addDocumentLink: vi.fn(async (_input: unknown) => aDocumentLink()),
+    uploadDocument: vi.fn(async (_file: File, _meta: unknown) => aDocument()),
+    updateDocument: vi.fn(async (_id: string, _changes: unknown) => aDocument()),
+    deleteDocument: vi.fn(async (_id: string) => {}),
 
     unreadCount: vi.fn(async () => ({ count: 0 })),
     listNotifications: vi.fn(async () => [] as AppNotification[]),
