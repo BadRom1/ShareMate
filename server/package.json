@@ -16,17 +16,17 @@
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.3.0",
     "@fastify/helmet": "^13.0.2",
-    "@fastify/multipart": "^9.0.3",
+    "@fastify/multipart": "^10.1.0",
     "@fastify/rate-limit": "^11.2.0",
     "@fastify/static": "^10.1.2",
-    "better-sqlite3": "^11.10.0",
+    "better-sqlite3": "^13.0.3",
     "fastify": "^5.11.0",
     "firebase-admin": "^14.2.0",
     "web-push": "^3.6.7"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^22.15.0",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^24.13.3",
     "@types/web-push": "^3.6.4",
     "tsx": "^4.23.4",
     "typescript": "^5.8.3"
