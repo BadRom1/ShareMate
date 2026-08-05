@@ -122,7 +122,8 @@ describe('ajout', () => {
         name: 'Notice constructeur',
       }),
     );
-    expect(stub.listDocuments).toHaveBeenCalledTimes(2);
+    // Le dossier n'est rechargé qu'après la résolution de l'envoi : attendre, ne pas supposer.
+    await waitFor(() => expect(stub.listDocuments).toHaveBeenCalledTimes(2));
   });
 
   it('ajoute un lien, et bascule entre les deux natures sans fermer la modale', async () => {

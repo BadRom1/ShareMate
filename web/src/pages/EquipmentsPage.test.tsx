@@ -43,8 +43,9 @@ describe('quitter le cercle', () => {
     // Le second est celui de la modale : le premier reste l'icône de la carte.
     await user.click(screen.getAllByRole('button', { name: 'Quitter le cercle' })[1]!);
     await waitFor(() => expect(stub.leaveEquipment).toHaveBeenCalledWith('e1'));
-    // La liste est relue : l'équipement quitté ne doit plus s'afficher.
-    expect(stub.listEquipments).toHaveBeenCalledTimes(2);
+    // La liste est relue : l'équipement quitté ne doit plus s'afficher. Le rechargement ne part
+    // qu'une fois `leaveEquipment` résolu, d'où le `waitFor` plutôt qu'une assertion immédiate.
+    await waitFor(() => expect(stub.listEquipments).toHaveBeenCalledTimes(2));
   });
 
   it('n’offre pas de quitter un cercle dont on est le dernier membre', async () => {
