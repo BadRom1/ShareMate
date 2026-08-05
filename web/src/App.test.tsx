@@ -64,7 +64,9 @@ describe('navigation par lien de notification', () => {
     render(<App />);
 
     await waitFor(() => expect(activeTab()).toBe('Usage & entretien'));
-    expect(stub.usageByEquipment).toHaveBeenCalledWith('e2');
+    // L'onglet est marqué actif avant que `UsagePage` n'ait lancé sa requête : attendre l'appel
+    // plutôt que le supposer déjà parti, sinon l'assertion court après l'effet (échec intermittent).
+    await waitFor(() => expect(stub.usageByEquipment).toHaveBeenCalledWith('e2'));
   });
 
   // Un lien de notification de message pointe un fil précis : s'il n'est pas ouvert, le membre
