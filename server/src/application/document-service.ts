@@ -3,14 +3,15 @@ import type { DocumentCategory, DocumentContent } from '../domain/document/docum
 import { DomainError, NotFoundError } from '../domain/shared/domain-error.js';
 import { equipmentForMember } from './equipment-access.js';
 import { documentNotFound, purgeOrphanObjects } from './document-access.js';
-import type { Clock, DocumentRepository, EquipmentRepository, IdGenerator, ObjectStorage } from './ports.js';
-
-/**
- * Place occupée par les fichiers d'un même équipement (500 Mo). Un bucket se facture à l'octet et
- * rien d'autre ne borne les dépôts : sans ce plafond, une sauvegarde photo déposée par mégarde se
- * paie sur la facture de tout le monde.
- */
-export const EQUIPMENT_STORAGE_QUOTA_BYTES = 500 * 1024 * 1024;
+import { assertStorageAvailable } from './equipment-storage.js';
+import type {
+  Clock,
+  DocumentRepository,
+  EquipmentRepository,
+  IdGenerator,
+  MessageRepository,
+  ObjectStorage,
+} from './ports.js';
 
 export interface AddDocumentInput {
   equipmentId: string;
@@ -38,6 +39,9 @@ export class DocumentService {
   constructor(
     private readonly documents: DocumentRepository,
     private readonly equipments: EquipmentRepository,
+    // Le dossier et les discussions se partagent la place d'un équipement : la mesurer suppose
+    // de voir les deux.
+    private readonly messages: MessageRepository,
     private readonly idGenerator: IdGenerator,
     private readonly clock: Clock,
     private readonly storage?: ObjectStorage,
@@ -46,9 +50,10 @@ export class DocumentService {
   async addDocument(input: AddDocumentInput, requesterId: string): Promise<Document> {
     await this.assertInCircle(input.equipmentId, requesterId);
     const content = normalizeContent(input.content);
-    // Un objet appartient à un seul document : chaque téléversement produit une clé neuve. Sans
-    // cette borne, recopier la clé d'un fichier d'un autre cercle dans son propre document suffirait
-    // à s'en ouvrir la lecture, et sa purge deviendrait ambiguë.
+    // Un objet appartient à un seul document. Aujourd'hui aucune route n'accepte de clé venant du
+    // client — elle naît dans le handler, au retour de `storage.save` —, donc l'invariant tient de
+    // lui-même ; ce garde est ce qui le fait tenir encore si une route en acceptait une un jour,
+    // car deux documents nommant le même objet rendraient sa purge ambiguë.
     if (content.type === 'FILE' && (await this.documents.findByStorageKey(content.storageKey)).length > 0) {
       throw new DomainError('Ce fichier est déjà rattaché à un document.');
     }
@@ -103,25 +108,13 @@ export class DocumentService {
    */
   async assertCanStore(equipmentId: string, requesterId: string, sizeBytes: number): Promise<void> {
     await this.assertInCircle(equipmentId, requesterId);
-    const used = (await this.documents.findByEquipmentId(equipmentId)).reduce((total, d) => total + d.sizeBytes, 0);
-    if (used + sizeBytes > EQUIPMENT_STORAGE_QUOTA_BYTES) {
-      const remaining = Math.max(0, EQUIPMENT_STORAGE_QUOTA_BYTES - used);
-      throw new DomainError(
-        `Le dossier de cet équipement est plein (${megabytes(EQUIPMENT_STORAGE_QUOTA_BYTES)} Mo). ` +
-          `Il reste ${megabytes(remaining)} Mo : supprimez des documents avant d’en déposer d’autres.`,
-      );
-    }
+    await assertStorageAvailable(this.documents, this.messages, equipmentId, sizeBytes);
   }
 
   /** Tout accès — lecture comme écriture — exige d'appartenir au cercle de l'équipement. */
   private async assertInCircle(equipmentId: string, memberId: string, absent?: string): Promise<void> {
     await equipmentForMember(this.equipments, equipmentId, memberId, absent);
   }
-}
-
-/** Mégaoctets arrondis, pour un message lisible par un membre (jamais pour un calcul). */
-function megabytes(bytes: number): string {
-  return (bytes / (1024 * 1024)).toFixed(0);
 }
 
 /** L'adresse d'un lien est normalisée ici pour que le nom par défaut puisse s'y fier. */

@@ -157,10 +157,11 @@ Variables d'environnement du serveur :
 
 ### Stockage des fichiers (Cloudflare R2 ou Amazon S3)
 
-**Justificatifs de dépense et documents d'équipement** partagent le même bucket compatible S3, sous
-deux préfixes distincts (`receipts/`, `documents/`), dès que ces quatre variables sont présentes.
-Sinon ils tombent respectivement sur `UPLOADS_DIR` et `DOCUMENTS_DIR`, ce qui permet de développer
-et de tester sans bucket.
+**Justificatifs de dépense, documents d'équipement et pièces jointes des messages** partagent le
+même bucket compatible S3, sous trois préfixes distincts (`receipts/`, `documents/`,
+`attachments/`), dès que ces quatre variables sont présentes. Sinon ils tombent respectivement sur
+`UPLOADS_DIR`, `DOCUMENTS_DIR` et `ATTACHMENTS_DIR`, ce qui permet de développer et de tester sans
+bucket.
 
 | Variable               | Rôle                                                         |
 | ---------------------- | ------------------------------------------------------------ |
@@ -176,13 +177,21 @@ l'équipement. Un bucket ouvert rendrait ce contrôle décoratif.
 
 Plafonds et formats diffèrent selon la nature du fichier :
 
-|                  | Justificatif de dépense | Document d'équipement                            |
-| ---------------- | ----------------------- | ------------------------------------------------ |
-| Poids maximal    | 10 Mo                   | 25 Mo par fichier, 500 Mo par équipement         |
-| Formats acceptés | png, jpg, webp, pdf     | + gif, txt, csv, doc(x), xls(x), ppt(x), od[tsp] |
+|                  | Justificatif de dépense | Document d'équipement                            | Pièce jointe de message |
+| ---------------- | ----------------------- | ------------------------------------------------ | ----------------------- |
+| Poids maximal    | 10 Mo par fichier       | 25 Mo par fichier                                | 25 Mo par fichier       |
+| Formats acceptés | png, jpg, webp, pdf     | + gif, txt, csv, doc(x), xls(x), ppt(x), od[tsp] | idem document           |
 
-Ni exécutables, ni archives, ni HTML, ni SVG : le contenu est servi depuis le domaine du bucket,
-distinct du nôtre, où une page fabriquée s'exécuterait dans son propre contexte.
+**Documents et pièces jointes se partagent 500 Mo par équipement** — c'est le même bucket, donc la
+même enveloppe. Deux budgets séparés en feraient deux fois plus, et ne plafonner que le dossier
+ferait des discussions la façon la moins chère de remplir le bucket. Le contrôle a lieu avant que
+l'octet n'atteigne le stockage ; il n'est pas atomique — deux dépôts simultanés peuvent dépasser le
+plafond d'un fichier au plus. C'est un garde-fou de facture, pas une réservation.
+
+Ni exécutables, ni archives, ni HTML, ni SVG. Avec un bucket, le contenu est servi depuis un domaine
+distinct du nôtre, où une page fabriquée s'exécuterait dans son propre contexte ; en repli disque,
+l'API le relaie depuis notre origine, et un HTML `inline` y hériterait de la nôtre. La liste vaut
+donc pour le plus permissif des deux modes.
 
 #### Faire passer les justificatifs existants dans le bucket
 
@@ -318,10 +327,10 @@ la confiance est totale et assumée. Le reste de cette section dit précisément
 - **`trustProxy` fait confiance à toute la chaîne `X-Forwarded-For`.** Si le service devient
   joignable autrement que par le proxy Railway, un client peut forger l'en-tête et contourner le
   plafond par IP. Tant que l'accès passe exclusivement par le proxy, le risque est nul.
-- **Pas de quota de stockage par membre** : 10 Mo par justificatif, 25 Mo par pièce jointe et 20
-  téléversements par minute, mais rien ne borne leur total. Seuls les documents sont bornés par
-  équipement (500 Mo) — et un membre peut y remplir ce quota, empêchant les autres de déposer quoi
-  que ce soit. Une discussion nourrie de photos, elle, fait grossir le bucket sans plafond.
+- **Pas de quota de stockage par membre.** Documents et pièces jointes sont bornés par
+  **équipement** (500 Mo, partagés), mais un seul membre peut remplir ce quota et empêcher les
+  autres de déposer quoi que ce soit. Les justificatifs de dépense, eux, ne sont bornés que par
+  fichier (10 Mo) et par débit (20 téléversements par minute et par IP) : rien ne borne leur total.
 
 ## Déploiement sur Railway
 

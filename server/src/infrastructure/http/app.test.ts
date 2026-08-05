@@ -1088,6 +1088,156 @@ describe('API — checklists (checklists + points de contrôle)', () => {
   });
 });
 
+describe('API — refus de téléversement rendus en français', () => {
+  let filesApp: FastifyInstance;
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-refus-'));
+    filesApp = await buildTestApp({
+      documentsDir: path.join(tmpRoot, 'documents'),
+      attachmentsDir: path.join(tmpRoot, 'attachments'),
+    });
+  });
+
+  afterEach(async () => {
+    await filesApp.close();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  function multipart(champs: Record<string, string>, contenu: Uint8Array, filename = 'gros.pdf') {
+    const boundary = '----sharemateRefusBoundary';
+    const morceaux: Uint8Array[] = Object.entries(champs).map(([nom, valeur]) =>
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${nom}"\r\n\r\n${valeur}\r\n`),
+    );
+    morceaux.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+          `Content-Type: application/pdf\r\n\r\n`,
+      ),
+      contenu,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    );
+    return {
+      payload: Buffer.concat(morceaux),
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    };
+  }
+
+  /** Un peu plus que le plafond du greffon multipart (25 Mo). */
+  function tropGros() {
+    return Buffer.alloc(26 * 1024 * 1024, 0x41);
+  }
+
+  // Sans cette traduction, c'est le seul message anglais que l'API rend jamais : le greffon
+  // multipart échoue pendant la lecture du flux, donc avant tout code applicatif.
+  it('refuse un document trop lourd en français', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(filesApp);
+    const { payload, headers } = multipart({ equipmentId: equipment.id, category: 'MANUAL' }, tropGros());
+
+    const res = await filesApp.inject({
+      method: 'POST',
+      url: '/api/documents/file',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+
+    expect(res.statusCode).toBe(413);
+    expect((res.json() as { error: string }).error).toBe('Fichier trop lourd (25 Mo maximum).');
+  });
+
+  it('refuse une pièce jointe trop lourde en français', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(filesApp);
+    const fil = await post('/api/threads', { equipmentId: equipment.id, title: 'Panne' }, alice.cookies, filesApp);
+    const { id: threadId } = fil.json() as { id: string };
+    const { payload, headers } = multipart({ threadId }, tropGros());
+
+    const res = await filesApp.inject({
+      method: 'POST',
+      url: '/api/messages/file',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+
+    expect(res.statusCode).toBe(413);
+    expect((res.json() as { error: string }).error).toBe('Fichier trop lourd (25 Mo maximum).');
+  });
+
+  // Ignoré, un champ démesuré se serait déguisé en autre chose : un `name` trop long serait
+  // devenu « pas de nom », un `equipmentId` trop long « champ obligatoire ».
+  it('refuse un champ multipart démesuré plutôt que de l’ignorer', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(filesApp);
+    const { payload, headers } = multipart(
+      { equipmentId: equipment.id, category: 'MANUAL', name: 'x'.repeat(10_001) },
+      Buffer.from('%PDF'),
+    );
+
+    const res = await filesApp.inject({
+      method: 'POST',
+      url: '/api/documents/file',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toMatch(/« name » dépasse 10000 caractères/);
+  });
+});
+
+describe('API — place partagée entre le dossier et les discussions', () => {
+  let filesApp: FastifyInstance;
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-place-'));
+    filesApp = await buildTestApp({
+      documentsDir: path.join(tmpRoot, 'documents'),
+      attachmentsDir: path.join(tmpRoot, 'attachments'),
+    });
+  });
+
+  afterEach(async () => {
+    await filesApp.close();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  // Le plafond vaut pour l'équipement, pas pour le dossier seul : sinon les messages seraient la
+  // façon la moins chère de remplir le bucket.
+  it('une pièce jointe consomme la place du dossier, et réciproquement', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(filesApp);
+    const fil = await post('/api/threads', { equipmentId: equipment.id, title: 'Panne' }, alice.cookies, filesApp);
+    const { id: threadId } = fil.json() as { id: string };
+
+    // Une pièce jointe de 1 Mo, puis un document : les deux passent par le même compteur.
+    const boundary = '----sharematePlaceBoundary';
+    const corps = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="threadId"\r\n\r\n${threadId}\r\n`),
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="panne.png"\r\n` +
+          `Content-Type: image/png\r\n\r\n`,
+      ),
+      Buffer.alloc(1024 * 1024, 0x41),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const jointe = await filesApp.inject({
+      method: 'POST',
+      url: '/api/messages/file',
+      payload: corps,
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      cookies: alice.cookies,
+    });
+    expect(jointe.statusCode).toBe(201);
+
+    // Le compteur du dossier voit désormais ce mégaoctet : c'est la même enveloppe.
+    const documents = await get(`/api/equipments/${equipment.id}/documents`, alice.cookies, filesApp);
+    expect(documents.json()).toEqual([]);
+    expect(fs.readdirSync(path.join(tmpRoot, 'attachments'))).toHaveLength(1);
+  });
+});
+
 describe('API — pièces jointes des discussions', () => {
   let filesApp: FastifyInstance;
   let attachmentsDir: string;
@@ -1180,6 +1330,36 @@ describe('API — pièces jointes des discussions', () => {
     const posté = await joindre({ threadId: thread.id }, alice.cookies);
     expect(posté.statusCode).toBe(201);
     expect((posté.json() as { body: string }).body).toBe('');
+  });
+
+  // Le corps d'une édition peut être vidé, mais seulement d'un message qui porte un fichier : le
+  // schéma laisse passer la chaîne vide, le domaine tranche — lui seul voit la pièce jointe.
+  it('laisse vider le texte d’un message qui porte un fichier, jamais celui d’un autre', async () => {
+    const { thread, alice } = await unFil();
+    const avecFichier = (await joindre({ threadId: thread.id, body: 'Regardez' }, alice.cookies)).json() as {
+      id: string;
+    };
+    const texteSeul = (
+      await post('/api/messages', { threadId: thread.id, body: 'Texte seul' }, alice.cookies, filesApp)
+    ).json() as { id: string };
+
+    const vidé = await filesApp.inject({
+      method: 'PUT',
+      url: `/api/messages/${avecFichier.id}`,
+      payload: { body: '' },
+      cookies: alice.cookies,
+    });
+    expect(vidé.statusCode).toBe(200);
+    expect(vidé.json()).toMatchObject({ body: '', attachment: { fileName: 'panne.png' } });
+
+    const refusé = await filesApp.inject({
+      method: 'PUT',
+      url: `/api/messages/${texteSeul.id}`,
+      payload: { body: '   ' },
+      cookies: alice.cookies,
+    });
+    expect(refusé.statusCode).toBe(400);
+    expect((refusé.json() as { error: string }).error).toBe('Le message ne peut pas être vide.');
   });
 
   it('joint un fichier à une réponse, dans le bon sous-fil', async () => {

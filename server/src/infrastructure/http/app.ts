@@ -66,6 +66,7 @@ import { checklistRoutes } from './plugins/checklists.js';
 import { documentRoutes } from './plugins/documents.js';
 import { notificationRoutes } from './plugins/notifications.js';
 import { uploadRoutes } from './plugins/uploads.js';
+import { createS3ObjectStore } from '../tech/object-store.js';
 import { createReceiptStorage } from '../tech/receipt-storage.js';
 import type { ReceiptStorage } from '../tech/receipt-storage.js';
 import { createDocumentStorage } from '../tech/document-storage.js';
@@ -138,6 +139,18 @@ export interface AppDependencies {
   /** Plafonds de requêtes par IP (voir DEFAULT_RATE_LIMITS) : relevés dans les tests d'intégration. */
   rateLimits?: Partial<RateLimits>;
 }
+
+/**
+ * Refus émis par `@fastify/multipart` pendant la lecture du flux, rendus en français. Seuls ceux
+ * qu'une requête légitime peut provoquer : les autres (violation de prototype, type de contenu
+ * inattendu) relèvent d'un client mal formé, et le message générique leur suffit.
+ */
+const MULTIPART_ERRORS: Record<string, string> = {
+  FST_REQ_FILE_TOO_LARGE: `Fichier trop lourd (${MAX_DOCUMENT_SIZE_BYTES / (1024 * 1024)} Mo maximum).`,
+  FST_FILES_LIMIT: 'Un seul fichier par envoi.',
+  FST_PARTS_LIMIT: 'Trop d’éléments dans le formulaire.',
+  FST_FIELDS_LIMIT: 'Trop de champs dans le formulaire.',
+};
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
   const app = Fastify({
@@ -231,15 +244,15 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.clock,
   );
   const memberService = new MemberService(deps.members, deps.equipments, deps.credentials);
-  // Justificatifs et documents partagent le même bucket S3/R2 dès que son environnement est
-  // complet, et retombent chacun sur leur répertoire sinon. Sans ni l'un ni l'autre, il n'y a ni
-  // justificatif à servir ni fichier à purger, et le dossier n'accepte que des liens.
-  const objectStorageEnv = deps.objectStorageEnv ?? {};
-  const receiptStorage =
-    deps.receiptStorage ?? createReceiptStorage(objectStorageEnv, deps.uploadsDir ?? null) ?? undefined;
-  const documentStorage = deps.documentStorage ?? createDocumentStorage(objectStorageEnv, deps.documentsDir ?? null);
-  const attachmentStorage =
-    deps.attachmentStorage ?? createAttachmentStorage(objectStorageEnv, deps.attachmentsDir ?? null);
+  // Justificatifs, documents et pièces jointes partagent le même bucket S3/R2 dès que son
+  // environnement est complet, et retombent chacun sur leur répertoire sinon. Sans ni l'un ni
+  // l'autre, il n'y a ni fichier à servir ni fichier à purger, et le dossier n'accepte que des
+  // liens. Le client S3 est construit une fois pour les trois : ils visent le même bucket, et
+  // chaque client traîne son propre pool de connexions.
+  const bucket = createS3ObjectStore(deps.objectStorageEnv ?? {});
+  const receiptStorage = deps.receiptStorage ?? createReceiptStorage(bucket, deps.uploadsDir ?? null) ?? undefined;
+  const documentStorage = deps.documentStorage ?? createDocumentStorage(bucket, deps.documentsDir ?? null);
+  const attachmentStorage = deps.attachmentStorage ?? createAttachmentStorage(bucket, deps.attachmentsDir ?? null);
   // Le journal des gestes sensibles part dans les logs du serveur : hors de portée des membres
   // concernés, contrairement aux notifications qu'ils peuvent effacer.
   const auditLogger: AuditLogger = {
@@ -288,6 +301,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.messages,
     deps.equipments,
     deps.members,
+    deps.documents,
     deps.idGenerator,
     deps.clock,
     notificationService,
@@ -303,6 +317,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   const documentService = new DocumentService(
     deps.documents,
     deps.equipments,
+    deps.messages,
     deps.idGenerator,
     deps.clock,
     documentStorage ?? undefined,
@@ -342,6 +357,13 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     // Corps illisible : Fastify échoue avant tout schéma, avec son message en anglais.
     if (httpError.code === 'FST_ERR_CTP_INVALID_JSON_BODY' || httpError.code === 'FST_ERR_CTP_EMPTY_JSON_BODY') {
       return reply.status(400).send({ error: 'Corps de requête invalide : JSON illisible.' });
+    }
+    // Corps multipart hors limites : @fastify/multipart échoue pendant la lecture du flux, donc
+    // avant tout code applicatif, et ses messages sont en anglais. Le membre, lui, a simplement
+    // choisi un fichier trop lourd.
+    const multipartMessage = MULTIPART_ERRORS[httpError.code ?? ''];
+    if (multipartMessage) {
+      return reply.status(413).send({ error: multipartMessage });
     }
     if (httpError.validation || (httpError.statusCode && httpError.statusCode < 500)) {
       return reply.status(httpError.statusCode ?? 400).send({ error: httpError.message ?? 'Requête invalide.' });

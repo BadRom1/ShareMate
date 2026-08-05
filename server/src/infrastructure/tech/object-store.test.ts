@@ -65,6 +65,21 @@ describe('FileObjectStore', () => {
     expect(await lire((await store.read('receipts/abc.pdf'))!.stream)).toBe('contenu');
   });
 
+  // Construit en repli d'un bucket, ce magasin n'écrira jamais : semer un répertoire vide à
+  // chaque démarrage n'apprendrait rien à l'exploitant.
+  it('ne crée son répertoire qu’au premier écrit', async () => {
+    const chemin = path.join(répertoire, 'jamais-utilisé');
+    const store = new FileObjectStore(chemin, 'receipts/');
+    expect(fs.existsSync(chemin)).toBe(false);
+    expect(await store.exists('receipts/abc.pdf')).toBe(false);
+    expect(await store.read('receipts/abc.pdf')).toBeNull();
+    await store.remove('receipts/abc.pdf');
+    expect(fs.existsSync(chemin)).toBe(false);
+
+    await store.put('receipts/abc.pdf', Buffer.from('x'), 'application/pdf');
+    expect(fs.existsSync(chemin)).toBe(true);
+  });
+
   it('ne signe aucune URL : le disque n’est joignable que par l’API', async () => {
     const store = new FileObjectStore(répertoire, 'receipts/');
     expect(await store.signedUrl()).toBeNull();

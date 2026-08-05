@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DOCUMENT_PREFIX, RICH_CONTENT_TYPES, createDocumentStorage } from './document-storage.js';
 import type { DocumentStorage } from './document-storage.js';
-import { FileObjectStore, MediaStorage } from './object-store.js';
+import { FileObjectStore, MediaStorage, createS3ObjectStore } from './object-store.js';
 
 /** Consomme un flux jusqu'au bout : un flux laissé ouvert survivrait au nettoyage du répertoire. */
 async function lire(stream: NodeJS.ReadableStream): Promise<string> {
@@ -88,19 +88,20 @@ describe('DocumentStorage', () => {
 });
 
 describe('createDocumentStorage', () => {
-  const BUCKET = {
+  /** Magasin distant quelconque : la fabrique ne fait que le préférer au disque. */
+  const BUCKET = createS3ObjectStore({
     S3_BUCKET: 'sharemate',
     S3_ENDPOINT: 'https://compte.r2.cloudflarestorage.com',
     S3_ACCESS_KEY_ID: 'clé',
     S3_SECRET_ACCESS_KEY: 'secret',
-  };
+  });
 
-  it('choisit le bucket dès que ses variables sont là, le disque sinon', () => {
+  it('préfère le bucket quand il y en a un, le disque sinon', () => {
     expect(createDocumentStorage(BUCKET, répertoire)).toBeInstanceOf(MediaStorage);
-    expect(createDocumentStorage({}, répertoire)).toBeInstanceOf(MediaStorage);
+    expect(createDocumentStorage(null, répertoire)).toBeInstanceOf(MediaStorage);
   });
 
   it('sans bucket ni répertoire, il n’y a pas de stockage', () => {
-    expect(createDocumentStorage({}, null)).toBeNull();
+    expect(createDocumentStorage(null, null)).toBeNull();
   });
 });

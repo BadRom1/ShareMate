@@ -157,7 +157,14 @@ export function MessageTree({ messages, members, currentMemberId, inCircle, busy
                 maxLength={4000}
                 autoFocus
               />
-              <button type="submit" className="icon-btn icon-confirm" title="Enregistrer">
+              <button
+                type="submit"
+                className="icon-btn icon-confirm"
+                // Le corps ne peut être vidé que d'un message qui porte un fichier : c'est alors
+                // lui qui le rend non vide.
+                disabled={editDraft.trim().length === 0 && !m.attachment}
+                title="Enregistrer"
+              >
                 <IconCheck size={18} />
               </button>
               <button type="button" className="icon-btn" onClick={() => setEditingMessageId(null)} title="Annuler">

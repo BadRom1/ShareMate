@@ -4,6 +4,7 @@ import { AuthorizationError, DomainError, ForbiddenError } from '../domain/share
 import { makeFixture } from './testing/fixture.js';
 import {
   CapturingNotifier,
+  InMemoryDocumentRepository,
   InMemoryMessageRepository,
   InMemoryObjectStorage,
   InMemoryThreadRepository,
@@ -13,6 +14,7 @@ async function setup() {
   const fx = await makeFixture();
   const threads = new InMemoryThreadRepository();
   const messages = new InMemoryMessageRepository(threads);
+  const documents = new InMemoryDocumentRepository();
   const notifier = new CapturingNotifier();
   const attachments = new InMemoryObjectStorage();
   const service = new DiscussionService(
@@ -20,12 +22,13 @@ async function setup() {
     messages,
     fx.equipments,
     fx.members,
+    documents,
     fx.idGenerator,
     fx.clock,
     notifier,
     attachments,
   );
-  return { service, threads, messages, notifier, attachments };
+  return { service, threads, messages, documents, notifier, attachments };
 }
 
 describe('DiscussionService', () => {
@@ -211,7 +214,7 @@ describe('DiscussionService — pièces jointes', () => {
   describe('cercle du fil', () => {
     it('refuse de joindre un fichier hors du cercle', async () => {
       const thread = await ctx.service.createThread({ equipmentId: 'e1', authorId: 'm1', title: 'Panne' });
-      await expect(ctx.service.assertCanAttach(thread.id, 'm3')).rejects.toThrow(ForbiddenError);
+      await expect(ctx.service.assertCanAttach(thread.id, 'm3', 1000)).rejects.toThrow(ForbiddenError);
       await expect(ctx.service.messageForMember('nope', 'm1')).rejects.toThrow(/introuvable/);
     });
 
@@ -234,6 +237,7 @@ describe('DiscussionService — pièces jointes', () => {
       messages,
       fx.equipments,
       fx.members,
+      new InMemoryDocumentRepository(),
       fx.idGenerator,
       fx.clock,
       new CapturingNotifier(),

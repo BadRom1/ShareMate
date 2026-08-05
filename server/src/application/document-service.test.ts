@@ -1,10 +1,16 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { DocumentService, EQUIPMENT_STORAGE_QUOTA_BYTES } from './document-service.js';
+import { DocumentService } from './document-service.js';
+import { EQUIPMENT_STORAGE_QUOTA_BYTES } from './equipment-storage.js';
 import { MAX_DOCUMENT_SIZE_BYTES } from '../domain/document/document.js';
 import type { ExternalLink, StoredFile } from '../domain/document/document.js';
 import { DomainError, ForbiddenError, NotFoundError } from '../domain/shared/domain-error.js';
 import { makeFixture } from './testing/fixture.js';
-import { InMemoryDocumentRepository, InMemoryObjectStorage } from './testing/in-memory.js';
+import {
+  InMemoryDocumentRepository,
+  InMemoryMessageRepository,
+  InMemoryObjectStorage,
+  InMemoryThreadRepository,
+} from './testing/in-memory.js';
 
 let clésTéléversées = 0;
 
@@ -28,9 +34,11 @@ function lien(url = 'https://kubota-eu.com/pieces'): ExternalLink {
 async function setup() {
   const fx = await makeFixture();
   const documents = new InMemoryDocumentRepository();
+  const threads = new InMemoryThreadRepository();
+  const messages = new InMemoryMessageRepository(threads);
   const storage = new InMemoryObjectStorage();
-  const service = new DocumentService(documents, fx.equipments, fx.idGenerator, fx.clock, storage);
-  return { service, documents, storage, equipments: fx.equipments };
+  const service = new DocumentService(documents, fx.equipments, messages, fx.idGenerator, fx.clock, storage);
+  return { service, documents, threads, messages, storage, equipments: fx.equipments };
 }
 
 describe('DocumentService', () => {
@@ -193,7 +201,8 @@ describe('DocumentService', () => {
   it('sans stockage configuré, la suppression reste possible', async () => {
     const fx = await makeFixture();
     const documents = new InMemoryDocumentRepository();
-    const sansStockage = new DocumentService(documents, fx.equipments, fx.idGenerator, fx.clock);
+    const messages = new InMemoryMessageRepository(new InMemoryThreadRepository());
+    const sansStockage = new DocumentService(documents, fx.equipments, messages, fx.idGenerator, fx.clock);
     const document = await sansStockage.addDocument(
       { equipmentId: 'e1', name: 'Manuel', category: 'MANUAL', content: fichier() },
       'm1',

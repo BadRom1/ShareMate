@@ -1549,6 +1549,11 @@ th {
   color: var(--green-dark);
 }
 
+.dropzone:has(input:focus-visible) {
+  outline: 2px solid var(--green);
+  outline-offset: 1px;
+}
+
 .dropzone.filled {
   flex-direction: row;
   align-items: center;

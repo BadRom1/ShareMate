@@ -1,5 +1,5 @@
-import { FileObjectStore, MediaStorage, createS3ObjectStore } from './object-store.js';
-import type { MediaDelivery, MediaType } from './object-store.js';
+import { FileObjectStore, MediaStorage } from './object-store.js';
+import type { MediaDelivery, MediaType, ObjectStore } from './object-store.js';
 
 /** Préfixe des clés de documents, seule forme qui circule hors de l'infrastructure. */
 export const DOCUMENT_PREFIX = 'documents/';
@@ -9,8 +9,10 @@ export const DOCUMENT_PREFIX = 'documents/';
  * politique vaut pour les documents d'un équipement **et** pour les pièces jointes d'un message :
  * ce qu'on range dans un dossier et ce qu'on montre dans une discussion sont de même nature.
  *
- * Ni exécutables, ni archives, ni HTML, ni SVG : le contenu d'un objet est servi depuis le domaine
- * du bucket, distinct du nôtre, où une page fabriquée s'exécuterait dans son propre contexte.
+ * Ni exécutables, ni archives, ni HTML, ni SVG. En mode bucket, le contenu est servi depuis un
+ * domaine distinct du nôtre, où une page fabriquée s'exécuterait dans son propre contexte ; en
+ * repli disque, l'API le relaie depuis notre origine, et un HTML `inline` y hériterait de la
+ * nôtre. La liste est la même dans les deux cas : elle doit tenir sous le plus permissif.
  */
 export const RICH_CONTENT_TYPES: Record<string, MediaType> = {
   '.pdf': { type: 'application/pdf', inline: true },
@@ -46,10 +48,9 @@ export type DocumentStorage = MediaStorage;
  * répertoire lui sert de repli en lecture : les objets déposés avant la bascule restent lisibles.
  */
 export function createDocumentStorage(
-  env: NodeJS.ProcessEnv,
+  bucket: ObjectStore | null,
   fallbackDirectory: string | null,
 ): DocumentStorage | null {
-  const bucket = createS3ObjectStore(env);
   const disk = fallbackDirectory ? new FileObjectStore(fallbackDirectory, DOCUMENT_PREFIX) : null;
   const policy = { keyPrefix: DOCUMENT_PREFIX, contentTypes: RICH_CONTENT_TYPES };
   if (bucket) return new MediaStorage(bucket, policy, disk ?? undefined);

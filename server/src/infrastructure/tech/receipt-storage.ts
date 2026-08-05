@@ -1,4 +1,4 @@
-import { FileObjectStore, MediaStorage, createS3ObjectStore } from './object-store.js';
+import { FileObjectStore, MediaStorage } from './object-store.js';
 import type { MediaDelivery, MediaType, ObjectStore } from './object-store.js';
 import type { ReceiptStorage as ReceiptStoragePort } from '../../application/ports.js';
 
@@ -84,8 +84,10 @@ export class ReceiptStorage implements ReceiptStoragePort {
  * déposés avant la bascule dorment encore sur le volume, et doivent rester lisibles sans qu'on ait
  * eu à les déplacer d'abord. `npm run migrate:receipts` les transfère ensuite, à froid.
  */
-export function createReceiptStorage(env: NodeJS.ProcessEnv, uploadsDirectory: string | null): ReceiptStorage | null {
-  const bucket = createS3ObjectStore(env);
+export function createReceiptStorage(
+  bucket: ObjectStore | null,
+  uploadsDirectory: string | null,
+): ReceiptStorage | null {
   const disk = uploadsDirectory ? new FileObjectStore(uploadsDirectory, RECEIPT_KEY_PREFIX) : null;
   if (bucket) return new ReceiptStorage(bucket, disk ?? undefined);
   return disk ? new ReceiptStorage(disk) : null;

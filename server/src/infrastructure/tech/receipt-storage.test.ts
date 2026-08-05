@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { RECEIPT_KEY_PREFIX, RECEIPT_PREFIX, ReceiptStorage, createReceiptStorage } from './receipt-storage.js';
-import { FileObjectStore } from './object-store.js';
+import { FileObjectStore, createS3ObjectStore } from './object-store.js';
 
 /** Consomme un flux jusqu'au bout. */
 async function lire(stream: NodeJS.ReadableStream): Promise<string> {
@@ -96,6 +96,9 @@ describe('bascule du volume vers le bucket', () => {
     const volume = new FileObjectStore(path.join(répertoire, 'volume'), RECEIPT_KEY_PREFIX);
     const bucket = new FileObjectStore(path.join(répertoire, 'bucket'), RECEIPT_KEY_PREFIX);
     const ancien = `/uploads/${crypto.randomUUID()}.png`;
+    // Le fichier est posé à la main : il représente ce qui dormait déjà là avant la bascule, donc
+    // avant que le magasin n'ait eu l'occasion de créer quoi que ce soit.
+    fs.mkdirSync(path.join(répertoire, 'volume'), { recursive: true });
     fs.writeFileSync(path.join(répertoire, 'volume', ancien.slice(RECEIPT_PREFIX.length)), 'déposé avant');
     return { ancien, bucket, migré: new ReceiptStorage(bucket, volume) };
   }
@@ -124,19 +127,20 @@ describe('bascule du volume vers le bucket', () => {
 });
 
 describe('createReceiptStorage', () => {
-  const BUCKET = {
+  /** Magasin distant quelconque : la fabrique ne fait que le préférer au disque. */
+  const BUCKET = createS3ObjectStore({
     S3_BUCKET: 'sharemate',
     S3_ENDPOINT: 'https://compte.r2.cloudflarestorage.com',
     S3_ACCESS_KEY_ID: 'clé',
     S3_SECRET_ACCESS_KEY: 'secret',
-  };
+  });
 
-  it('choisit le bucket dès que ses variables sont là, le répertoire sinon', () => {
+  it('préfère le bucket quand il y en a un, le répertoire sinon', () => {
     expect(createReceiptStorage(BUCKET, répertoire)).toBeInstanceOf(ReceiptStorage);
-    expect(createReceiptStorage({}, répertoire)).toBeInstanceOf(ReceiptStorage);
+    expect(createReceiptStorage(null, répertoire)).toBeInstanceOf(ReceiptStorage);
   });
 
   it('sans bucket ni répertoire, il n’y a rien à servir ni à purger', () => {
-    expect(createReceiptStorage({}, null)).toBeNull();
+    expect(createReceiptStorage(null, null)).toBeNull();
   });
 });

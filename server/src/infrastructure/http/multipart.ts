@@ -10,7 +10,10 @@ import { DomainError } from '../../domain/shared/domain-error.js';
  * revient au domaine, qui la fait de toute façon.
  */
 
-/** Longueur maximale d'un champ texte d'un corps multipart. */
+/**
+ * Longueur maximale d'un champ texte d'un corps multipart. Généreuse : le corps d'un message
+ * passe par là.
+ */
 const MAX_FIELD_LENGTH = 10_000;
 
 export interface MultipartUpload {
@@ -28,7 +31,13 @@ export async function readUpload(request: FastifyRequest, maxFileBytes: number):
   for await (const part of request.parts({ limits: { fileSize: maxFileBytes, files: 1, fields: 10 } })) {
     if (part.type === 'file') {
       upload.file = { filename: part.filename, content: await part.toBuffer() };
-    } else if (typeof part.value === 'string' && part.value.length <= MAX_FIELD_LENGTH) {
+    } else if (typeof part.value === 'string') {
+      // Un champ trop long est refusé, pas ignoré : passé sous silence, un `name` démesuré
+      // deviendrait « pas de nom » et un `equipmentId` démesuré, « champ obligatoire » — deux
+      // messages qui décrivent autre chose que ce qui s'est passé.
+      if (part.value.length > MAX_FIELD_LENGTH) {
+        throw new DomainError(`Le champ « ${part.fieldname} » dépasse ${MAX_FIELD_LENGTH} caractères.`);
+      }
       upload.fields[part.fieldname] = part.value;
     }
   }

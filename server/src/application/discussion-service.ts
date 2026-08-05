@@ -3,9 +3,11 @@ import type { MessageAttachment } from '../domain/discussion/message.js';
 import { Thread } from '../domain/discussion/thread.js';
 import { AuthorizationError, DomainError, NotFoundError } from '../domain/shared/domain-error.js';
 import { equipmentForMember } from './equipment-access.js';
+import { assertStorageAvailable } from './equipment-storage.js';
 import type { Equipment } from '../domain/equipment/equipment.js';
 import type {
   Clock,
+  DocumentRepository,
   EquipmentRepository,
   IdGenerator,
   MemberRepository,
@@ -46,6 +48,9 @@ export class DiscussionService {
     private readonly messages: MessageRepository,
     private readonly equipments: EquipmentRepository,
     private readonly members: MemberRepository,
+    // Les pièces jointes et le dossier se partagent la place d'un équipement : la mesurer
+    // suppose de voir les deux.
+    private readonly documents: DocumentRepository,
     private readonly idGenerator: IdGenerator,
     private readonly clock: Clock,
     private readonly notifier: Notifier,
@@ -151,12 +156,14 @@ export class DiscussionService {
   }
 
   /**
-   * Autorise une pièce jointe **avant** que l'octet n'atteigne le stockage : le demandeur doit
-   * appartenir au cercle du fil. Refuser après coup laisserait dans le bucket un objet que plus
-   * aucun message ne nommerait, c'est-à-dire hors de portée de la purge.
+   * Autorise une pièce jointe **avant** que l'octet n'atteigne le stockage : appartenance au
+   * cercle du fil, puis place restante sur l'équipement — la même que celle du dossier, puisque
+   * c'est le même bucket. Refuser après coup laisserait un objet que plus aucun message ne
+   * nommerait, c'est-à-dire hors de portée de la purge.
    */
-  async assertCanAttach(threadId: string, requesterId: string): Promise<void> {
-    await this.getThreadForMember(threadId, requesterId);
+  async assertCanAttach(threadId: string, requesterId: string, sizeBytes: number): Promise<void> {
+    const thread = await this.getThreadForMember(threadId, requesterId);
+    await assertStorageAvailable(this.documents, this.messages, thread.equipmentId, sizeBytes);
   }
 
   /**

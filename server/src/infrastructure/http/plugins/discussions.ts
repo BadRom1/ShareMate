@@ -22,6 +22,12 @@ export interface DiscussionRoutesOptions {
 const title = text(200);
 /** Corps d'un message : généreux mais borné — il est stocké et rediffusé à tout le cercle. */
 const messageBody = text(10_000);
+/**
+ * Corps d'une édition. Il peut être vidé, mais seulement d'un message qui porte un fichier —
+ * c'est alors lui qui le rend non vide. Le schéma laisse passer la chaîne vide et le domaine
+ * tranche : lui seul voit la pièce jointe, que le corps de la requête ne mentionne pas.
+ */
+const editedBody = text(10_000, 0);
 
 export const discussionRoutes: FastifyPluginAsync<DiscussionRoutesOptions> = async (
   app,
@@ -100,7 +106,7 @@ export const discussionRoutes: FastifyPluginAsync<DiscussionRoutesOptions> = asy
 
   app.put<{ Params: { id: string }; Body: { body: string } }>(
     '/api/messages/:id',
-    { schema: { params: idParams, body: object({ body: messageBody }, ['body']) } },
+    { schema: { params: idParams, body: object({ body: editedBody }, ['body']) } },
     async (request) => {
       const message = await discussionService.editMessage(request.params.id, request.authMember.id, request.body.body);
       return messageDto(message);
@@ -137,9 +143,9 @@ export const discussionRoutes: FastifyPluginAsync<DiscussionRoutesOptions> = asy
         .send({ error: `Format non accepté. Formats gérés : ${storage.extensions().join(', ')}.` });
     }
     const threadId = requiredField(fields, 'threadId');
-    // Appartenance au cercle d'abord : refuser après l'écriture laisserait dans le bucket un objet
-    // que plus aucun message ne nommerait, c'est-à-dire hors de portée de la purge.
-    await discussionService.assertCanAttach(threadId, request.authMember.id);
+    // Cercle et place disponible d'abord : refuser après l'écriture laisserait dans le bucket un
+    // objet que plus aucun message ne nommerait, c'est-à-dire hors de portée de la purge.
+    await discussionService.assertCanAttach(threadId, request.authMember.id, file.content.length);
 
     const storageKey = await storage.save(file.content, extension);
     try {

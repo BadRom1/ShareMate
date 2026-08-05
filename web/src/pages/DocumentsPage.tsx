@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DOCUMENT_CATEGORIES, api, documentContentUrl } from '../api';
 import type { DocumentCategory, EquipmentDocument, Member } from '../api';
 import { DOCUMENT_CATEGORY_LABELS, formatBytes, formatDate, linkHost } from '../format';
@@ -50,7 +50,6 @@ export function DocumentsPage({ members, currentMemberId, initialEquipmentId }: 
   const [newCategory, setNewCategory] = useState<DocumentCategory>('MANUAL');
   const [newUrl, setNewUrl] = useState('');
   const [newFile, setNewFile] = useState<File | null>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
 
   // Renommage en ligne.
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -411,36 +410,34 @@ export function DocumentsPage({ members, currentMemberId, initialEquipmentId }: 
               </div>
 
               {draft === 'file' ? (
-                <>
+                // Le champ est lui-même la zone de dépôt : un bouton qui le déclencherait ferait
+                // deux contrôles pour un geste, et `hidden` le sortirait du parcours clavier.
+                <label className={`dropzone ${newFile ? 'filled' : ''}`}>
                   <input
-                    ref={fileInput}
                     type="file"
-                    hidden
-                    onChange={(e) => chooseFile(e.target.files?.[0] ?? null)}
+                    className="visually-hidden"
                     aria-label="Fichier à déposer"
+                    onChange={(e) => {
+                      chooseFile(e.target.files?.[0] ?? null);
+                      e.target.value = '';
+                    }}
                   />
-                  <button
-                    type="button"
-                    className={`dropzone ${newFile ? 'filled' : ''}`}
-                    onClick={() => fileInput.current?.click()}
-                  >
-                    {newFile ? (
-                      <>
-                        <IconFile size={22} />
-                        <span>
-                          <span className="doc-name">{newFile.name}</span>
-                          <span className="doc-sub">{formatBytes(newFile.size)} — cliquez pour changer</span>
-                        </span>
-                      </>
-                    ) : (
-                      <>
-                        <IconUpload size={24} />
-                        <span>Choisissez un fichier</span>
-                        <span className="muted">PDF, image, document bureautique ou texte — 25 Mo maximum</span>
-                      </>
-                    )}
-                  </button>
-                </>
+                  {newFile ? (
+                    <>
+                      <IconFile size={22} />
+                      <span>
+                        <span className="doc-name">{newFile.name}</span>
+                        <span className="doc-sub">{formatBytes(newFile.size)} — cliquez pour changer</span>
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <IconUpload size={24} />
+                      <span>Choisissez un fichier</span>
+                      <span className="muted">PDF, image, document bureautique ou texte — 25 Mo maximum</span>
+                    </>
+                  )}
+                </label>
               ) : (
                 <label className="field">
                   Adresse

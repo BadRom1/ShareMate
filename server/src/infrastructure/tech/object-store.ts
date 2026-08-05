@@ -43,11 +43,22 @@ const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** Objets rangés à plat dans un répertoire du disque, le préfixe de leur clé retiré. */
 export class FileObjectStore implements ObjectStore {
+  private created = false;
+
   constructor(
     private readonly directory: string,
     private readonly keyPrefix: string,
-  ) {
-    fs.mkdirSync(directory, { recursive: true });
+  ) {}
+
+  /**
+   * Crée le répertoire au premier écrit, et lui seul. Le faire à la construction sèmerait des
+   * répertoires vides à chaque démarrage : avec un bucket configuré, ces magasins-là ne servent
+   * que de repli en lecture et n'écriront jamais rien.
+   */
+  private ensureDirectory(): void {
+    if (this.created) return;
+    fs.mkdirSync(this.directory, { recursive: true });
+    this.created = true;
   }
 
   /** Chemin du fichier, ou `null` si la clé ne peut désigner aucun objet de ce magasin. */
@@ -67,6 +78,7 @@ export class FileObjectStore implements ObjectStore {
   async put(key: string, content: Buffer, _contentType: string): Promise<void> {
     const file = this.filePath(key);
     if (!file) throw new Error(`Clé d’objet invalide : ${key}`);
+    this.ensureDirectory();
     await fs.promises.writeFile(file, content);
   }
 

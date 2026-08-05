@@ -1,5 +1,5 @@
-import { FileObjectStore, MediaStorage, createS3ObjectStore } from './object-store.js';
-import type { MediaDelivery } from './object-store.js';
+import { FileObjectStore, MediaStorage } from './object-store.js';
+import type { MediaDelivery, ObjectStore } from './object-store.js';
 import { RICH_CONTENT_TYPES } from './document-storage.js';
 
 /** Préfixe des clés de pièces jointes, distinct des justificatifs et des documents du même bucket. */
@@ -20,10 +20,9 @@ export type AttachmentStorage = MediaStorage;
  * lecture quand le bucket arrive après coup.
  */
 export function createAttachmentStorage(
-  env: NodeJS.ProcessEnv,
+  bucket: ObjectStore | null,
   fallbackDirectory: string | null,
 ): AttachmentStorage | null {
-  const bucket = createS3ObjectStore(env);
   const disk = fallbackDirectory ? new FileObjectStore(fallbackDirectory, ATTACHMENT_PREFIX) : null;
   const policy = { keyPrefix: ATTACHMENT_PREFIX, contentTypes: RICH_CONTENT_TYPES };
   if (bucket) return new MediaStorage(bucket, policy, disk ?? undefined);
