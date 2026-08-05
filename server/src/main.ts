@@ -18,6 +18,7 @@ import {
   SqliteReimbursementRepository,
   SqliteReservationRepository,
   SqliteSessionRepository,
+  SqliteSubEquipmentRepository,
   SqliteUsageRecordRepository,
 } from './infrastructure/persistence/sqlite/repositories.js';
 import {
@@ -57,6 +58,7 @@ const pushSender = createPushSenderFromEnv(process.env);
 const app = await buildApp({
   members: new SqliteMemberRepository(db),
   equipments: new SqliteEquipmentRepository(db),
+  subEquipments: new SqliteSubEquipmentRepository(db),
   reservations: new SqliteReservationRepository(db),
   usageRecords: new SqliteUsageRecordRepository(db),
   expenses: new SqliteExpenseRepository(db),

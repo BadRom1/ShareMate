@@ -25,6 +25,12 @@ partage des frais façon Tricount.
   image/PDF optionnel ; répartition **par parts égales**, **au prorata du temps d'usage** (calculé à
   partir des réservations) ou **montants personnalisés** ; soldes « qui doit combien à qui » avec
   **minimisation du nombre de transactions** ; historique des remboursements déclarés.
+- **Contenu du lot** : chaque équipement porte la liste de ce qui part avec lui — la remorque de
+  la minipelle, ses godets, la pompe à graisse, la caisse à outils, un jerrican. Chaque élément a
+  un nom, une quantité et une précision libre (dimensions, plaque, emplacement), et se déplie
+  depuis la fiche de l'équipement. C'est un **inventaire, pas un équipement en réduction** : rien
+  n'y est réservable et rien n'y porte de dépense — un godet ne se prête pas sans la pelle. Comme
+  une checklist, le lot appartient au cercle : tout membre le complète, le corrige et le retire.
 - **Checklists** : une ou plusieurs checklists par équipement (ex. « Avant utilisation »,
   « Hivernage ») avec leurs points de contrôle. Une checklist **appartient au cercle, pas à son
   créateur** : tout membre du cercle peut la cocher, la renommer, ajouter/modifier/supprimer ses
@@ -57,7 +63,8 @@ server/src/
 │   │                 # StoredFile (référence d'un objet stocké, et ses bornes)
 │   ├── member/       # Member (email validé : il sert d'identifiant de connexion)
 │   ├── auth/         # MemberCredential (mot de passe, invitation datée), Session
-│   ├── equipment/    # Equipment (cercle des membres, compteur heures/km, seuil d'entretien)
+│   ├── equipment/    # Equipment (cercle des membres, compteur heures/km, seuil d'entretien),
+│   │                 # SubEquipment (contenu du lot : remorque, godets, jerrican…)
 │   ├── reservation/  # Reservation + règle de non-chevauchement, récurrences
 │   ├── usage/        # UsageRecord + calcul des alertes de maintenance
 │   ├── expense/      # Expense (règles de répartition), Reimbursement,
@@ -114,7 +121,7 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 
 ```bash
 npm install
-npm test              # 579 tests : 483 serveur (Node) + 96 front (jsdom)
+npm test              # 624 tests : 523 serveur (Node) + 101 front (jsdom)
 npm run test:coverage # Tests + seuils de couverture (90 % lignes/fonctions, 85 % branches)
 npm run lint          # ESLint (frontières hexagonales + règles React hooks)
 npm run format        # Prettier (format:check en CI)
@@ -250,7 +257,7 @@ la confiance est totale et assumée. Le reste de cette section dit précisément
   des cercles qu'il partage, et ceux qu'il a invités tant qu'aucun équipement ne les réunit encore.
   Hors de ce périmètre, un membre n'apprend ni l'existence, ni le nom, ni l'email des autres.
 - Tout ce qui pend à un équipement (réservations, usage, dépenses, soldes, justificatifs,
-  discussions, checklists, documents) n'est lisible et modifiable que par les membres de son cercle. La règle
+  discussions, checklists, documents, contenu du lot) n'est lisible et modifiable que par les membres de son cercle. La règle
   est unique et vit dans la couche application (`equipment-access.ts`, `receipt-access.ts`) ; les
   tests d'intégration la vérifient route par route. Les vues transverses (liste des équipements,
   calendrier, alertes d'entretien, historique d'un membre) sont cadrées sur le périmètre du

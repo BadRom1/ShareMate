@@ -18,6 +18,7 @@ import {
   SqliteReimbursementRepository,
   SqliteReservationRepository,
   SqliteSessionRepository,
+  SqliteSubEquipmentRepository,
   SqliteUsageRecordRepository,
 } from '../persistence/sqlite/repositories.js';
 import { CryptoTokenGenerator, ScryptPasswordHasher, SystemClock, UuidGenerator } from '../tech/adapters.js';
@@ -46,6 +47,7 @@ async function buildTestApp(overrides: Partial<AppDependencies> = {}): Promise<F
   return buildApp({
     members: new SqliteMemberRepository(db),
     equipments: new SqliteEquipmentRepository(db),
+    subEquipments: new SqliteSubEquipmentRepository(db),
     reservations: new SqliteReservationRepository(db),
     usageRecords: new SqliteUsageRecordRepository(db),
     expenses: new SqliteExpenseRepository(db),
@@ -1085,6 +1087,116 @@ describe('API — checklists (checklists + points de contrôle)', () => {
     expect(((await get(`/api/equipments/${equipment.id}/checklists`, alice.cookies)).json() as unknown[]).length).toBe(
       0,
     );
+  });
+});
+
+describe('API — sous-équipements (contenu du lot)', () => {
+  it('compose le lot, le corrige depuis tout le cercle, et le refuse au-dehors', async () => {
+    const { equipment, alice, bruno, chloe } = await setupMembersAndEquipment();
+
+    const remorque = await post(
+      '/api/sub-equipments',
+      { equipmentId: equipment.id, name: 'Remorque', notes: 'Plaque AB-123-CD' },
+      alice.cookies,
+    );
+    expect(remorque.statusCode).toBe(201);
+    expect(remorque.json()).toMatchObject({ name: 'Remorque', quantity: 1, position: 0 });
+
+    // Bruno, membre du cercle sans avoir rien saisi jusqu'ici, complète le lot.
+    const godets = await post(
+      '/api/sub-equipments',
+      { equipmentId: equipment.id, name: 'Godets', quantity: 3, notes: '30, 60, 90 cm' },
+      bruno.cookies,
+    );
+    expect(godets.statusCode).toBe(201);
+    expect((godets.json() as { position: number }).position).toBe(1);
+
+    const lot = (await get(`/api/equipments/${equipment.id}/sub-equipments`, alice.cookies)).json() as {
+      id: string;
+      name: string;
+      quantity: number;
+    }[];
+    expect(lot.map((s) => s.name)).toEqual(['Remorque', 'Godets']);
+
+    // Corriger et retirer sont ouverts à tout le cercle, quel qu'ait été l'auteur de la saisie.
+    const corrigé = await app.inject({
+      method: 'PUT',
+      url: `/api/sub-equipments/${(godets.json() as { id: string }).id}`,
+      payload: { quantity: 4, notes: null },
+      cookies: alice.cookies,
+    });
+    expect(corrigé.statusCode).toBe(200);
+    expect(corrigé.json()).toMatchObject({ name: 'Godets', quantity: 4, notes: null });
+
+    // Chloé, hors cercle : le lot n'existe pas pour elle, en lecture comme en écriture.
+    expect((await get(`/api/equipments/${equipment.id}/sub-equipments`, chloe.cookies)).statusCode).toBe(404);
+    expect(
+      (await post('/api/sub-equipments', { equipmentId: equipment.id, name: 'Pirate' }, chloe.cookies)).statusCode,
+    ).toBe(404);
+    expect(
+      (
+        await app.inject({
+          method: 'PUT',
+          url: `/api/sub-equipments/${(remorque.json() as { id: string }).id}`,
+          payload: { name: 'Pirate' },
+          cookies: chloe.cookies,
+        })
+      ).statusCode,
+    ).toBe(404);
+    expect(
+      (
+        await app.inject({
+          method: 'DELETE',
+          url: `/api/sub-equipments/${(remorque.json() as { id: string }).id}`,
+          cookies: chloe.cookies,
+        })
+      ).statusCode,
+    ).toBe(404);
+
+    expect(
+      (
+        await app.inject({
+          method: 'DELETE',
+          url: `/api/sub-equipments/${(remorque.json() as { id: string }).id}`,
+          cookies: bruno.cookies,
+        })
+      ).statusCode,
+    ).toBe(204);
+    expect(
+      ((await get(`/api/equipments/${equipment.id}/sub-equipments`, alice.cookies)).json() as unknown[]).length,
+    ).toBe(1);
+  });
+
+  it('refuse une quantité fractionnaire ou nulle, et une modification vide', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment();
+    for (const quantity of [0, 1.5]) {
+      const refused = await post(
+        '/api/sub-equipments',
+        { equipmentId: equipment.id, name: 'Godets', quantity },
+        alice.cookies,
+      );
+      expect(refused.statusCode).toBe(400);
+    }
+    const créé = await post('/api/sub-equipments', { equipmentId: equipment.id, name: 'Godets' }, alice.cookies);
+    const vide = await app.inject({
+      method: 'PUT',
+      url: `/api/sub-equipments/${(créé.json() as { id: string }).id}`,
+      payload: {},
+      cookies: alice.cookies,
+    });
+    expect(vide.statusCode).toBe(400);
+  });
+
+  it('le lot disparaît avec l’équipement', async () => {
+    // Il n'accompagne plus rien : la cascade de la persistance l'emporte, sans laisser de rangée
+    // rattachée à un équipement qui n'existe plus.
+    const { equipment, alice } = await setupMembersAndEquipment();
+    await post('/api/sub-equipments', { equipmentId: equipment.id, name: 'Remorque' }, alice.cookies);
+    expect(
+      (await app.inject({ method: 'DELETE', url: `/api/equipments/${equipment.id}`, cookies: alice.cookies }))
+        .statusCode,
+    ).toBe(204);
+    expect((await get(`/api/equipments/${equipment.id}/sub-equipments`, alice.cookies)).statusCode).toBe(404);
   });
 });
 

@@ -19,6 +19,7 @@ import type { Member } from '../../domain/member/member.js';
 import { MemberService } from '../../application/member-service.js';
 import { AuthService } from '../../application/auth-service.js';
 import { EquipmentService } from '../../application/equipment-service.js';
+import { SubEquipmentService } from '../../application/sub-equipment-service.js';
 import { ReservationService } from '../../application/reservation-service.js';
 import { UsageService } from '../../application/usage-service.js';
 import { ExpenseService } from '../../application/expense-service.js';
@@ -48,6 +49,7 @@ import type {
   ReimbursementRepository,
   ReservationRepository,
   SessionRepository,
+  SubEquipmentRepository,
   TokenGenerator,
   UsageRecordRepository,
 } from '../../application/ports.js';
@@ -58,6 +60,7 @@ import type { RateLimits } from './rate-limit.js';
 import { authRoutes } from './plugins/auth.js';
 import { memberRoutes } from './plugins/members.js';
 import { equipmentRoutes } from './plugins/equipments.js';
+import { subEquipmentRoutes } from './plugins/sub-equipments.js';
 import { reservationRoutes } from './plugins/reservations.js';
 import { usageRoutes } from './plugins/usage.js';
 import { expenseRoutes } from './plugins/expenses.js';
@@ -78,6 +81,7 @@ import { MAX_DOCUMENT_SIZE_BYTES } from '../../domain/document/document.js';
 export interface AppDependencies {
   members: MemberRepository;
   equipments: EquipmentRepository;
+  subEquipments: SubEquipmentRepository;
   reservations: ReservationRepository;
   usageRecords: UsageRecordRepository;
   expenses: ExpenseRepository;
@@ -271,6 +275,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.messages,
     attachmentStorage ?? undefined,
   );
+  const subEquipmentService = new SubEquipmentService(deps.subEquipments, deps.equipments, deps.idGenerator);
   const reservationService = new ReservationService(
     deps.reservations,
     deps.equipments,
@@ -418,6 +423,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     await protectedScope.register(authRoutes, { authService, cookieSecure: deps.cookieSecure ?? false, rateLimits });
     await protectedScope.register(memberRoutes, { authService, memberService, rateLimits });
     await protectedScope.register(equipmentRoutes, { equipmentService });
+    await protectedScope.register(subEquipmentRoutes, { subEquipmentService });
     await protectedScope.register(reservationRoutes, { reservationService });
     await protectedScope.register(usageRoutes, { usageService });
     await protectedScope.register(expenseRoutes, { expenseService });

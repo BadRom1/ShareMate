@@ -2,6 +2,7 @@ import type { SqliteDb } from './database.js';
 import { Member } from '../../../domain/member/member.js';
 import { Equipment } from '../../../domain/equipment/equipment.js';
 import type { MeterUnit } from '../../../domain/equipment/equipment.js';
+import { SubEquipment } from '../../../domain/equipment/sub-equipment.js';
 import { Reservation } from '../../../domain/reservation/reservation.js';
 import { UsageRecord } from '../../../domain/usage/usage-record.js';
 import { Expense } from '../../../domain/expense/expense.js';
@@ -40,6 +41,7 @@ import type {
   ReimbursementRepository,
   ReservationRepository,
   SessionRepository,
+  SubEquipmentRepository,
   UsageRecordRepository,
   WebPushSubscription,
 } from '../../../application/ports.js';
@@ -308,6 +310,64 @@ export class SqliteEquipmentRepository implements EquipmentRepository {
 
   async delete(id: string): Promise<void> {
     this.db.prepare('DELETE FROM equipments WHERE id = ?').run(id);
+  }
+}
+
+interface SubEquipmentRow {
+  id: string;
+  equipment_id: string;
+  name: string;
+  quantity: number;
+  notes: string | null;
+  position: number;
+}
+
+export class SqliteSubEquipmentRepository implements SubEquipmentRepository {
+  constructor(private readonly db: SqliteDb) {}
+
+  private toEntity(row: SubEquipmentRow): SubEquipment {
+    return SubEquipment.create({
+      id: row.id,
+      equipmentId: row.equipment_id,
+      name: row.name,
+      quantity: row.quantity,
+      notes: row.notes,
+      position: row.position,
+    });
+  }
+
+  async findById(id: string): Promise<SubEquipment | null> {
+    const row = this.db.prepare('SELECT * FROM sub_equipments WHERE id = ?').get(id) as SubEquipmentRow | undefined;
+    return row ? this.toEntity(row) : null;
+  }
+
+  async findByEquipmentId(equipmentId: string): Promise<SubEquipment[]> {
+    const rows = this.db
+      .prepare('SELECT * FROM sub_equipments WHERE equipment_id = ? ORDER BY position, id')
+      .all(equipmentId) as SubEquipmentRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
+  async save(subEquipment: SubEquipment): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO sub_equipments (id, equipment_id, name, quantity, notes, position)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, quantity = excluded.quantity,
+           notes = excluded.notes, position = excluded.position`,
+      )
+      .run(
+        subEquipment.id,
+        subEquipment.equipmentId,
+        subEquipment.name,
+        subEquipment.quantity,
+        subEquipment.notes,
+        subEquipment.position,
+      );
+  }
+
+  async delete(id: string): Promise<void> {
+    this.db.prepare('DELETE FROM sub_equipments WHERE id = ?').run(id);
   }
 }
 
