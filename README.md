@@ -31,9 +31,18 @@ partage des frais façon Tricount.
   points et la supprimer entièrement. Chaque coche garde la trace de qui l'a validée et quand, et le
   créateur reste affiché. Avancement affiché (`3/7`) et remise à zéro en un geste pour réutiliser la
   checklist à la prochaine sortie.
-- **Discussions** : fils de discussion par équipement, avec sous-fils de réponses. Le fil et le
-  message se renomment, s'éditent et se suppriment **par leur auteur seul** ; tout le cercle lit et
-  répond.
+- **Documents** : un dossier par équipement, où le cercle range ce qui s'y rattache — manuel
+  d'utilisation, certificat d'assurance, facture d'achat, photos — sous forme de **fichiers
+  déposés** ou de **liens externes**, dans une même liste. Chaque document porte une catégorie
+  choisie à la main (Manuel, Assurance, Achat & garantie, Entretien, Photos, Autre) et se
+  renomme. Comme une checklist, un document **appartient au cercle et non à son déposant** : tout
+  membre peut le renommer, le reclasser et le supprimer, et le nom du déposant reste affiché. Les
+  fichiers vivent dans un **stockage d'objets S3/R2** (repli sur le disque si aucun bucket n'est
+  configuré) ; la base n'en garde que les métadonnées.
+- **Discussions** : fils de discussion par équipement, avec sous-fils de réponses. Un message peut
+  porter **un fichier joint** — la photo d'une panne, un devis — envoyé avec lui ou seul, sans
+  texte. Le fil et le message se renomment, s'éditent et se suppriment **par leur auteur seul** ;
+  tout le cercle lit et répond.
 - **Notifications** : centre in-app (cloche), Web Push (PWA) et push natif Android, réglables par
   type d'événement et par membre. Détail et configuration dans [docs/notifications.md](docs/notifications.md).
 
@@ -44,7 +53,8 @@ DDD + architecture hexagonale, TypeScript de bout en bout, développé en TDD st
 ```
 server/src/
 ├── domain/           # Entités, value objects, règles métier pures — AUCUNE dépendance externe
-│   ├── shared/       # Money (centimes entiers), TimeRange (fin exclusive), erreurs métier
+│   ├── shared/       # Money (centimes entiers), TimeRange (fin exclusive), erreurs métier,
+│   │                 # StoredFile (référence d'un objet stocké, et ses bornes)
 │   ├── member/       # Member (email validé : il sert d'identifiant de connexion)
 │   ├── auth/         # MemberCredential (mot de passe, invitation datée), Session
 │   ├── equipment/    # Equipment (cercle des membres, compteur heures/km, seuil d'entretien)
@@ -52,16 +62,20 @@ server/src/
 │   ├── usage/        # UsageRecord + calcul des alertes de maintenance
 │   ├── expense/      # Expense (règles de répartition), Reimbursement,
 │   │                 # calcul des soldes + minimisation des transactions (type Tricount)
-│   ├── discussion/   # Thread + Message (sous-fils de réponses)
+│   ├── discussion/   # Thread + Message (sous-fils de réponses, fichier joint)
 │   ├── checklist/    # Checklist + ChecklistItem (points cochés, traçabilité de la coche)
+│   ├── document/     # Document (fichier déposé ou lien externe, catégorie, borne de poids)
 │   └── notification/ # Notification, NotificationPreference, types notifiables
 ├── application/      # Use cases + ports (repositories, Clock, IdGenerator, Notifier, AuditLogger)
 │                     # equipment-access.ts : règle d'accès unique (cercle de l'équipement)
 │                     # receipt-access.ts   : un justificatif suit la dépense qui le porte
+│                     # document-access.ts  : purge des objets qu'aucun document ne nomme plus
 └── infrastructure/   # Adapters
     ├── http/         # Fastify : app.ts (transverse) + plugins/ (un fichier par domaine)
     ├── persistence/  # SQLite (better-sqlite3), migrations versionnées par PRAGMA user_version
-    └── tech/         # scrypt, UUID, horloge, stockage des justificatifs, push (Web Push + FCM)
+    └── tech/         # scrypt, UUID, horloge, push (Web Push + FCM)
+                      # object-store.ts : magasin d'objets brut (disque ou bucket S3/R2),
+                      # partagé par les justificatifs et les documents
 web/src/              # Front React (Vite) — adapter de présentation
 ```
 
@@ -77,6 +91,21 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 - Le relevé de compteur est **monotone** : un relevé inférieur au dernier connu est refusé.
 - Le **cercle est porté par l'équipement**, pas par une entité « groupe ». Deux personnes sans
   équipement commun ne se voient pas, ce qui donne le multi-cercles sans multi-tenant.
+- Une **pièce jointe suit son message** : au plus une, jamais remplacée par une édition (elle a
+  déjà été vue par le cercle), et emportée par la suppression du message, de ses réponses, de son
+  fil ou de l'équipement. Elle n'entre pas dans le dossier de l'équipement — ce sont deux gestes
+  différents, montrer et ranger.
+- Un document est **une entité, deux natures** (`FILE` ou `LINK`) : le membre range un manuel PDF
+  et un tutoriel vidéo côte à côte, et le code n'a qu'une liste, qu'une règle d'accès, qu'une
+  suppression. La table l'écrit aussi, par une contrainte `CHECK` qui exclut la rangée hybride.
+- Le stockage d'objets est **le même code pour R2 et S3** : R2 parle le protocole S3, seul
+  l'`endpoint` change. Un port `ObjectStorage` côté application, un magasin brut côté
+  infrastructure — que justificatifs et documents partagent —, et un repli disque quand les
+  variables du bucket sont absentes : les tests et le développement tournent sans bucket, comme le
+  push tourne sans clés VAPID.
+- Un chemin de justificatif (`/uploads/<uuid>.<ext>`) est **un identifiant, pas une adresse** : il
+  n'a pas changé au passage dans le bucket, où il devient la clé `receipts/<uuid>.<ext>`. C'est ce
+  qui permet de basculer sans réécrire une seule dépense, ni le schéma HTTP, ni le front.
 - Toutes les entrées HTTP sont validées par un **schéma JSON** (Ajv, embarqué dans Fastify) :
   objets fermés, bornes de longueur, énumérations tirées du domaine. Les types TypeScript des
   handlers décrivent donc ce qui arrive réellement.
@@ -85,12 +114,13 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 
 ```bash
 npm install
-npm test              # 440 tests : 361 serveur (Node) + 79 front (jsdom)
+npm test              # 579 tests : 483 serveur (Node) + 96 front (jsdom)
 npm run test:coverage # Tests + seuils de couverture (90 % lignes/fonctions, 85 % branches)
 npm run lint          # ESLint (frontières hexagonales + règles React hooks)
 npm run format        # Prettier (format:check en CI)
 npm run typecheck     # tsc sur les deux workspaces
 npm run audit:prod    # npm audit des dépendances de production (high+)
+npm run migrate:receipts -- --dry  # transfert des justificatifs du volume vers le bucket
 npm run dev:server    # API sur http://localhost:3000
 npm run dev:web       # Front Vite sur http://localhost:5173 (proxy /api → 3000)
 npm run build         # Build de production (server/dist + web/dist)
@@ -111,16 +141,81 @@ npm start             # Sert l'API + le front buildé
 
 Variables d'environnement du serveur :
 
-| Variable         | Défaut                       | Rôle                                                        |
-| ---------------- | ---------------------------- | ----------------------------------------------------------- |
-| `PORT`           | `3000`                       | Port HTTP                                                   |
-| `DATA_DIR`       | `./data`                     | Répertoire des données persistantes                         |
-| `DATABASE_PATH`  | `$DATA_DIR/sharemate.sqlite` | Fichier SQLite                                              |
-| `UPLOADS_DIR`    | `$DATA_DIR/uploads`          | Justificatifs uploadés                                      |
-| `WEB_DIST_DIR`   | `../web/dist`                | Front statique servi par le serveur                         |
-| `NODE_ENV`       | —                            | `production` : cookie `Secure`, `trustProxy`, logs JSON     |
-| `CORS_ORIGINS`   | — (vide : pas de CORS)       | Origines cross-origin autorisées, séparées par des virgules |
-| `VAPID_*`, `FCM` | — (push désactivé)           | Push : voir [docs/notifications.md](docs/notifications.md)  |
+| Variable          | Défaut                       | Rôle                                                        |
+| ----------------- | ---------------------------- | ----------------------------------------------------------- |
+| `PORT`            | `3000`                       | Port HTTP                                                   |
+| `DATA_DIR`        | `./data`                     | Répertoire des données persistantes                         |
+| `DATABASE_PATH`   | `$DATA_DIR/sharemate.sqlite` | Fichier SQLite                                              |
+| `UPLOADS_DIR`     | `$DATA_DIR/uploads`          | Justificatifs, quand aucun bucket S3/R2 n'est configuré     |
+| `DOCUMENTS_DIR`   | `$DATA_DIR/documents`        | Documents, quand aucun bucket S3/R2 n'est configuré         |
+| `ATTACHMENTS_DIR` | `$DATA_DIR/attachments`      | Pièces jointes, quand aucun bucket S3/R2 n'est configuré    |
+| `S3_*`            | — (repli sur le disque)      | Bucket des justificatifs et des documents : voir ci-dessous |
+| `WEB_DIST_DIR`    | `../web/dist`                | Front statique servi par le serveur                         |
+| `NODE_ENV`        | —                            | `production` : cookie `Secure`, `trustProxy`, logs JSON     |
+| `CORS_ORIGINS`    | — (vide : pas de CORS)       | Origines cross-origin autorisées, séparées par des virgules |
+| `VAPID_*`, `FCM`  | — (push désactivé)           | Push : voir [docs/notifications.md](docs/notifications.md)  |
+
+### Stockage des fichiers (Cloudflare R2 ou Amazon S3)
+
+**Justificatifs de dépense, documents d'équipement et pièces jointes des messages** partagent le
+même bucket compatible S3, sous trois préfixes distincts (`receipts/`, `documents/`,
+`attachments/`), dès que ces quatre variables sont présentes. Sinon ils tombent respectivement sur
+`UPLOADS_DIR`, `DOCUMENTS_DIR` et `ATTACHMENTS_DIR`, ce qui permet de développer et de tester sans
+bucket.
+
+| Variable               | Rôle                                                         |
+| ---------------------- | ------------------------------------------------------------ |
+| `S3_BUCKET`            | Nom du bucket                                                |
+| `S3_ENDPOINT`          | `https://<id-de-compte>.r2.cloudflarestorage.com` pour R2    |
+| `S3_ACCESS_KEY_ID`     | Identifiant du jeton d'accès                                 |
+| `S3_SECRET_ACCESS_KEY` | Secret du jeton d'accès                                      |
+| `S3_REGION`            | `auto` par défaut (valeur documentée par Cloudflare pour R2) |
+
+**Le bucket doit rester privé.** L'application ne s'appuie jamais sur un accès public : elle émet
+une URL signée valable cinq minutes, après avoir vérifié que le demandeur appartient au cercle de
+l'équipement. Un bucket ouvert rendrait ce contrôle décoratif.
+
+Plafonds et formats diffèrent selon la nature du fichier :
+
+|                  | Justificatif de dépense | Document d'équipement                            | Pièce jointe de message |
+| ---------------- | ----------------------- | ------------------------------------------------ | ----------------------- |
+| Poids maximal    | 10 Mo par fichier       | 25 Mo par fichier                                | 25 Mo par fichier       |
+| Formats acceptés | png, jpg, webp, pdf     | + gif, txt, csv, doc(x), xls(x), ppt(x), od[tsp] | idem document           |
+
+**Documents et pièces jointes se partagent 500 Mo par équipement** — c'est le même bucket, donc la
+même enveloppe. Deux budgets séparés en feraient deux fois plus, et ne plafonner que le dossier
+ferait des discussions la façon la moins chère de remplir le bucket. Le contrôle a lieu avant que
+l'octet n'atteigne le stockage ; il n'est pas atomique — deux dépôts simultanés peuvent dépasser le
+plafond d'un fichier au plus. C'est un garde-fou de facture, pas une réservation.
+
+Ni exécutables, ni archives, ni HTML, ni SVG. Avec un bucket, le contenu est servi depuis un domaine
+distinct du nôtre, où une page fabriquée s'exécuterait dans son propre contexte ; en repli disque,
+l'API le relaie depuis notre origine, et un HTML `inline` y hériterait de la nôtre. La liste vaut
+donc pour le plus permissif des deux modes.
+
+#### Faire passer les justificatifs existants dans le bucket
+
+La bascule **ne casse rien et ne demande aucune coupure** : dès que les variables sont posées, les
+nouveaux fichiers vont dans le bucket, et ceux restés sur le volume continuent d'être lus de là. Le
+chemin public d'un justificatif (`/uploads/<uuid>.<ext>`) ne change pas — c'est son identifiant,
+pas l'endroit où il dort — donc aucune dépense n'est à réécrire.
+
+Reste à retirer du volume les fichiers qui y dorment encore. **Le volume, lui, reste indispensable :
+il porte la base SQLite.** Le transfert ne fait que lui enlever ce qui n'a plus à y être.
+
+```bash
+# Depuis un shell sur le service, variables S3_* et DATA_DIR en place :
+npm run migrate:receipts -- --dry   # dit ce qu'il ferait, sans rien écrire
+npm run migrate:receipts            # transfère
+```
+
+Le script copie, ne supprime rien, et se rejoue sans dommage : ce qui est déjà dans le bucket est
+laissé tel quel. Il signale à part les fichiers qu'aucune dépense ne nomme (orphelins d'anciennes
+suppressions) et ceux dont le nom n'est pas celui qu'un téléversement produit — ni les uns ni les
+autres ne sont transférés.
+
+**Supprimer les fichiers locaux reste un geste manuel**, après avoir rouvert quelques justificatifs
+depuis l'application : jusque-là, le volume en détient la seule autre copie.
 
 ## Sécurité
 
@@ -155,7 +250,7 @@ la confiance est totale et assumée. Le reste de cette section dit précisément
   des cercles qu'il partage, et ceux qu'il a invités tant qu'aucun équipement ne les réunit encore.
   Hors de ce périmètre, un membre n'apprend ni l'existence, ni le nom, ni l'email des autres.
 - Tout ce qui pend à un équipement (réservations, usage, dépenses, soldes, justificatifs,
-  discussions, checklists) n'est lisible et modifiable que par les membres de son cercle. La règle
+  discussions, checklists, documents) n'est lisible et modifiable que par les membres de son cercle. La règle
   est unique et vit dans la couche application (`equipment-access.ts`, `receipt-access.ts`) ; les
   tests d'intégration la vérifient route par route. Les vues transverses (liste des équipements,
   calendrier, alertes d'entretien, historique d'un membre) sont cadrées sur le périmètre du
@@ -186,7 +281,19 @@ la confiance est totale et assumée. Le reste de cette section dit précisément
   produit le téléversement, ce qui interdit d'afficher une URL externe sous couvert de reçu.
 - **Justificatifs** : servis par une route applicative qui remonte à la dépense qui les porte,
   jamais mis en cache par le client (`Cache-Control: private, no-store`, `NetworkOnly` côté service
-  worker), supprimés avec la dépense. La déconnexion vide les caches `sharemate-*` de l'appareil.
+  worker), supprimés avec la dépense — du bucket **et** du volume, puisqu'après une bascule on ne
+  sait plus lequel des deux les porte. La déconnexion vide les caches `sharemate-*` de l'appareil.
+- **Bucket** : il n'est jamais public. Un contenu se demande toujours par l'identifiant de la
+  ressource applicative qui le porte — la dépense pour un justificatif, le document pour un fichier
+  du dossier, le message pour une pièce jointe — jamais par la clé de l'objet, qui ne sort pas du
+  serveur. L'API vérifie le cercle, puis redirige vers une **URL signée de cinq
+  minutes**, jamais mise en cache (`Cache-Control: private, no-store`). Recopiée, elle expire ; un
+  lien de bucket ouvert, lui, n'expire jamais. Le type MIME servi est déduit de l'extension
+  acceptée et jamais celui annoncé par le client, et ni HTML, ni SVG, ni archive, ni exécutable
+  n'entrent — servi depuis le domaine du bucket, un tel contenu s'y exécuterait.
+- **Liens du dossier** : seuls `http:` et `https:` sont acceptés. Un lien est cliquable par tout
+  le cercle : `javascript:` y exécuterait du code dans la session de celui qui clique, et `data:`
+  y afficherait une page fabriquée sous l'apparence de l'application.
 - **Rate-limit** par IP et par minute : 300 en global sur toute route, 10 sur les routes
   d'authentification publiques (force brute), 20 sur la création de compte et le téléversement.
   `trustProxy` est activé en production pour lire la vraie IP derrière le proxy Railway.
@@ -208,15 +315,22 @@ la confiance est totale et assumée. Le reste de cette section dit précisément
   les témoins, et laisse une entrée dans le journal du serveur.
 - **Tout membre peut peupler l'instance** de nouveaux comptes. Cela ne lui ouvre aucun cercle
   existant, mais rien n'en borne le nombre au-delà du plafond par minute.
-- **Pas de chiffrement au repos.** La base SQLite et les justificatifs sont en clair sur le volume ;
-  qui a accès au volume (ou à une sauvegarde) a accès à tout. Le contrôle d'accès est applicatif.
+- **Pas de chiffrement au repos.** La base SQLite est en clair sur le volume, les justificatifs et
+  les documents le sont dans le bucket (ou sur le volume, à défaut) ; qui y a accès — ou à une
+  sauvegarde — a accès à tout. Le contrôle d'accès est applicatif, pas cryptographique.
+- **Un document appartient au cercle, pas à son déposant.** N'importe quel membre peut supprimer
+  le manuel ou l'attestation d'assurance qu'un autre a déposés, définitivement. C'est le même
+  parti que pour les checklists et les équipements : entre membres d'un cercle, la confiance est
+  totale et assumée. Ce qui est fait, en revanche, est visible — le nom du déposant reste affiché.
 - **Pas de vérification d'email.** L'adresse sert d'identifiant de connexion, elle n'est jamais
   confirmée — d'où l'absence de réinitialisation de mot de passe.
 - **`trustProxy` fait confiance à toute la chaîne `X-Forwarded-For`.** Si le service devient
   joignable autrement que par le proxy Railway, un client peut forger l'en-tête et contourner le
   plafond par IP. Tant que l'accès passe exclusivement par le proxy, le risque est nul.
-- **Pas de quota de stockage par membre** : 10 Mo par justificatif et 20 téléversements par minute,
-  mais rien ne borne le total.
+- **Pas de quota de stockage par membre.** Documents et pièces jointes sont bornés par
+  **équipement** (500 Mo, partagés), mais un seul membre peut remplir ce quota et empêcher les
+  autres de déposer quoi que ce soit. Les justificatifs de dépense, eux, ne sont bornés que par
+  fichier (10 Mo) et par débit (20 téléversements par minute et par IP) : rien ne borne leur total.
 
 ## Déploiement sur Railway
 

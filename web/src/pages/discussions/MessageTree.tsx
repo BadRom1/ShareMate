@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { attachmentUrl } from '../../api';
 import type { Member, Message } from '../../api';
-import { formatDateTime } from '../../format';
-import { IconCheck, IconClose, IconEdit, IconReply, IconSend, IconTrash } from '../../components/icons';
+import { formatBytes, formatDateTime } from '../../format';
+import { IconCheck, IconClose, IconEdit, IconPaperclip, IconReply, IconSend, IconTrash } from '../../components/icons';
+import { AttachmentDraft, AttachmentField } from './AttachmentField';
 
 interface Props {
   messages: Message[];
@@ -11,7 +13,7 @@ interface Props {
   inCircle: boolean;
   /** Une écriture est en cours : les envois sont désarmés le temps de la réponse du serveur. */
   busy: boolean;
-  onReply: (parentId: string, body: string) => Promise<void>;
+  onReply: (parentId: string, body: string, file: File | null) => Promise<void>;
   onEdit: (id: string, body: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }
@@ -30,6 +32,7 @@ export function MessageTree({ messages, members, currentMemberId, inCircle, busy
   const [editDraft, setEditDraft] = useState('');
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyDraft, setReplyDraft] = useState('');
+  const [replyFile, setReplyFile] = useState<File | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const listEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -66,12 +69,14 @@ export function MessageTree({ messages, members, currentMemberId, inCircle, busy
   function startReply(id: string) {
     setEditingMessageId(null);
     setReplyDraft('');
+    setReplyFile(null);
     setReplyingTo(id);
   }
 
   async function submitReply(parentId: string) {
     const body = replyDraft.trim();
-    if (!body) return;
+    // Un fichier seul fait une réponse : le texte n'est exigé que sans lui.
+    if (!body && !replyFile) return;
     // Le sous-fil du parent est déplié d'avance : sinon la réponse tout juste écrite est masquée.
     setCollapsed((prev) => {
       if (!prev.has(parentId)) return prev;
@@ -79,14 +84,17 @@ export function MessageTree({ messages, members, currentMemberId, inCircle, busy
       next.delete(parentId);
       return next;
     });
-    await onReply(parentId, body);
+    await onReply(parentId, body, replyFile);
     setReplyDraft('');
+    setReplyFile(null);
     setReplyingTo(null);
   }
 
   async function submitEdit(id: string) {
     const body = editDraft.trim();
-    if (!body) return;
+    // Le corps peut être vidé si le message porte un fichier : c'est lui qui le rend non vide.
+    const message = messages.find((m) => m.id === id);
+    if (!body && !message?.attachment) return;
     await onEdit(id, body);
     setEditingMessageId(null);
   }
@@ -149,7 +157,14 @@ export function MessageTree({ messages, members, currentMemberId, inCircle, busy
                 maxLength={4000}
                 autoFocus
               />
-              <button type="submit" className="icon-btn icon-confirm" title="Enregistrer">
+              <button
+                type="submit"
+                className="icon-btn icon-confirm"
+                // Le corps ne peut être vidé que d'un message qui porte un fichier : c'est alors
+                // lui qui le rend non vide.
+                disabled={editDraft.trim().length === 0 && !m.attachment}
+                title="Enregistrer"
+              >
                 <IconCheck size={18} />
               </button>
               <button type="button" className="icon-btn" onClick={() => setEditingMessageId(null)} title="Annuler">
@@ -157,7 +172,18 @@ export function MessageTree({ messages, members, currentMemberId, inCircle, busy
               </button>
             </form>
           ) : (
-            <p className="message-body">{m.body}</p>
+            <>
+              {m.body && <p className="message-body">{m.body}</p>}
+              {m.attachment && (
+                // Un lien du navigateur, jamais un `fetch` : le contenu est servi par une
+                // redirection vers le stockage d'objets, hors de `connect-src 'self'`.
+                <a className="attachment" href={attachmentUrl(m.id)} target="_blank" rel="noopener noreferrer">
+                  <IconPaperclip size={16} />
+                  <span className="attachment-name">{m.attachment.fileName}</span>
+                  <span className="muted">{formatBytes(m.attachment.sizeBytes)}</span>
+                </a>
+              )}
+            </>
           )}
           {replies.length > 0 && (
             <button className="link reply-toggle" onClick={() => toggleCollapse(m.id)}>
@@ -176,6 +202,7 @@ export function MessageTree({ messages, members, currentMemberId, inCircle, busy
               void submitReply(m.id);
             }}
           >
+            {replyFile && <AttachmentDraft file={replyFile} onClear={() => setReplyFile(null)} />}
             <textarea
               value={replyDraft}
               onChange={(e) => setReplyDraft(e.target.value)}
@@ -184,10 +211,11 @@ export function MessageTree({ messages, members, currentMemberId, inCircle, busy
               maxLength={4000}
               autoFocus
             />
+            <AttachmentField onPick={setReplyFile} disabled={busy} label="Joindre un fichier à la réponse" />
             <button
               type="submit"
               className="icon-btn icon-primary"
-              disabled={busy || replyDraft.trim().length === 0}
+              disabled={busy || (replyDraft.trim().length === 0 && !replyFile)}
               title="Envoyer la réponse"
               aria-label="Envoyer la réponse"
             >

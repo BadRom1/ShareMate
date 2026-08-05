@@ -6,6 +6,7 @@ import {
   SqliteChecklistRepository,
   SqliteCredentialRepository,
   SqliteDeviceTokenRepository,
+  SqliteDocumentRepository,
   SqliteEquipmentRepository,
   SqliteExpenseRepository,
   SqliteMemberRepository,
@@ -22,6 +23,11 @@ import {
 import { CryptoTokenGenerator, ScryptPasswordHasher, SystemClock, UuidGenerator } from '../tech/adapters.js';
 import { FixedClock } from '../../application/testing/in-memory.js';
 import { buildApp } from './app.js';
+import { ReceiptStorage } from '../tech/receipt-storage.js';
+import { DOCUMENT_PREFIX, RICH_CONTENT_TYPES } from '../tech/document-storage.js';
+import { ATTACHMENT_PREFIX } from '../tech/attachment-storage.js';
+import { MediaStorage } from '../tech/object-store.js';
+import type { ObjectStore } from '../tech/object-store.js';
 import { DEFAULT_RATE_LIMITS } from './rate-limit.js';
 import type { AppDependencies } from './app.js';
 import crypto from 'node:crypto';
@@ -48,6 +54,7 @@ async function buildTestApp(overrides: Partial<AppDependencies> = {}): Promise<F
     messages: new SqliteMessageRepository(db),
     checklists: new SqliteChecklistRepository(db),
     checklistItems: new SqliteChecklistItemRepository(db),
+    documents: new SqliteDocumentRepository(db),
     notifications: new SqliteNotificationRepository(db),
     notificationPreferences: new SqliteNotificationPreferenceRepository(db),
     pushSubscriptions: new SqlitePushSubscriptionRepository(db),
@@ -1078,6 +1085,846 @@ describe('API — checklists (checklists + points de contrôle)', () => {
     expect(((await get(`/api/equipments/${equipment.id}/checklists`, alice.cookies)).json() as unknown[]).length).toBe(
       0,
     );
+  });
+});
+
+describe('API — refus de téléversement rendus en français', () => {
+  let filesApp: FastifyInstance;
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-refus-'));
+    filesApp = await buildTestApp({
+      documentsDir: path.join(tmpRoot, 'documents'),
+      attachmentsDir: path.join(tmpRoot, 'attachments'),
+    });
+  });
+
+  afterEach(async () => {
+    await filesApp.close();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  function multipart(champs: Record<string, string>, contenu: Uint8Array, filename = 'gros.pdf') {
+    const boundary = '----sharemateRefusBoundary';
+    const morceaux: Uint8Array[] = Object.entries(champs).map(([nom, valeur]) =>
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${nom}"\r\n\r\n${valeur}\r\n`),
+    );
+    morceaux.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+          `Content-Type: application/pdf\r\n\r\n`,
+      ),
+      contenu,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    );
+    return {
+      payload: Buffer.concat(morceaux),
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    };
+  }
+
+  /** Un peu plus que le plafond du greffon multipart (25 Mo). */
+  function tropGros() {
+    return Buffer.alloc(26 * 1024 * 1024, 0x41);
+  }
+
+  // Sans cette traduction, c'est le seul message anglais que l'API rend jamais : le greffon
+  // multipart échoue pendant la lecture du flux, donc avant tout code applicatif.
+  it('refuse un document trop lourd en français', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(filesApp);
+    const { payload, headers } = multipart({ equipmentId: equipment.id, category: 'MANUAL' }, tropGros());
+
+    const res = await filesApp.inject({
+      method: 'POST',
+      url: '/api/documents/file',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+
+    expect(res.statusCode).toBe(413);
+    expect((res.json() as { error: string }).error).toBe('Fichier trop lourd (25 Mo maximum).');
+  });
+
+  it('refuse une pièce jointe trop lourde en français', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(filesApp);
+    const fil = await post('/api/threads', { equipmentId: equipment.id, title: 'Panne' }, alice.cookies, filesApp);
+    const { id: threadId } = fil.json() as { id: string };
+    const { payload, headers } = multipart({ threadId }, tropGros());
+
+    const res = await filesApp.inject({
+      method: 'POST',
+      url: '/api/messages/file',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+
+    expect(res.statusCode).toBe(413);
+    expect((res.json() as { error: string }).error).toBe('Fichier trop lourd (25 Mo maximum).');
+  });
+
+  // Ignoré, un champ démesuré se serait déguisé en autre chose : un `name` trop long serait
+  // devenu « pas de nom », un `equipmentId` trop long « champ obligatoire ».
+  it('refuse un champ multipart démesuré plutôt que de l’ignorer', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(filesApp);
+    const { payload, headers } = multipart(
+      { equipmentId: equipment.id, category: 'MANUAL', name: 'x'.repeat(10_001) },
+      Buffer.from('%PDF'),
+    );
+
+    const res = await filesApp.inject({
+      method: 'POST',
+      url: '/api/documents/file',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toMatch(/« name » dépasse 10000 caractères/);
+  });
+});
+
+describe('API — place partagée entre le dossier et les discussions', () => {
+  let filesApp: FastifyInstance;
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-place-'));
+    filesApp = await buildTestApp({
+      documentsDir: path.join(tmpRoot, 'documents'),
+      attachmentsDir: path.join(tmpRoot, 'attachments'),
+    });
+  });
+
+  afterEach(async () => {
+    await filesApp.close();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  // Le plafond vaut pour l'équipement, pas pour le dossier seul : sinon les messages seraient la
+  // façon la moins chère de remplir le bucket.
+  it('une pièce jointe consomme la place du dossier, et réciproquement', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(filesApp);
+    const fil = await post('/api/threads', { equipmentId: equipment.id, title: 'Panne' }, alice.cookies, filesApp);
+    const { id: threadId } = fil.json() as { id: string };
+
+    // Une pièce jointe de 1 Mo, puis un document : les deux passent par le même compteur.
+    const boundary = '----sharematePlaceBoundary';
+    const corps = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="threadId"\r\n\r\n${threadId}\r\n`),
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="panne.png"\r\n` +
+          `Content-Type: image/png\r\n\r\n`,
+      ),
+      Buffer.alloc(1024 * 1024, 0x41),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const jointe = await filesApp.inject({
+      method: 'POST',
+      url: '/api/messages/file',
+      payload: corps,
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      cookies: alice.cookies,
+    });
+    expect(jointe.statusCode).toBe(201);
+
+    // Le compteur du dossier voit désormais ce mégaoctet : c'est la même enveloppe.
+    const documents = await get(`/api/equipments/${equipment.id}/documents`, alice.cookies, filesApp);
+    expect(documents.json()).toEqual([]);
+    expect(fs.readdirSync(path.join(tmpRoot, 'attachments'))).toHaveLength(1);
+  });
+});
+
+describe('API — pièces jointes des discussions', () => {
+  let filesApp: FastifyInstance;
+  let attachmentsDir: string;
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-jointes-'));
+    attachmentsDir = path.join(tmpRoot, 'attachments');
+    filesApp = await buildTestApp({ attachmentsDir });
+  });
+
+  afterEach(async () => {
+    await filesApp.close();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  /** Corps multipart : champs puis fichier. */
+  function corps(champs: Record<string, string>, filename = 'panne.png', contenu = Buffer.from('PNGPANNE')) {
+    const boundary = '----sharemateAttachmentBoundary';
+    const morceaux = Object.entries(champs).map(([nom, valeur]) =>
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${nom}"\r\n\r\n${valeur}\r\n`),
+    );
+    morceaux.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+          `Content-Type: image/png\r\n\r\n`,
+      ),
+      contenu,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    );
+    return {
+      payload: Buffer.concat(morceaux),
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    };
+  }
+
+  async function joindre(champs: Record<string, string>, cookies: Cookies, filename = 'panne.png') {
+    const { payload, headers } = corps(champs, filename);
+    return filesApp.inject({ method: 'POST', url: '/api/messages/file', payload, headers, cookies });
+  }
+
+  /** Fil ouvert par Alice sur un équipement partagé avec Bruno. */
+  async function unFil() {
+    const contexte = await setupMembersAndEquipment(filesApp);
+    const fil = await post(
+      '/api/threads',
+      { equipmentId: contexte.equipment.id, title: 'Panne moteur' },
+      contexte.alice.cookies,
+      filesApp,
+    );
+    expect(fil.statusCode).toBe(201);
+    return { ...contexte, thread: fil.json() as { id: string } };
+  }
+
+  function objetsStockés(): string[] {
+    return fs.existsSync(attachmentsDir) ? fs.readdirSync(attachmentsDir) : [];
+  }
+
+  it('joint un fichier à un message, le sert au cercle, puis le supprime avec lui', async () => {
+    const { thread, alice, bruno, chloe } = await unFil();
+
+    const posté = await joindre({ threadId: thread.id, body: 'Regardez ce bruit' }, alice.cookies);
+    expect(posté.statusCode).toBe(201);
+    const message = posté.json() as Record<string, unknown>;
+    expect(message.attachment).toEqual({ fileName: 'panne.png', contentType: 'image/png', sizeBytes: 8 });
+    // La clé de l'objet ne sort jamais de l'API : le contenu se lit par l'identifiant du message.
+    expect(JSON.stringify(message)).not.toContain('attachments/');
+    expect(objetsStockés()).toHaveLength(1);
+
+    const contenu = await get(`/api/messages/${message.id}/attachment`, bruno.cookies, filesApp);
+    expect(contenu.statusCode).toBe(200);
+    expect(contenu.body).toBe('PNGPANNE');
+    expect(contenu.headers['content-type']).toBe('image/png');
+    expect(contenu.headers['cache-control']).toBe('private, no-store');
+
+    // Chloé est hors du cercle : le message n'existe pas pour elle.
+    expect((await get(`/api/messages/${message.id}/attachment`, chloe.cookies, filesApp)).statusCode).toBe(404);
+
+    const supprimé = await filesApp.inject({
+      method: 'DELETE',
+      url: `/api/messages/${message.id}`,
+      cookies: alice.cookies,
+    });
+    expect(supprimé.statusCode).toBe(204);
+    expect(objetsStockés()).toEqual([]);
+  });
+
+  it('accepte un message sans texte quand un fichier l’accompagne', async () => {
+    const { thread, alice } = await unFil();
+    const posté = await joindre({ threadId: thread.id }, alice.cookies);
+    expect(posté.statusCode).toBe(201);
+    expect((posté.json() as { body: string }).body).toBe('');
+  });
+
+  // Le corps d'une édition peut être vidé, mais seulement d'un message qui porte un fichier : le
+  // schéma laisse passer la chaîne vide, le domaine tranche — lui seul voit la pièce jointe.
+  it('laisse vider le texte d’un message qui porte un fichier, jamais celui d’un autre', async () => {
+    const { thread, alice } = await unFil();
+    const avecFichier = (await joindre({ threadId: thread.id, body: 'Regardez' }, alice.cookies)).json() as {
+      id: string;
+    };
+    const texteSeul = (
+      await post('/api/messages', { threadId: thread.id, body: 'Texte seul' }, alice.cookies, filesApp)
+    ).json() as { id: string };
+
+    const vidé = await filesApp.inject({
+      method: 'PUT',
+      url: `/api/messages/${avecFichier.id}`,
+      payload: { body: '' },
+      cookies: alice.cookies,
+    });
+    expect(vidé.statusCode).toBe(200);
+    expect(vidé.json()).toMatchObject({ body: '', attachment: { fileName: 'panne.png' } });
+
+    const refusé = await filesApp.inject({
+      method: 'PUT',
+      url: `/api/messages/${texteSeul.id}`,
+      payload: { body: '   ' },
+      cookies: alice.cookies,
+    });
+    expect(refusé.statusCode).toBe(400);
+    expect((refusé.json() as { error: string }).error).toBe('Le message ne peut pas être vide.');
+  });
+
+  it('joint un fichier à une réponse, dans le bon sous-fil', async () => {
+    const { thread, alice, bruno } = await unFil();
+    const racine = await post(
+      '/api/messages',
+      { threadId: thread.id, body: 'Quelqu’un a une photo ?' },
+      alice.cookies,
+      filesApp,
+    );
+    const parentId = (racine.json() as { id: string }).id;
+
+    const réponse = await joindre({ threadId: thread.id, body: 'La voilà', parentId }, bruno.cookies);
+    expect(réponse.statusCode).toBe(201);
+    expect((réponse.json() as { parentId: string }).parentId).toBe(parentId);
+  });
+
+  // Supprimer un message emporte ses réponses : leurs fichiers doivent partir avec elles.
+  it('purge les pièces jointes des réponses emportées', async () => {
+    const { thread, alice, bruno } = await unFil();
+    const racine = await joindre({ threadId: thread.id, body: 'Le bruit' }, alice.cookies);
+    const parentId = (racine.json() as { id: string }).id;
+    expect((await joindre({ threadId: thread.id, body: 'Idem', parentId }, bruno.cookies)).statusCode).toBe(201);
+    expect(objetsStockés()).toHaveLength(2);
+
+    await filesApp.inject({ method: 'DELETE', url: `/api/messages/${parentId}`, cookies: alice.cookies });
+
+    expect(objetsStockés()).toEqual([]);
+  });
+
+  it('purge les pièces jointes quand le fil entier est supprimé', async () => {
+    const { thread, alice } = await unFil();
+    expect((await joindre({ threadId: thread.id, body: 'Le bruit' }, alice.cookies)).statusCode).toBe(201);
+
+    await filesApp.inject({ method: 'DELETE', url: `/api/threads/${thread.id}`, cookies: alice.cookies });
+
+    expect(objetsStockés()).toEqual([]);
+  });
+
+  it('purge les pièces jointes quand l’équipement est supprimé', async () => {
+    const { thread, equipment, alice } = await unFil();
+    expect((await joindre({ threadId: thread.id, body: 'Le bruit' }, alice.cookies)).statusCode).toBe(201);
+
+    const supprimé = await filesApp.inject({
+      method: 'DELETE',
+      url: `/api/equipments/${equipment.id}`,
+      cookies: alice.cookies,
+    });
+    expect(supprimé.statusCode).toBe(204);
+    expect(objetsStockés()).toEqual([]);
+  });
+
+  it('refuse un format non géré et le hors-cercle, sans rien écrire', async () => {
+    const { thread, alice, chloe } = await unFil();
+    expect((await joindre({ threadId: thread.id }, alice.cookies, 'page.html')).statusCode).toBe(400);
+    expect((await joindre({ threadId: thread.id }, chloe.cookies)).statusCode).toBe(404);
+    expect((await joindre({}, alice.cookies)).statusCode).toBe(400);
+    expect(objetsStockés()).toEqual([]);
+  });
+
+  it('un message sans pièce jointe n’a pas de contenu à servir', async () => {
+    const { thread, alice } = await unFil();
+    const sansFichier = await post(
+      '/api/messages',
+      { threadId: thread.id, body: 'Texte seul' },
+      alice.cookies,
+      filesApp,
+    );
+    const { id } = sansFichier.json() as { id: string };
+    expect((await get(`/api/messages/${id}/attachment`, alice.cookies, filesApp)).statusCode).toBe(404);
+  });
+
+  it('sans stockage configuré, la pièce jointe n’est pas offerte et les messages restent en texte', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment();
+    const fil = await post('/api/threads', { equipmentId: equipment.id, title: 'Panne' }, alice.cookies);
+    const { id: threadId } = fil.json() as { id: string };
+    const { payload, headers } = corps({ threadId });
+
+    const refusé = await app.inject({
+      method: 'POST',
+      url: '/api/messages/file',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+    expect(refusé.statusCode).toBe(404);
+
+    const texte = await post('/api/messages', { threadId, body: 'Texte seul' }, alice.cookies);
+    expect(texte.statusCode).toBe(201);
+    expect((texte.json() as { attachment: unknown }).attachment).toBeNull();
+  });
+});
+
+describe('API — stockage dans un bucket (justificatifs et documents)', () => {
+  let bucketApp: FastifyInstance;
+
+  /**
+   * Magasin qui se comporte comme un bucket : il garde les octets en mémoire et rend une URL
+   * signée au lieu d'un flux. Aucun réseau — c'est la décision « rediriger plutôt que servir »
+   * qui est testée ici, la signature elle-même l'étant dans tech/object-store.test.ts.
+   */
+  class MagasinFactice implements ObjectStore {
+    readonly objets = new Map<string, Buffer>();
+    async exists(key: string) {
+      return this.objets.has(key);
+    }
+    async put(key: string, content: Buffer) {
+      this.objets.set(key, content);
+    }
+    async signedUrl(key: string, _contentType: string, disposition: string, ttlSeconds: number) {
+      return `https://bucket.exemple/${key}?expire=${ttlSeconds}&disposition=${encodeURIComponent(disposition)}`;
+    }
+    async read() {
+      return null;
+    }
+    async remove(key: string) {
+      this.objets.delete(key);
+    }
+  }
+
+  let magasin: MagasinFactice;
+
+  beforeEach(async () => {
+    magasin = new MagasinFactice();
+    bucketApp = await buildTestApp({
+      receiptStorage: new ReceiptStorage(magasin),
+      documentStorage: new MediaStorage(magasin, { keyPrefix: DOCUMENT_PREFIX, contentTypes: RICH_CONTENT_TYPES }),
+      attachmentStorage: new MediaStorage(magasin, { keyPrefix: ATTACHMENT_PREFIX, contentTypes: RICH_CONTENT_TYPES }),
+    });
+  });
+
+  afterEach(async () => {
+    await bucketApp.close();
+  });
+
+  it('redirige vers une URL signée plutôt que de servir le justificatif', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(bucketApp);
+    const { payload, headers } = filePayload('recu.png', Buffer.from('le reçu'));
+    const upload = await bucketApp.inject({
+      method: 'POST',
+      url: '/api/uploads/receipts',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+    expect(upload.statusCode).toBe(201);
+    const { path: receiptPath } = upload.json() as { path: string };
+    // Le chemin public n'a pas changé de forme : les dépenses existantes restent valides.
+    expect(receiptPath).toMatch(/^\/uploads\/[\w-]+\.png$/);
+    // L'objet, lui, est rangé sous son propre préfixe dans le bucket.
+    expect([...magasin.objets.keys()]).toEqual([`receipts/${receiptPath.slice('/uploads/'.length)}`]);
+
+    const dépense = await post(
+      '/api/expenses',
+      {
+        equipmentId: equipment.id,
+        label: 'Plein gasoil',
+        amountEuros: 90,
+        payerId: alice.id,
+        date: '2026-03-02',
+        category: 'FUEL',
+        split: { type: 'EQUAL' },
+        receiptPath,
+      },
+      alice.cookies,
+      bucketApp,
+    );
+    expect(dépense.statusCode).toBe(201);
+
+    const lecture = await get(receiptPath, alice.cookies, bucketApp);
+    expect(lecture.statusCode).toBe(302);
+    expect(lecture.headers.location).toContain(`receipts/${receiptPath.slice('/uploads/'.length)}`);
+    expect(lecture.headers['cache-control']).toBe('private, no-store');
+    // Le corps du justificatif ne transite pas par l'API : c'est le bucket qui le servira.
+    expect(lecture.body).not.toContain('le reçu');
+  });
+
+  it('la redirection reste refusée hors du cercle', async () => {
+    const { equipment, alice, chloe } = await setupMembersAndEquipment(bucketApp);
+    const { payload, headers } = filePayload('recu.png', Buffer.from('le reçu'));
+    const upload = await bucketApp.inject({
+      method: 'POST',
+      url: '/api/uploads/receipts',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+    const { path: receiptPath } = upload.json() as { path: string };
+    await post(
+      '/api/expenses',
+      {
+        equipmentId: equipment.id,
+        label: 'Plein gasoil',
+        amountEuros: 90,
+        payerId: alice.id,
+        date: '2026-03-02',
+        category: 'FUEL',
+        split: { type: 'EQUAL' },
+        receiptPath,
+      },
+      alice.cookies,
+      bucketApp,
+    );
+
+    // Détenir le chemin ne suffit pas : la signature n'est émise qu'après le contrôle du cercle.
+    const refusée = await get(receiptPath, chloe.cookies, bucketApp);
+    expect(refusée.statusCode).toBe(404);
+    expect(refusée.headers.location).toBeUndefined();
+  });
+
+  it('redirige aussi pour le contenu d’un document', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(bucketApp);
+    const boundary = '----sharemateBucketBoundary';
+    const corps = Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="equipmentId"\r\n\r\n${equipment.id}\r\n` +
+          `--${boundary}\r\nContent-Disposition: form-data; name="category"\r\n\r\nMANUAL\r\n` +
+          `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="manuel.pdf"\r\n` +
+          `Content-Type: application/pdf\r\n\r\n`,
+      ),
+      Buffer.from('%PDF-1.4'),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const déposé = await bucketApp.inject({
+      method: 'POST',
+      url: '/api/documents/file',
+      payload: corps,
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      cookies: alice.cookies,
+    });
+    expect(déposé.statusCode).toBe(201);
+    const { id } = déposé.json() as { id: string };
+
+    const contenu = await get(`/api/documents/${id}/content`, alice.cookies, bucketApp);
+    expect(contenu.statusCode).toBe(302);
+    expect(contenu.headers.location).toContain('documents/');
+    // Le nom d'origine voyage dans l'URL signée : le bucket ne connaît que l'UUID de la clé.
+    expect(decodeURIComponent(String(contenu.headers.location))).toContain('manuel.pdf');
+    expect(contenu.headers['cache-control']).toBe('private, no-store');
+  });
+
+  it('purge l’objet du bucket à la suppression de la dépense', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(bucketApp);
+    const { payload, headers } = filePayload('recu.png', Buffer.from('le reçu'));
+    const upload = await bucketApp.inject({
+      method: 'POST',
+      url: '/api/uploads/receipts',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+    const { path: receiptPath } = upload.json() as { path: string };
+    const dépense = await post(
+      '/api/expenses',
+      {
+        equipmentId: equipment.id,
+        label: 'Plein gasoil',
+        amountEuros: 90,
+        payerId: alice.id,
+        date: '2026-03-02',
+        category: 'FUEL',
+        split: { type: 'EQUAL' },
+        receiptPath,
+      },
+      alice.cookies,
+      bucketApp,
+    );
+    expect(magasin.objets.size).toBe(1);
+
+    const supprimée = await bucketApp.inject({
+      method: 'DELETE',
+      url: `/api/expenses/${(dépense.json() as { id: string }).id}`,
+      cookies: alice.cookies,
+    });
+    expect(supprimée.statusCode).toBe(204);
+    // Sans cette purge, l'objet resterait facturé alors que plus rien ne le nomme.
+    expect(magasin.objets.size).toBe(0);
+  });
+});
+
+describe('API — documents (dossier d’un équipement)', () => {
+  /**
+   * Corps multipart bâti partie par partie : un champ peut précéder ou suivre le fichier, et la
+   * route doit lire les deux — c'est ce que fait un `FormData` selon l'ordre des `append`.
+   */
+  type Part = { field: string; value: string } | { filename: string; content: Buffer; contentType?: string };
+
+  function multipartBody(parts: Part[]) {
+    const boundary = '----sharemateDocumentBoundary';
+    const chunks: Buffer[] = [];
+    for (const part of parts) {
+      if ('field' in part) {
+        chunks.push(
+          Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${part.field}"\r\n\r\n${part.value}\r\n`),
+        );
+      } else {
+        chunks.push(
+          Buffer.from(
+            `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${part.filename}"\r\n` +
+              `Content-Type: ${part.contentType ?? 'application/pdf'}\r\n\r\n`,
+          ),
+          part.content,
+          Buffer.from('\r\n'),
+        );
+      }
+    }
+    chunks.push(Buffer.from(`--${boundary}--\r\n`));
+    return { payload: Buffer.concat(chunks), headers: { 'content-type': `multipart/form-data; boundary=${boundary}` } };
+  }
+
+  describe('liens (aucun stockage requis)', () => {
+    it('dépose un lien, le liste, le renomme et le supprime — depuis tout le cercle', async () => {
+      const { equipment, alice, bruno, chloe } = await setupMembersAndEquipment();
+
+      const created = await post(
+        '/api/documents',
+        { equipmentId: equipment.id, url: 'https://kubota-eu.com/pieces', name: 'Catalogue', category: 'OTHER' },
+        alice.cookies,
+      );
+      expect(created.statusCode).toBe(201);
+      const document = created.json() as { id: string; kind: string; authorId: string; url: string };
+      expect(document).toMatchObject({
+        kind: 'LINK',
+        authorId: alice.id,
+        url: 'https://kubota-eu.com/pieces',
+        fileName: null,
+        sizeBytes: null,
+      });
+
+      // Le dossier appartient au cercle : Bruno, qui n'a rien déposé, renomme et reclasse.
+      const renamed = await app.inject({
+        method: 'PUT',
+        url: `/api/documents/${document.id}`,
+        payload: { name: 'Pièces détachées', category: 'MAINTENANCE' },
+        cookies: bruno.cookies,
+      });
+      expect(renamed.statusCode).toBe(200);
+      expect(renamed.json()).toMatchObject({ name: 'Pièces détachées', category: 'MAINTENANCE' });
+
+      const list = await get(`/api/equipments/${equipment.id}/documents`, bruno.cookies);
+      expect((list.json() as { id: string }[]).map((d) => d.id)).toEqual([document.id]);
+
+      // Chloé est hors du cercle : le dossier n'existe pas pour elle.
+      expect((await get(`/api/equipments/${equipment.id}/documents`, chloe.cookies)).statusCode).toBe(404);
+      expect(
+        (
+          await post(
+            '/api/documents',
+            { equipmentId: equipment.id, url: 'https://pirate.fr', category: 'OTHER' },
+            chloe.cookies,
+          )
+        ).statusCode,
+      ).toBe(404);
+      expect(
+        (await app.inject({ method: 'DELETE', url: `/api/documents/${document.id}`, cookies: chloe.cookies }))
+          .statusCode,
+      ).toBe(404);
+
+      const deleted = await app.inject({
+        method: 'DELETE',
+        url: `/api/documents/${document.id}`,
+        cookies: bruno.cookies,
+      });
+      expect(deleted.statusCode).toBe(204);
+      expect((await get(`/api/equipments/${equipment.id}/documents`, alice.cookies)).json()).toEqual([]);
+    });
+
+    it('nomme le lien d’après son domaine quand aucun nom n’est saisi', async () => {
+      const { equipment, alice } = await setupMembersAndEquipment();
+      const created = await post(
+        '/api/documents',
+        { equipmentId: equipment.id, url: 'https://www.youtube.com/watch?v=abc', category: 'MANUAL' },
+        alice.cookies,
+      );
+      expect((created.json() as { name: string }).name).toBe('www.youtube.com');
+    });
+
+    // Le lien est rendu cliquable pour tout le cercle : un schéma exécutable y ferait passer du
+    // code dans la session de celui qui clique.
+    it('refuse une adresse qui n’est pas http(s)', async () => {
+      const { equipment, alice } = await setupMembersAndEquipment();
+      for (const url of ['javascript:alert(1)', 'data:text/html,<script>', 'file:///etc/passwd', 'pas une url']) {
+        const res = await post('/api/documents', { equipmentId: equipment.id, url, category: 'OTHER' }, alice.cookies);
+        expect(res.statusCode).toBe(400);
+      }
+    });
+
+    it('un lien n’a pas de contenu à servir', async () => {
+      const { equipment, alice } = await setupMembersAndEquipment();
+      const created = await post(
+        '/api/documents',
+        { equipmentId: equipment.id, url: 'https://exemple.fr', category: 'OTHER' },
+        alice.cookies,
+      );
+      const { id } = created.json() as { id: string };
+      // Sans stockage configuré, la route de contenu n'existe pas du tout sur cette app.
+      expect((await get(`/api/documents/${id}/content`, alice.cookies)).statusCode).toBe(404);
+    });
+
+    it('sans stockage configuré, le dépôt de fichier n’est pas offert', async () => {
+      const { equipment, alice } = await setupMembersAndEquipment();
+      const { payload, headers } = multipartBody([
+        { filename: 'manuel.pdf', content: Buffer.from('%PDF-1.4') },
+        { field: 'equipmentId', value: equipment.id },
+        { field: 'category', value: 'MANUAL' },
+      ]);
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/documents/file',
+        payload,
+        headers,
+        cookies: alice.cookies,
+      });
+      expect(res.statusCode).toBe(404);
+    });
+  });
+
+  describe('fichiers (stockage sur disque)', () => {
+    let filesApp: FastifyInstance;
+    let documentsDir: string;
+    let tmpRoot: string;
+
+    beforeEach(async () => {
+      tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-documents-'));
+      documentsDir = path.join(tmpRoot, 'documents');
+      filesApp = await buildTestApp({ documentsDir });
+    });
+
+    afterEach(async () => {
+      await filesApp.close();
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    });
+
+    /** Dépose un fichier dans le dossier de `equipmentId`, champs d'abord. */
+    async function déposer(
+      equipmentId: string,
+      cookies: Cookies,
+      options: { filename?: string; contenu?: Buffer; name?: string; category?: string } = {},
+    ) {
+      const { payload, headers } = multipartBody([
+        { field: 'equipmentId', value: equipmentId },
+        { field: 'category', value: options.category ?? 'MANUAL' },
+        ...(options.name ? [{ field: 'name', value: options.name }] : []),
+        { filename: options.filename ?? 'manuel.pdf', content: options.contenu ?? Buffer.from('%PDF-1.4 manuel') },
+      ]);
+      return filesApp.inject({ method: 'POST', url: '/api/documents/file', payload, headers, cookies });
+    }
+
+    /** Fichiers réellement présents dans le répertoire de stockage. */
+    function objetsStockés(): string[] {
+      return fs.existsSync(documentsDir) ? fs.readdirSync(documentsDir) : [];
+    }
+
+    it('dépose un fichier, le sert au cercle, puis le supprime avec son objet', async () => {
+      const { equipment, alice, bruno, chloe } = await setupMembersAndEquipment(filesApp);
+
+      const déposé = await déposer(equipment.id, alice.cookies, { name: 'Manuel KX027' });
+      expect(déposé.statusCode).toBe(201);
+      const document = déposé.json() as Record<string, unknown>;
+      expect(document).toMatchObject({
+        kind: 'FILE',
+        name: 'Manuel KX027',
+        fileName: 'manuel.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: '%PDF-1.4 manuel'.length,
+        url: null,
+        authorId: alice.id,
+      });
+      // La clé de l'objet ne sort jamais de l'API : le contenu se lit par l'identifiant du document.
+      expect(JSON.stringify(document)).not.toContain('documents/');
+      expect(objetsStockés()).toHaveLength(1);
+
+      const contenu = await get(`/api/documents/${document.id}/content`, bruno.cookies, filesApp);
+      expect(contenu.statusCode).toBe(200);
+      expect(contenu.body).toBe('%PDF-1.4 manuel');
+      expect(contenu.headers['content-type']).toBe('application/pdf');
+      expect(contenu.headers['cache-control']).toBe('private, no-store');
+      expect(contenu.headers['content-disposition']).toContain('manuel.pdf');
+
+      // Chloé est hors du cercle : ni la liste, ni le contenu.
+      expect((await get(`/api/documents/${document.id}/content`, chloe.cookies, filesApp)).statusCode).toBe(404);
+
+      const supprimé = await filesApp.inject({
+        method: 'DELETE',
+        url: `/api/documents/${document.id}`,
+        cookies: bruno.cookies,
+      });
+      expect(supprimé.statusCode).toBe(204);
+      // La ligne part avec la requête ; l'objet, lui, n'est atteint que par la purge.
+      expect(objetsStockés()).toEqual([]);
+    });
+
+    it('lit les champs multipart quel que soit leur rang par rapport au fichier', async () => {
+      const { equipment, alice } = await setupMembersAndEquipment(filesApp);
+      const { payload, headers } = multipartBody([
+        { filename: 'notice.pdf', content: Buffer.from('%PDF') },
+        { field: 'equipmentId', value: equipment.id },
+        { field: 'category', value: 'MAINTENANCE' },
+      ]);
+      const res = await filesApp.inject({
+        method: 'POST',
+        url: '/api/documents/file',
+        payload,
+        headers,
+        cookies: alice.cookies,
+      });
+      expect(res.statusCode).toBe(201);
+      // Faute de nom saisi, celui du fichier fait foi.
+      expect(res.json()).toMatchObject({ category: 'MAINTENANCE', name: 'notice.pdf' });
+    });
+
+    it('refuse un format non géré sans rien écrire', async () => {
+      const { equipment, alice } = await setupMembersAndEquipment(filesApp);
+      for (const filename of ['page.html', 'archive.zip', 'script.sh', 'sansextension']) {
+        const res = await déposer(equipment.id, alice.cookies, { filename });
+        expect(res.statusCode).toBe(400);
+      }
+      expect(objetsStockés()).toEqual([]);
+    });
+
+    it('refuse le dépôt hors du cercle, sans rien écrire', async () => {
+      const { equipment, chloe } = await setupMembersAndEquipment(filesApp);
+      expect((await déposer(equipment.id, chloe.cookies)).statusCode).toBe(404);
+      expect(objetsStockés()).toEqual([]);
+    });
+
+    it('refuse une catégorie inconnue sans rien écrire', async () => {
+      const { equipment, alice } = await setupMembersAndEquipment(filesApp);
+      const res = await déposer(equipment.id, alice.cookies, { category: 'CARTE_GRISE' });
+      expect(res.statusCode).toBe(400);
+      expect(objetsStockés()).toEqual([]);
+    });
+
+    it('supprimer l’équipement emporte le dossier et purge les objets', async () => {
+      const { equipment, alice } = await setupMembersAndEquipment(filesApp);
+      expect((await déposer(equipment.id, alice.cookies)).statusCode).toBe(201);
+      expect(objetsStockés()).toHaveLength(1);
+
+      const supprimé = await filesApp.inject({
+        method: 'DELETE',
+        url: `/api/equipments/${equipment.id}`,
+        cookies: alice.cookies,
+      });
+      expect(supprimé.statusCode).toBe(204);
+      // La cascade efface les rangées ; sans la purge, l'objet resterait facturé à jamais.
+      expect(objetsStockés()).toEqual([]);
+    });
+
+    it('un document d’un autre cercle ne se lit pas, même son identifiant en main', async () => {
+      const { equipment, alice, chloe } = await setupMembersAndEquipment(filesApp);
+      const document = (await déposer(equipment.id, alice.cookies)).json() as { id: string };
+
+      // Chloé se dote de son propre équipement : elle a une session valide et un cercle à elle.
+      const sien = await createEquipment('Bétonnière', [chloe.id], chloe.cookies, filesApp);
+      expect(sien.statusCode).toBe(201);
+
+      const refusé = await get(`/api/documents/${document.id}/content`, chloe.cookies, filesApp);
+      expect(refusé.statusCode).toBe(404);
+      // Même code et même message qu'un identifiant inexistant : rien ne distingue les deux.
+      const inexistant = await get('/api/documents/inconnu/content', chloe.cookies, filesApp);
+      expect(inexistant.statusCode).toBe(404);
+      expect((refusé.json() as { error: string }).error).toBe(
+        (inexistant.json() as { error: string }).error.replace('inconnu', document.id),
+      );
+    });
   });
 });
 

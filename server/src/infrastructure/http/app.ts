@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyServerOptions } from 'fastify';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
+import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import fs from 'node:fs';
@@ -23,6 +24,7 @@ import { UsageService } from '../../application/usage-service.js';
 import { ExpenseService } from '../../application/expense-service.js';
 import { DiscussionService } from '../../application/discussion-service.js';
 import { ChecklistService } from '../../application/checklist-service.js';
+import { DocumentService } from '../../application/document-service.js';
 import { NotificationService } from '../../application/notification-service.js';
 import type {
   AuditLogger,
@@ -31,6 +33,7 @@ import type {
   Clock,
   CredentialRepository,
   DeviceTokenRepository,
+  DocumentRepository,
   EquipmentRepository,
   ExpenseRepository,
   IdGenerator,
@@ -60,9 +63,17 @@ import { usageRoutes } from './plugins/usage.js';
 import { expenseRoutes } from './plugins/expenses.js';
 import { discussionRoutes } from './plugins/discussions.js';
 import { checklistRoutes } from './plugins/checklists.js';
+import { documentRoutes } from './plugins/documents.js';
 import { notificationRoutes } from './plugins/notifications.js';
 import { uploadRoutes } from './plugins/uploads.js';
-import { FileSystemReceiptStorage } from '../tech/receipt-storage.js';
+import { createS3ObjectStore } from '../tech/object-store.js';
+import { createReceiptStorage } from '../tech/receipt-storage.js';
+import type { ReceiptStorage } from '../tech/receipt-storage.js';
+import { createDocumentStorage } from '../tech/document-storage.js';
+import type { DocumentStorage } from '../tech/document-storage.js';
+import { createAttachmentStorage } from '../tech/attachment-storage.js';
+import type { AttachmentStorage } from '../tech/attachment-storage.js';
+import { MAX_DOCUMENT_SIZE_BYTES } from '../../domain/document/document.js';
 
 export interface AppDependencies {
   members: MemberRepository;
@@ -75,6 +86,7 @@ export interface AppDependencies {
   messages: MessageRepository;
   checklists: ChecklistRepository;
   checklistItems: ChecklistItemRepository;
+  documents: DocumentRepository;
   notifications: NotificationRepository;
   notificationPreferences: NotificationPreferenceRepository;
   pushSubscriptions: PushSubscriptionRepository;
@@ -91,8 +103,28 @@ export interface AppDependencies {
   logger?: FastifyServerOptions['logger'];
   /** Fait confiance aux en-têtes X-Forwarded-* (obligatoire derrière le proxy Railway pour le rate-limit par IP). */
   trustProxy?: boolean;
-  /** Répertoire de stockage des justificatifs (null = upload désactivé). */
+  /**
+   * Répertoire des justificatifs (null = upload désactivé). Quand un bucket est configuré, il ne
+   * sert plus qu'à relire les justificatifs déposés avant la bascule.
+   */
   uploadsDir?: string | null;
+  /**
+   * Répertoire de repli des documents, quand aucun bucket n'est configuré (null = seuls les liens
+   * sont gérés). Le bucket S3/R2, lui, est lu dans `objectStorageEnv`.
+   */
+  documentsDir?: string | null;
+  /** Répertoire de repli des pièces jointes (null = les messages n'en acceptent pas). */
+  attachmentsDir?: string | null;
+  /** Environnement où lire la configuration du bucket S3/R2 (`process.env` en production). */
+  objectStorageEnv?: NodeJS.ProcessEnv;
+  /**
+   * Stockages déjà construits, qui l'emportent sur ce que l'environnement décrirait. Les tests
+   * d'intégration s'en servent pour jouer un bucket — dont la lecture est une redirection signée
+   * — sans réseau ; en production, ils sont toujours déduits des variables et des répertoires.
+   */
+  receiptStorage?: ReceiptStorage;
+  documentStorage?: DocumentStorage;
+  attachmentStorage?: AttachmentStorage;
   /** Répertoire des fichiers statiques du front (null = API seule). */
   webDistDir?: string | null;
   /**
@@ -107,6 +139,18 @@ export interface AppDependencies {
   /** Plafonds de requêtes par IP (voir DEFAULT_RATE_LIMITS) : relevés dans les tests d'intégration. */
   rateLimits?: Partial<RateLimits>;
 }
+
+/**
+ * Refus émis par `@fastify/multipart` pendant la lecture du flux, rendus en français. Seuls ceux
+ * qu'une requête légitime peut provoquer : les autres (violation de prototype, type de contenu
+ * inattendu) relèvent d'un client mal formé, et le message générique leur suffit.
+ */
+const MULTIPART_ERRORS: Record<string, string> = {
+  FST_REQ_FILE_TOO_LARGE: `Fichier trop lourd (${MAX_DOCUMENT_SIZE_BYTES / (1024 * 1024)} Mo maximum).`,
+  FST_FILES_LIMIT: 'Un seul fichier par envoi.',
+  FST_PARTS_LIMIT: 'Trop d’éléments dans le formulaire.',
+  FST_FIELDS_LIMIT: 'Trop de champs dans le formulaire.',
+};
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
   const app = Fastify({
@@ -200,8 +244,15 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.clock,
   );
   const memberService = new MemberService(deps.members, deps.equipments, deps.credentials);
-  // Sans répertoire d'upload, il n'y a ni justificatif à servir ni fichier à purger.
-  const receiptStorage = deps.uploadsDir ? new FileSystemReceiptStorage(deps.uploadsDir) : undefined;
+  // Justificatifs, documents et pièces jointes partagent le même bucket S3/R2 dès que son
+  // environnement est complet, et retombent chacun sur leur répertoire sinon. Sans ni l'un ni
+  // l'autre, il n'y a ni fichier à servir ni fichier à purger, et le dossier n'accepte que des
+  // liens. Le client S3 est construit une fois pour les trois : ils visent le même bucket, et
+  // chaque client traîne son propre pool de connexions.
+  const bucket = createS3ObjectStore(deps.objectStorageEnv ?? {});
+  const receiptStorage = deps.receiptStorage ?? createReceiptStorage(bucket, deps.uploadsDir ?? null) ?? undefined;
+  const documentStorage = deps.documentStorage ?? createDocumentStorage(bucket, deps.documentsDir ?? null);
+  const attachmentStorage = deps.attachmentStorage ?? createAttachmentStorage(bucket, deps.attachmentsDir ?? null);
   // Le journal des gestes sensibles part dans les logs du serveur : hors de portée des membres
   // concernés, contrairement aux notifications qu'ils peuvent effacer.
   const auditLogger: AuditLogger = {
@@ -215,6 +266,10 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     notificationService,
     auditLogger,
     receiptStorage,
+    deps.documents,
+    documentStorage ?? undefined,
+    deps.messages,
+    attachmentStorage ?? undefined,
   );
   const reservationService = new ReservationService(
     deps.reservations,
@@ -246,9 +301,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.messages,
     deps.equipments,
     deps.members,
+    deps.documents,
     deps.idGenerator,
     deps.clock,
     notificationService,
+    attachmentStorage ?? undefined,
   );
   const checklistService = new ChecklistService(
     deps.checklists,
@@ -256,6 +313,14 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.equipments,
     deps.idGenerator,
     deps.clock,
+  );
+  const documentService = new DocumentService(
+    deps.documents,
+    deps.equipments,
+    deps.messages,
+    deps.idGenerator,
+    deps.clock,
+    documentStorage ?? undefined,
   );
 
   app.decorateRequest('authMember', null as unknown as Member);
@@ -293,6 +358,13 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     if (httpError.code === 'FST_ERR_CTP_INVALID_JSON_BODY' || httpError.code === 'FST_ERR_CTP_EMPTY_JSON_BODY') {
       return reply.status(400).send({ error: 'Corps de requête invalide : JSON illisible.' });
     }
+    // Corps multipart hors limites : @fastify/multipart échoue pendant la lecture du flux, donc
+    // avant tout code applicatif, et ses messages sont en anglais. Le membre, lui, a simplement
+    // choisi un fichier trop lourd.
+    const multipartMessage = MULTIPART_ERRORS[httpError.code ?? ''];
+    if (multipartMessage) {
+      return reply.status(413).send({ error: multipartMessage });
+    }
     if (httpError.validation || (httpError.statusCode && httpError.statusCode < 500)) {
       return reply.status(httpError.statusCode ?? 400).send({ error: httpError.message ?? 'Requête invalide.' });
     }
@@ -311,6 +383,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
    * Les routes hors de ce contexte (front statique, santé) sont publiques par construction.
    */
   await app.register(async (protectedScope) => {
+    // Transverse : deux domaines téléversent (justificatifs, documents) et le greffon ne peut être
+    // enregistré qu'une fois par contexte. Le plafond global est celui du plus gros dépôt accepté ;
+    // chaque route resserre le sien à la lecture du corps.
+    await protectedScope.register(multipart, { limits: { fileSize: MAX_DOCUMENT_SIZE_BYTES } });
+
     protectedScope.addHook('onRequest', async (request, reply) => {
       if (request.routeOptions?.config?.public) {
         return;
@@ -344,8 +421,17 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     await protectedScope.register(reservationRoutes, { reservationService });
     await protectedScope.register(usageRoutes, { usageService });
     await protectedScope.register(expenseRoutes, { expenseService });
-    await protectedScope.register(discussionRoutes, { discussionService });
+    await protectedScope.register(discussionRoutes, {
+      discussionService,
+      storage: attachmentStorage ?? undefined,
+      rateLimits,
+    });
     await protectedScope.register(checklistRoutes, { checklistService });
+    await protectedScope.register(documentRoutes, {
+      documentService,
+      storage: documentStorage ?? undefined,
+      rateLimits,
+    });
     await protectedScope.register(notificationRoutes, {
       notificationService,
       vapidPublicKey: deps.vapidPublicKey ?? null,

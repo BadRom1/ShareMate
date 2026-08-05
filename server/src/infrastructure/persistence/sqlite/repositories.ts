@@ -15,6 +15,8 @@ import { Message } from '../../../domain/discussion/message.js';
 import { Thread } from '../../../domain/discussion/thread.js';
 import { Checklist } from '../../../domain/checklist/checklist.js';
 import { ChecklistItem } from '../../../domain/checklist/checklist-item.js';
+import { Document } from '../../../domain/document/document.js';
+import type { DocumentCategory, DocumentContent } from '../../../domain/document/document.js';
 import { Notification } from '../../../domain/notification/notification.js';
 import { NotificationPreference } from '../../../domain/notification/preference.js';
 import { NOTIFICATION_TYPES } from '../../../domain/notification/notification-type.js';
@@ -26,6 +28,7 @@ import type {
   CredentialRepository,
   DeviceToken,
   DeviceTokenRepository,
+  DocumentRepository,
   EquipmentRepository,
   ExpenseRepository,
   MemberRepository,
@@ -666,6 +669,10 @@ interface MessageRow {
   created_at: string;
   edited_at: string | null;
   parent_id: string | null;
+  attachment_key: string | null;
+  attachment_name: string | null;
+  attachment_type: string | null;
+  attachment_size: number | null;
 }
 
 export class SqliteMessageRepository implements MessageRepository {
@@ -680,6 +687,15 @@ export class SqliteMessageRepository implements MessageRepository {
       createdAt: new Date(row.created_at),
       editedAt: row.edited_at ? new Date(row.edited_at) : null,
       parentId: row.parent_id,
+      // Les quatre colonnes vont ensemble : la clé présente, les trois autres le sont aussi.
+      attachment: row.attachment_key
+        ? {
+            storageKey: row.attachment_key,
+            fileName: row.attachment_name!,
+            contentType: row.attachment_type!,
+            sizeBytes: row.attachment_size!,
+          }
+        : null,
     });
   }
 
@@ -695,6 +711,17 @@ export class SqliteMessageRepository implements MessageRepository {
     return rows.map((r) => this.toEntity(r));
   }
 
+  async findByEquipmentId(equipmentId: string): Promise<Message[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT messages.* FROM messages
+         JOIN threads ON threads.id = messages.thread_id
+         WHERE threads.equipment_id = ? ORDER BY messages.created_at`,
+      )
+      .all(equipmentId) as MessageRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
   async countByThreadId(threadId: string): Promise<number> {
     const row = this.db.prepare('SELECT COUNT(*) AS count FROM messages WHERE thread_id = ?').get(threadId) as {
       count: number;
@@ -705,8 +732,9 @@ export class SqliteMessageRepository implements MessageRepository {
   async save(message: Message): Promise<void> {
     this.db
       .prepare(
-        `INSERT INTO messages (id, thread_id, author_id, body, created_at, edited_at, parent_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO messages (id, thread_id, author_id, body, created_at, edited_at, parent_id,
+           attachment_key, attachment_name, attachment_type, attachment_size)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET body = excluded.body, edited_at = excluded.edited_at`,
       )
       .run(
@@ -717,6 +745,10 @@ export class SqliteMessageRepository implements MessageRepository {
         message.createdAt.toISOString(),
         message.editedAt ? message.editedAt.toISOString() : null,
         message.parentId,
+        message.attachment?.storageKey ?? null,
+        message.attachment?.fileName ?? null,
+        message.attachment?.contentType ?? null,
+        message.attachment?.sizeBytes ?? null,
       );
   }
 
@@ -1014,5 +1046,92 @@ export class SqliteDeviceTokenRepository implements DeviceTokenRepository {
 
   async deleteByToken(memberId: string, token: string): Promise<void> {
     this.db.prepare('DELETE FROM device_tokens WHERE token = ? AND member_id = ?').run(token, memberId);
+  }
+}
+
+interface DocumentRow {
+  id: string;
+  equipment_id: string;
+  author_id: string;
+  name: string;
+  category: string;
+  created_at: string;
+  storage_key: string | null;
+  file_name: string | null;
+  content_type: string | null;
+  size_bytes: number | null;
+  url: string | null;
+}
+
+export class SqliteDocumentRepository implements DocumentRepository {
+  constructor(private readonly db: SqliteDb) {}
+
+  private toEntity(row: DocumentRow): Document {
+    // La contrainte CHECK de la table garantit qu'exactement une des deux natures est renseignée :
+    // une ligne qui porterait les deux n'a pas pu être écrite.
+    const content: DocumentContent =
+      row.storage_key !== null
+        ? {
+            type: 'FILE',
+            storageKey: row.storage_key,
+            fileName: row.file_name!,
+            contentType: row.content_type!,
+            sizeBytes: row.size_bytes!,
+          }
+        : { type: 'LINK', url: row.url! };
+    return Document.create({
+      id: row.id,
+      equipmentId: row.equipment_id,
+      authorId: row.author_id,
+      name: row.name,
+      category: row.category as DocumentCategory,
+      content,
+      createdAt: new Date(row.created_at),
+    });
+  }
+
+  async findById(id: string): Promise<Document | null> {
+    const row = this.db.prepare('SELECT * FROM documents WHERE id = ?').get(id) as DocumentRow | undefined;
+    return row ? this.toEntity(row) : null;
+  }
+
+  async findByEquipmentId(equipmentId: string): Promise<Document[]> {
+    const rows = this.db
+      .prepare('SELECT * FROM documents WHERE equipment_id = ? ORDER BY created_at DESC, id DESC')
+      .all(equipmentId) as DocumentRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
+  async findByStorageKey(storageKey: string): Promise<Document[]> {
+    const rows = this.db.prepare('SELECT * FROM documents WHERE storage_key = ?').all(storageKey) as DocumentRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
+  async save(document: Document): Promise<void> {
+    const file = document.content.type === 'FILE' ? document.content : null;
+    this.db
+      .prepare(
+        `INSERT INTO documents
+           (id, equipment_id, author_id, name, category, created_at, storage_key, file_name, content_type, size_bytes, url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, category = excluded.category`,
+      )
+      .run(
+        document.id,
+        document.equipmentId,
+        document.authorId,
+        document.name,
+        document.category,
+        document.createdAt.toISOString(),
+        file?.storageKey ?? null,
+        file?.fileName ?? null,
+        file?.contentType ?? null,
+        file?.sizeBytes ?? null,
+        document.content.type === 'LINK' ? document.content.url : null,
+      );
+  }
+
+  async delete(id: string): Promise<void> {
+    this.db.prepare('DELETE FROM documents WHERE id = ?').run(id);
   }
 }

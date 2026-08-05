@@ -25,6 +25,20 @@ export function receiptUrl(path: string | null): string | null {
   return path && RECEIPT_PATH.test(path) ? assetUrl(path) : null;
 }
 
+/**
+ * URL du contenu d'un fichier du dossier. Elle s'ouvre par un lien du navigateur et jamais par
+ * `fetch` : la réponse est une redirection vers le stockage d'objets, qu'une requête XHR ne
+ * pourrait pas suivre sous la politique de sécurité de contenu (`connect-src 'self'`).
+ */
+export function documentContentUrl(id: string): string {
+  return assetUrl(`/api/documents/${encodeURIComponent(id)}/content`);
+}
+
+/** URL de la pièce jointe d'un message. Même règle que pour un document : un lien, jamais un `fetch`. */
+export function attachmentUrl(messageId: string): string {
+  return assetUrl(`/api/messages/${encodeURIComponent(messageId)}/attachment`);
+}
+
 export interface Member {
   id: string;
   name: string;
@@ -147,6 +161,13 @@ export interface ThreadSummary extends Thread {
   messageCount: number;
 }
 
+/** Fichier joint à un message. Sa clé de stockage ne sort pas du serveur : le contenu se lit par `attachmentUrl`. */
+export interface MessageAttachment {
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+}
+
 export interface Message {
   id: string;
   threadId: string;
@@ -156,6 +177,8 @@ export interface Message {
   editedAt: string | null;
   /** Message parent (réponse dans un sous-fil), ou `null` pour un message racine. */
   parentId: string | null;
+  /** Fichier joint, ou `null`. Un message en porte au plus un. */
+  attachment: MessageAttachment | null;
 }
 
 /** Checklist d'un équipement (ex. « Avant utilisation »), créée par un membre du cercle. */
@@ -183,6 +206,40 @@ export interface ChecklistItem {
   checkedAt: string | null;
   /** Membre ayant coché le point, ou `null`. */
   checkedById: string | null;
+}
+
+/** Familles du dossier d'un équipement (fixes, comme celles des dépenses). */
+export type DocumentCategory = 'MANUAL' | 'INSURANCE' | 'PURCHASE' | 'MAINTENANCE' | 'PHOTO' | 'OTHER';
+
+export const DOCUMENT_CATEGORIES: DocumentCategory[] = [
+  'MANUAL',
+  'INSURANCE',
+  'PURCHASE',
+  'MAINTENANCE',
+  'PHOTO',
+  'OTHER',
+];
+
+/**
+ * Document du dossier d'un équipement. Deux natures dans une seule forme : un fichier déposé
+ * (`kind: 'FILE'`, dont le contenu se lit par `documentContentUrl`) ou un lien externe
+ * (`kind: 'LINK'`, ouvert chez son hébergeur). Les champs de l'autre nature valent `null`.
+ *
+ * Nommé `EquipmentDocument` et non `Document` : ce dernier est le type du DOM, qu'un import
+ * masquerait dans tout fichier qui manipule la page.
+ */
+export interface EquipmentDocument {
+  id: string;
+  equipmentId: string;
+  authorId: string;
+  name: string;
+  category: DocumentCategory;
+  createdAt: string;
+  kind: 'FILE' | 'LINK';
+  fileName: string | null;
+  contentType: string | null;
+  sizeBytes: number | null;
+  url: string | null;
 }
 
 export type NotificationType =
@@ -409,6 +466,29 @@ export const api = {
   editMessage: (id: string, body: string) =>
     request<Message>(`/api/messages/${id}`, { method: 'PUT', body: JSON.stringify({ body }) }),
   deleteMessage: (id: string) => request<void>(`/api/messages/${id}`, { method: 'DELETE' }),
+  postMessageWithFile: async (
+    threadId: string,
+    file: File,
+    options: { body?: string; parentId?: string | null } = {},
+  ): Promise<Message> => {
+    const form = new FormData();
+    form.append('threadId', threadId);
+    // Le corps peut être vide : la pièce jointe suffit à faire un message.
+    if (options.body) form.append('body', options.body);
+    if (options.parentId) form.append('parentId', options.parentId);
+    form.append('file', file);
+    // Pas de Content-Type manuel : le navigateur pose la frontière multipart. On garde l'auth native.
+    const response = await fetch(`${API_BASE}/api/messages/file`, {
+      method: 'POST',
+      body: form,
+      headers: buildHeaders(false),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new ApiError(body.error ?? 'Échec de l’envoi du fichier.', response.status);
+    }
+    return (await response.json()) as Message;
+  },
 
   listChecklists: (equipmentId: string) => request<ChecklistSummary[]>(`/api/equipments/${equipmentId}/checklists`),
   createChecklist: (equipmentId: string, title: string, itemLabels?: string[]) =>
@@ -427,6 +507,36 @@ export const api = {
   setChecklistItemChecked: (id: string, checked: boolean) =>
     request<ChecklistItem>(`/api/checklist-items/${id}`, { method: 'PUT', body: JSON.stringify({ checked }) }),
   deleteChecklistItem: (id: string) => request<void>(`/api/checklist-items/${id}`, { method: 'DELETE' }),
+
+  listDocuments: (equipmentId: string) => request<EquipmentDocument[]>(`/api/equipments/${equipmentId}/documents`),
+  addDocumentLink: (input: { equipmentId: string; url: string; name?: string; category: DocumentCategory }) =>
+    request<EquipmentDocument>('/api/documents', { method: 'POST', body: JSON.stringify(input) }),
+  updateDocument: (id: string, changes: { name?: string; category?: DocumentCategory }) =>
+    request<EquipmentDocument>(`/api/documents/${id}`, { method: 'PUT', body: JSON.stringify(changes) }),
+  deleteDocument: (id: string) => request<void>(`/api/documents/${id}`, { method: 'DELETE' }),
+  uploadDocument: async (
+    file: File,
+    meta: { equipmentId: string; category: DocumentCategory; name?: string },
+  ): Promise<EquipmentDocument> => {
+    const form = new FormData();
+    form.append('equipmentId', meta.equipmentId);
+    form.append('category', meta.category);
+    if (meta.name) form.append('name', meta.name);
+    // Le fichier en dernier : la route lit les parties dans l'ordre reçu, et les champs d'abord
+    // lui évitent de garder tout le corps en mémoire avant de savoir s'il l'accepte.
+    form.append('file', file);
+    // Pas de Content-Type manuel : le navigateur pose la frontière multipart. On garde l'auth native.
+    const response = await fetch(`${API_BASE}/api/documents/file`, {
+      method: 'POST',
+      body: form,
+      headers: buildHeaders(false),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new ApiError(body.error ?? 'Échec du dépôt.', response.status);
+    }
+    return (await response.json()) as EquipmentDocument;
+  },
 
   listNotifications: (unreadOnly = false) =>
     request<AppNotification[]>(`/api/notifications${unreadOnly ? '?unread=1' : ''}`),

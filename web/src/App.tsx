@@ -7,18 +7,20 @@ import { UsagePage } from './pages/UsagePage';
 import { ExpensesPage } from './pages/ExpensesPage';
 import { DiscussionsPage } from './pages/DiscussionsPage';
 import { ChecklistsPage } from './pages/ChecklistsPage';
+import { DocumentsPage } from './pages/DocumentsPage';
 import { BootstrapPage, InvitePage, LoginPage } from './pages/AuthPages';
 import { NotificationBell } from './components/NotificationBell';
 import { UserMenu } from './components/UserMenu';
 import { setupNativePush } from './notifications';
 
-type Tab = 'equipments' | 'calendar' | 'usage' | 'expenses' | 'discussions' | 'checklists';
+type Tab = 'equipments' | 'calendar' | 'usage' | 'expenses' | 'discussions' | 'checklists' | 'documents';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'discussions', label: 'Discussions' },
   { id: 'calendar', label: 'Calendrier' },
   { id: 'usage', label: 'Usage & entretien' },
   { id: 'checklists', label: 'Checklists' },
+  { id: 'documents', label: 'Documents' },
   { id: 'expenses', label: 'Dépenses & soldes' },
   { id: 'equipments', label: 'Équipements' },
 ];
@@ -90,6 +92,7 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
   const [usageEquipmentId, setUsageEquipmentId] = useState<string | null>(null);
   const [discussionEquipmentId, setDiscussionEquipmentId] = useState<string | null>(null);
   const [checklistEquipmentId, setChecklistEquipmentId] = useState<string | null>(null);
+  const [documentEquipmentId, setDocumentEquipmentId] = useState<string | null>(null);
   const [discussionThreadId, setDiscussionThreadId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -107,6 +110,7 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
       if (!target || !TABS.some((t) => t.id === target)) return;
       if (target === 'usage' && equipment) setUsageEquipmentId(equipment);
       if (target === 'checklists' && equipment) setChecklistEquipmentId(equipment);
+      if (target === 'documents' && equipment) setDocumentEquipmentId(equipment);
       if (target === 'discussions') {
         if (equipment) setDiscussionEquipmentId(equipment);
         setDiscussionThreadId(url.searchParams.get('thread'));
@@ -193,6 +197,9 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
       )}
       {tab === 'checklists' && (
         <ChecklistsPage members={members} currentMemberId={member.id} initialEquipmentId={checklistEquipmentId} />
+      )}
+      {tab === 'documents' && (
+        <DocumentsPage members={members} currentMemberId={member.id} initialEquipmentId={documentEquipmentId} />
       )}
       {tab === 'expenses' && <ExpensesPage members={members} currentMemberId={member.id} />}
       {tab === 'discussions' && (

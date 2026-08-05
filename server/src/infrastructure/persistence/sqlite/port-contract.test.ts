@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase } from './database.js';
 import {
+  SqliteDocumentRepository,
   SqliteEquipmentRepository,
+  SqliteMessageRepository,
+  SqliteThreadRepository,
   SqliteExpenseRepository,
   SqliteMemberRepository,
   SqliteNotificationRepository,
@@ -10,7 +13,10 @@ import {
   SqliteUsageRecordRepository,
 } from './repositories.js';
 import {
+  InMemoryDocumentRepository,
   InMemoryEquipmentRepository,
+  InMemoryMessageRepository,
+  InMemoryThreadRepository,
   InMemoryExpenseRepository,
   InMemoryMemberRepository,
   InMemoryNotificationRepository,
@@ -20,7 +26,10 @@ import {
 } from '../../../application/testing/in-memory.js';
 import { NOTIFICATION_PAGE_SIZE } from '../../../application/ports.js';
 import type {
+  DocumentRepository,
   EquipmentRepository,
+  MessageRepository,
+  ThreadRepository,
   ExpenseRepository,
   MemberRepository,
   NotificationRepository,
@@ -33,6 +42,9 @@ import { Equipment } from '../../../domain/equipment/equipment.js';
 import { Reservation } from '../../../domain/reservation/reservation.js';
 import { UsageRecord } from '../../../domain/usage/usage-record.js';
 import { Expense } from '../../../domain/expense/expense.js';
+import { Document } from '../../../domain/document/document.js';
+import { Message } from '../../../domain/discussion/message.js';
+import { Thread } from '../../../domain/discussion/thread.js';
 import { Reimbursement } from '../../../domain/expense/reimbursement.js';
 import { Notification } from '../../../domain/notification/notification.js';
 import { Money } from '../../../domain/shared/money.js';
@@ -55,6 +67,9 @@ interface Dépôts {
   usageRecords: UsageRecordRepository;
   expenses: ExpenseRepository;
   reimbursements: ReimbursementRepository;
+  documents: DocumentRepository;
+  threads: ThreadRepository;
+  messages: MessageRepository;
   notifications: NotificationRepository;
 }
 
@@ -70,6 +85,9 @@ const IMPLÉMENTATIONS: { nom: string; ouvrir: () => Dépôts }[] = [
         usageRecords: new SqliteUsageRecordRepository(db),
         expenses: new SqliteExpenseRepository(db),
         reimbursements: new SqliteReimbursementRepository(db),
+        documents: new SqliteDocumentRepository(db),
+        threads: new SqliteThreadRepository(db),
+        messages: new SqliteMessageRepository(db),
         notifications: new SqliteNotificationRepository(db),
       };
     },
@@ -83,6 +101,13 @@ const IMPLÉMENTATIONS: { nom: string; ouvrir: () => Dépôts }[] = [
       usageRecords: new InMemoryUsageRecordRepository(),
       expenses: new InMemoryExpenseRepository(),
       reimbursements: new InMemoryReimbursementRepository(),
+      documents: new InMemoryDocumentRepository(),
+      ...(() => {
+        // Le double doit répondre « les messages de cet équipement » comme le fait la jointure
+        // SQL : il lui faut donc connaître les fils.
+        const threads = new InMemoryThreadRepository();
+        return { threads, messages: new InMemoryMessageRepository(threads) };
+      })(),
       notifications: new InMemoryNotificationRepository(),
     }),
   },
@@ -142,6 +167,20 @@ function remboursement(id: string, equipmentId: string, date: string): Reimburse
     toMemberId: 'm1',
     amount: Money.fromEuros(10),
     date: new Date(date),
+  });
+}
+
+function document(id: string, equipmentId: string, quand: string, storageKey?: string): Document {
+  return Document.create({
+    id,
+    equipmentId,
+    authorId: 'm1',
+    name: `Document ${id}`,
+    category: 'MANUAL',
+    content: storageKey
+      ? { type: 'FILE', storageKey, fileName: 'manuel.pdf', contentType: 'application/pdf', sizeBytes: 1000 }
+      : { type: 'LINK', url: `https://exemple.fr/${id}` },
+    createdAt: new Date(quand),
   });
 }
 
@@ -228,6 +267,51 @@ describe.each(IMPLÉMENTATIONS)('Contrat des ports — $nom', ({ ouvrir }) => {
 
     expect((await dépôts.expenses.findByEquipmentId('e2')).map((x) => x.id)).toEqual(['x2', 'x1']);
     expect((await dépôts.reimbursements.findByEquipmentId('e2')).map((r) => r.id)).toEqual(['b2', 'b1']);
+  });
+
+  it('range les documents du plus récent au plus ancien, l’identifiant départageant les ex æquo', async () => {
+    await dépôts.documents.save(document('d1', 'e2', '2026-01-15T00:00:00.000Z'));
+    await dépôts.documents.save(document('d3', 'e2', '2026-04-15T00:00:00.000Z'));
+    await dépôts.documents.save(document('d2', 'e2', '2026-04-15T00:00:00.000Z'));
+    await dépôts.documents.save(document('d4', 'e1', '2026-05-15T00:00:00.000Z'));
+
+    expect((await dépôts.documents.findByEquipmentId('e2')).map((d) => d.id)).toEqual(['d3', 'd2', 'd1']);
+    expect(await dépôts.documents.findByEquipmentId('e3')).toEqual([]);
+  });
+
+  it('rend tous les documents qui nomment une même clé de stockage, et une liste vide sinon', async () => {
+    await dépôts.documents.save(document('d1', 'e2', '2026-01-15T00:00:00.000Z', 'documents/a.pdf'));
+    await dépôts.documents.save(document('d2', 'e1', '2026-01-15T00:00:00.000Z', 'documents/a.pdf'));
+    await dépôts.documents.save(document('d3', 'e2', '2026-01-15T00:00:00.000Z'));
+
+    expect((await dépôts.documents.findByStorageKey('documents/a.pdf')).map((d) => d.id).sort()).toEqual(['d1', 'd2']);
+    // Un lien ne nomme aucun objet : il ne doit jamais remonter par cette question.
+    expect(await dépôts.documents.findByStorageKey('documents/inconnu.pdf')).toEqual([]);
+  });
+
+  it('rend les messages d’un équipement, tous fils confondus, du plus ancien au plus récent', async () => {
+    for (const [id, equipmentId, quand] of [
+      ['t1', 'e2', '2026-01-01T00:00:00.000Z'],
+      ['t2', 'e2', '2026-01-02T00:00:00.000Z'],
+      ['t3', 'e1', '2026-01-03T00:00:00.000Z'],
+    ] as const) {
+      await dépôts.threads.save(
+        Thread.create({ id, equipmentId, authorId: 'm1', title: `Fil ${id}`, createdAt: new Date(quand) }),
+      );
+    }
+    for (const [id, threadId, quand] of [
+      ['g1', 't2', '2026-03-01T00:00:00.000Z'],
+      ['g2', 't1', '2026-02-01T00:00:00.000Z'],
+      ['g3', 't3', '2026-01-15T00:00:00.000Z'],
+    ] as const) {
+      await dépôts.messages.save(
+        Message.create({ id, threadId, authorId: 'm1', body: `Message ${id}`, createdAt: new Date(quand) }),
+      );
+    }
+
+    expect((await dépôts.messages.findByEquipmentId('e2')).map((m) => m.id)).toEqual(['g2', 'g1']);
+    expect((await dépôts.messages.findByEquipmentId('e1')).map((m) => m.id)).toEqual(['g3']);
+    expect(await dépôts.messages.findByEquipmentId('e3')).toEqual([]);
   });
 
   it('rend les notifications de la plus récente à la plus ancienne, plafonnées sans `limit`', async () => {

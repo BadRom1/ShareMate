@@ -7,6 +7,7 @@ import type {
   CredentialRepository,
   DeviceToken,
   DeviceTokenRepository,
+  DocumentRepository,
   EquipmentRepository,
   ExpenseRepository,
   IdGenerator,
@@ -17,6 +18,7 @@ import type {
   NotificationRepository,
   Notifier,
   NotifyEvent,
+  ObjectStorage,
   PasswordHasher,
   PushSender,
   PushSubscriptionRepository,
@@ -41,6 +43,7 @@ import type { Message } from '../../domain/discussion/message.js';
 import type { Thread } from '../../domain/discussion/thread.js';
 import type { Checklist } from '../../domain/checklist/checklist.js';
 import type { ChecklistItem } from '../../domain/checklist/checklist-item.js';
+import type { Document } from '../../domain/document/document.js';
 import type { Notification } from '../../domain/notification/notification.js';
 import type { NotificationPreference } from '../../domain/notification/preference.js';
 
@@ -197,12 +200,20 @@ export class InMemoryThreadRepository implements ThreadRepository {
 
 export class InMemoryMessageRepository implements MessageRepository {
   private items = new Map<string, Message>();
+  /** Fils connus, pour répondre « les messages de cet équipement » comme le ferait la jointure SQL. */
+  constructor(private readonly threads?: InMemoryThreadRepository) {}
   async findById(id: string) {
     return this.items.get(id) ?? null;
   }
   async findByThreadId(threadId: string) {
     return [...this.items.values()]
       .filter((m) => m.threadId === threadId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  }
+  async findByEquipmentId(equipmentId: string) {
+    const threadIds = new Set((await this.threads?.findByEquipmentId(equipmentId))?.map((t) => t.id) ?? []);
+    return [...this.items.values()]
+      .filter((m) => threadIds.has(m.threadId))
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   }
   async countByThreadId(threadId: string) {
@@ -246,6 +257,27 @@ export class InMemoryChecklistItemRepository implements ChecklistItemRepository 
   }
   async save(item: ChecklistItem) {
     this.items.set(item.id, item);
+  }
+  async delete(id: string) {
+    this.items.delete(id);
+  }
+}
+
+export class InMemoryDocumentRepository implements DocumentRepository {
+  private items = new Map<string, Document>();
+  async findById(id: string) {
+    return this.items.get(id) ?? null;
+  }
+  async findByEquipmentId(equipmentId: string) {
+    return [...this.items.values()]
+      .filter((d) => d.equipmentId === equipmentId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || byCodePoint(b.id, a.id));
+  }
+  async findByStorageKey(storageKey: string) {
+    return [...this.items.values()].filter((d) => d.storageKey === storageKey);
+  }
+  async save(document: Document) {
+    this.items.set(document.id, document);
   }
   async delete(id: string) {
     this.items.delete(id);
@@ -332,6 +364,17 @@ export class InMemoryReceiptStorage implements ReceiptStorage {
   }
   async delete(receiptPath: string) {
     this.paths.delete(receiptPath);
+  }
+}
+
+/** Objets de documents sans bucket : `keys` expose ce qui reste stocké. */
+export class InMemoryObjectStorage implements ObjectStorage {
+  readonly keys = new Set<string>();
+  add(storageKey: string) {
+    this.keys.add(storageKey);
+  }
+  async delete(storageKey: string) {
+    this.keys.delete(storageKey);
   }
 }
 

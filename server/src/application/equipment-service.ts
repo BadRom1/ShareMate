@@ -6,13 +6,17 @@ import { parseIsoDate } from '../domain/shared/iso-date.js';
 import { equipmentForMember, equipmentsForMember } from './equipment-access.js';
 import { visibleMemberIds } from './member-scope.js';
 import { purgeOrphanReceipts } from './receipt-access.js';
+import { purgeOrphanObjects } from './document-access.js';
 import type {
   AuditLogger,
+  DocumentRepository,
   EquipmentRepository,
   ExpenseRepository,
   IdGenerator,
   MemberRepository,
+  MessageRepository,
   Notifier,
+  ObjectStorage,
   ReceiptStorage,
 } from './ports.js';
 
@@ -55,6 +59,12 @@ export class EquipmentService {
     private readonly notifier: Notifier,
     private readonly audit: AuditLogger,
     private readonly receipts?: ReceiptStorage,
+    // Même raison pour les documents du dossier et les pièces jointes des discussions : la
+    // cascade efface les lignes, pas les objets qu'elles nomment.
+    private readonly documents?: DocumentRepository,
+    private readonly objects?: ObjectStorage,
+    private readonly messages?: MessageRepository,
+    private readonly attachments?: ObjectStorage,
   ) {}
 
   /**
@@ -212,10 +222,20 @@ export class EquipmentService {
 
   async delete(id: string, requesterId: string): Promise<void> {
     await equipmentForMember(this.equipments, id, requesterId);
-    // Relevées avant : la cascade les efface avec l'équipement, et plus rien ne nommera leurs fichiers.
-    const doomed = await this.expenses.findByEquipmentId(id);
+    // Relevés avant : la cascade les efface avec l'équipement, et plus rien ne nommera leurs fichiers.
+    const doomedExpenses = await this.expenses.findByEquipmentId(id);
+    const doomedDocuments = this.documents ? await this.documents.findByEquipmentId(id) : [];
+    const doomedMessages = this.messages && this.attachments ? await this.messages.findByEquipmentId(id) : [];
     await this.equipments.delete(id);
-    await purgeOrphanReceipts(this.expenses, this.receipts, doomed);
+    await purgeOrphanReceipts(this.expenses, this.receipts, doomedExpenses);
+    if (this.documents) {
+      await purgeOrphanObjects(this.documents, this.objects, doomedDocuments);
+    }
+    // Une clé de pièce jointe n'appartient qu'à son message : rien d'autre ne peut la nommer,
+    // il n'y a donc pas de survivant à chercher avant de purger.
+    for (const message of doomedMessages) {
+      if (message.storageKey) await this.attachments!.delete(message.storageKey);
+    }
   }
 
   async getById(id: string, requesterId: string): Promise<Equipment> {

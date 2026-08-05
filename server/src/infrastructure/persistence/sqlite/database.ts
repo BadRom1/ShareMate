@@ -312,6 +312,65 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // Dossier de documents par équipement : fichiers déposés dans le stockage d'objets et liens
+    // externes, dans la même table. Les colonnes d'un fichier et celle d'un lien s'excluent — la
+    // contrainte l'écrit ici plutôt que de s'en remettre au seul domaine, car une ligne qui
+    // porterait les deux (ou aucune) serait impossible à charger, et rendrait le dossier illisible
+    // pour tout le cercle.
+    description: 'documents rattachés à un équipement',
+    apply(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS documents (
+          id TEXT PRIMARY KEY,
+          equipment_id TEXT NOT NULL REFERENCES equipments(id) ON DELETE CASCADE,
+          author_id TEXT NOT NULL REFERENCES members(id),
+          name TEXT NOT NULL,
+          category TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          storage_key TEXT,
+          file_name TEXT,
+          content_type TEXT,
+          size_bytes INTEGER,
+          url TEXT,
+          CHECK (
+            (storage_key IS NOT NULL AND file_name IS NOT NULL AND content_type IS NOT NULL
+              AND size_bytes IS NOT NULL AND url IS NULL)
+            OR (storage_key IS NULL AND file_name IS NULL AND content_type IS NULL
+              AND size_bytes IS NULL AND url IS NOT NULL)
+          )
+        );
+        CREATE INDEX IF NOT EXISTS idx_documents_equipment ON documents(equipment_id);
+        -- La purge d'un objet remonte aux documents qui le nomment, par cette clé.
+        CREATE INDEX IF NOT EXISTS idx_documents_storage_key ON documents(storage_key);
+      `);
+    },
+  },
+  {
+    // Pièce jointe d'un message de discussion : au plus une par message, décrite par les quatre
+    // colonnes d'un fichier stocké. Les quatre vont ensemble — une ligne n'en portant qu'une
+    // partie serait impossible à charger —, d'où l'index partiel plutôt qu'une table à part :
+    // une pièce jointe n'a pas d'existence propre, elle suit son message.
+    description: 'pièce jointe des messages',
+    apply(db) {
+      const existantes = columns(db, 'messages');
+      for (const [colonne, type] of [
+        ['attachment_key', 'TEXT'],
+        ['attachment_name', 'TEXT'],
+        ['attachment_type', 'TEXT'],
+        ['attachment_size', 'INTEGER'],
+      ] as const) {
+        if (!existantes.includes(colonne)) {
+          db.exec(`ALTER TABLE messages ADD COLUMN ${colonne} ${type};`);
+        }
+      }
+      // La purge d'un objet remonte au message qui le nomme, par cette clé.
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_messages_attachment ON messages(attachment_key)
+           WHERE attachment_key IS NOT NULL;`,
+      );
+    },
+  },
 ];
 
 /** Version de schéma attendue par ce code : rank de la dernière migration connue. */

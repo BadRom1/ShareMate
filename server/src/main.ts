@@ -6,6 +6,7 @@ import {
   SqliteChecklistRepository,
   SqliteCredentialRepository,
   SqliteDeviceTokenRepository,
+  SqliteDocumentRepository,
   SqliteEquipmentRepository,
   SqliteExpenseRepository,
   SqliteMemberRepository,
@@ -34,6 +35,11 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR ?? path.resolve(here, '../../data');
 const databasePath = process.env.DATABASE_PATH ?? path.join(dataDir, 'sharemate.sqlite');
 const uploadsDir = process.env.UPLOADS_DIR ?? path.join(dataDir, 'uploads');
+// Répertoires du volume. Ils restent la source quand aucun bucket S3/R2 n'est configuré, et
+// deviennent le repli en lecture dès qu'il l'est : les fichiers déposés avant la bascule y
+// dorment encore, jusqu'à `npm run migrate:receipts`.
+const documentsDir = process.env.DOCUMENTS_DIR ?? path.join(dataDir, 'documents');
+const attachmentsDir = process.env.ATTACHMENTS_DIR ?? path.join(dataDir, 'attachments');
 const webDistDir = process.env.WEB_DIST_DIR ?? path.resolve(here, '../../web/dist');
 const port = Number(process.env.PORT ?? 3000);
 const isProduction = process.env.NODE_ENV === 'production';
@@ -59,6 +65,7 @@ const app = await buildApp({
   messages: new SqliteMessageRepository(db),
   checklists: new SqliteChecklistRepository(db),
   checklistItems: new SqliteChecklistItemRepository(db),
+  documents: new SqliteDocumentRepository(db),
   notifications: new SqliteNotificationRepository(db),
   notificationPreferences: new SqliteNotificationPreferenceRepository(db),
   pushSubscriptions: new SqlitePushSubscriptionRepository(db),
@@ -78,6 +85,9 @@ const app = await buildApp({
   },
   trustProxy: isProduction,
   uploadsDir,
+  documentsDir,
+  attachmentsDir,
+  objectStorageEnv: process.env,
   webDistDir,
   corsOrigins,
   pushSender: pushSender ?? undefined,

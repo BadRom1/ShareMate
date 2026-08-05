@@ -47,7 +47,12 @@ export default defineConfig({
         runtimeCaching: [
           {
             // Lecture API : réseau d'abord, cache de secours quand hors-ligne.
-            urlPattern: ({ url, request }) => url.pathname.startsWith('/api/') && request.method === 'GET',
+            // Le motif est écrit en toutes lettres : ces fonctions sont sérialisées telles quelles
+            // dans le service worker généré, où une constante déclarée ici n'existerait pas.
+            urlPattern: ({ url, request }) =>
+              url.pathname.startsWith('/api/') &&
+              !/^\/api\/(documents\/[^/]+\/content|messages\/[^/]+\/attachment)$/.test(url.pathname) &&
+              request.method === 'GET',
             handler: 'NetworkFirst',
             options: {
               cacheName: 'sharemate-api',
@@ -57,10 +62,14 @@ export default defineConfig({
             },
           },
           {
-            // Justificatifs : jamais conservés sur l'appareil. Leur lecture dépend du cercle de la
-            // dépense qui les porte, contrôlé à chaque requête côté serveur ; un cache les
-            // rendrait à un droit révoqué, et les laisserait lisibles après une déconnexion.
-            urlPattern: ({ url }) => url.pathname.startsWith('/uploads/'),
+            // Justificatifs, contenus de documents et pièces jointes : jamais conservés sur l'appareil. Leur
+            // lecture dépend du cercle de l'équipement, contrôlé à chaque requête côté serveur ;
+            // un cache les rendrait à un droit révoqué, et les laisserait lisibles après une
+            // déconnexion. Depuis le bucket, la réponse est en outre une redirection signée dont
+            // l'URL expire : la rejouer ne donnerait qu'un refus.
+            urlPattern: ({ url }) =>
+              url.pathname.startsWith('/uploads/') ||
+              /^\/api\/(documents\/[^/]+\/content|messages\/[^/]+\/attachment)$/.test(url.pathname),
             handler: 'NetworkOnly',
           },
         ],
