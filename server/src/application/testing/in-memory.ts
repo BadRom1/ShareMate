@@ -26,6 +26,7 @@ import type {
   ReimbursementRepository,
   ReservationRepository,
   SessionRepository,
+  SubEquipmentRepository,
   TokenGenerator,
   UsageRecordRepository,
   WebPushSubscription,
@@ -35,6 +36,7 @@ import type { Member } from '../../domain/member/member.js';
 import type { MemberCredential } from '../../domain/auth/credential.js';
 import type { Session } from '../../domain/auth/session.js';
 import type { Equipment } from '../../domain/equipment/equipment.js';
+import type { SubEquipment } from '../../domain/equipment/sub-equipment.js';
 import type { Reservation } from '../../domain/reservation/reservation.js';
 import type { UsageRecord } from '../../domain/usage/usage-record.js';
 import type { Expense } from '../../domain/expense/expense.js';
@@ -95,6 +97,24 @@ export class InMemoryEquipmentRepository implements EquipmentRepository {
   }
   async save(equipment: Equipment) {
     this.items.set(equipment.id, equipment);
+  }
+  async delete(id: string) {
+    this.items.delete(id);
+  }
+}
+
+export class InMemorySubEquipmentRepository implements SubEquipmentRepository {
+  private items = new Map<string, SubEquipment>();
+  async findById(id: string) {
+    return this.items.get(id) ?? null;
+  }
+  async findByEquipmentId(equipmentId: string) {
+    return [...this.items.values()]
+      .filter((s) => s.equipmentId === equipmentId)
+      .sort((a, b) => a.position - b.position || byCodePoint(a.id, b.id));
+  }
+  async save(subEquipment: SubEquipment) {
+    this.items.set(subEquipment.id, subEquipment);
   }
   async delete(id: string) {
     this.items.delete(id);

@@ -30,7 +30,7 @@ export async function readUpload(request: FastifyRequest, maxFileBytes: number):
   const upload: MultipartUpload = { fields: {}, file: null };
   for await (const part of request.parts({ limits: { fileSize: maxFileBytes, files: 1, fields: 10 } })) {
     if (part.type === 'file') {
-      upload.file = { filename: part.filename, content: await part.toBuffer() };
+      upload.file = { filename: namedFile(part.filename), content: await part.toBuffer() };
     } else if (typeof part.value === 'string') {
       // Un champ trop long est refusé, pas ignoré : passé sous silence, un `name` démesuré
       // deviendrait « pas de nom » et un `equipmentId` démesuré, « champ obligatoire » — deux
@@ -42,6 +42,21 @@ export async function readUpload(request: FastifyRequest, maxFileBytes: number):
     }
   }
   return upload;
+}
+
+/**
+ * Nom du fichier reçu, exigé avant toute lecture d'extension.
+ *
+ * Busboy classe en fichier toute partie qui annonce un type binaire (`application/octet-stream`),
+ * qu'elle porte un `filename=` ou non — le type de `@fastify/multipart` promet pourtant un `string`.
+ * Sans cette garde, `path.extname(undefined)` lève un `TypeError` bien plus loin : un corps mal
+ * formé sortait en 500, là où il ne mérite qu'un refus.
+ */
+export function namedFile(filename: string | undefined): string {
+  if (!filename) {
+    throw new DomainError('Le fichier envoyé n’a pas de nom : son format ne peut pas être vérifié.');
+  }
+  return filename;
 }
 
 export function requiredField(fields: Record<string, string>, field: string): string {

@@ -73,6 +73,11 @@ export function nullableNumber(minimum = 0, maximum = MAX_NUMBER) {
   return { type: ['number', 'null'], minimum, maximum };
 }
 
+/** Entier borné, là où une valeur fractionnaire n'a pas de sens (un nombre d'exemplaires). */
+export function integer(minimum = 0, maximum = MAX_NUMBER) {
+  return { type: 'integer', minimum, maximum };
+}
+
 export const flag = { type: 'boolean' };
 
 export function arrayOf(items: unknown, maxItems: number, minItems = 0) {

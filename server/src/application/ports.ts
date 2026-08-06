@@ -2,6 +2,7 @@ import type { Member } from '../domain/member/member.js';
 import type { MemberCredential } from '../domain/auth/credential.js';
 import type { Session } from '../domain/auth/session.js';
 import type { Equipment } from '../domain/equipment/equipment.js';
+import type { SubEquipment } from '../domain/equipment/sub-equipment.js';
 import type { Reservation } from '../domain/reservation/reservation.js';
 import type { UsageRecord } from '../domain/usage/usage-record.js';
 import type { Expense } from '../domain/expense/expense.js';
@@ -56,6 +57,18 @@ export interface EquipmentRepository {
    */
   findByMemberId(memberId: string): Promise<Equipment[]>;
   save(equipment: Equipment): Promise<void>;
+  delete(id: string): Promise<void>;
+}
+
+export interface SubEquipmentRepository {
+  findById(id: string): Promise<SubEquipment | null>;
+  /**
+   * Éléments du lot de l'équipement, triés par position croissante. À position égale (cas qu'aucun
+   * ajout ne produit, mais qu'une base reprise à la main peut contenir), l'identifiant départage :
+   * sans cela le port promettrait un ordre qu'il ne tient pas.
+   */
+  findByEquipmentId(equipmentId: string): Promise<SubEquipment[]>;
+  save(subEquipment: SubEquipment): Promise<void>;
   delete(id: string): Promise<void>;
 }
 

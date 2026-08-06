@@ -18,6 +18,7 @@ import {
   SqliteReimbursementRepository,
   SqliteReservationRepository,
   SqliteSessionRepository,
+  SqliteSubEquipmentRepository,
   SqliteUsageRecordRepository,
 } from '../persistence/sqlite/repositories.js';
 import { CryptoTokenGenerator, ScryptPasswordHasher, SystemClock, UuidGenerator } from '../tech/adapters.js';
@@ -46,6 +47,7 @@ async function buildTestApp(overrides: Partial<AppDependencies> = {}): Promise<F
   return buildApp({
     members: new SqliteMemberRepository(db),
     equipments: new SqliteEquipmentRepository(db),
+    subEquipments: new SqliteSubEquipmentRepository(db),
     reservations: new SqliteReservationRepository(db),
     usageRecords: new SqliteUsageRecordRepository(db),
     expenses: new SqliteExpenseRepository(db),
@@ -1088,6 +1090,116 @@ describe('API — checklists (checklists + points de contrôle)', () => {
   });
 });
 
+describe('API — sous-équipements (contenu du lot)', () => {
+  it('compose le lot, le corrige depuis tout le cercle, et le refuse au-dehors', async () => {
+    const { equipment, alice, bruno, chloe } = await setupMembersAndEquipment();
+
+    const remorque = await post(
+      '/api/sub-equipments',
+      { equipmentId: equipment.id, name: 'Remorque', notes: 'Plaque AB-123-CD' },
+      alice.cookies,
+    );
+    expect(remorque.statusCode).toBe(201);
+    expect(remorque.json()).toMatchObject({ name: 'Remorque', quantity: 1, position: 0 });
+
+    // Bruno, membre du cercle sans avoir rien saisi jusqu'ici, complète le lot.
+    const godets = await post(
+      '/api/sub-equipments',
+      { equipmentId: equipment.id, name: 'Godets', quantity: 3, notes: '30, 60, 90 cm' },
+      bruno.cookies,
+    );
+    expect(godets.statusCode).toBe(201);
+    expect((godets.json() as { position: number }).position).toBe(1);
+
+    const lot = (await get(`/api/equipments/${equipment.id}/sub-equipments`, alice.cookies)).json() as {
+      id: string;
+      name: string;
+      quantity: number;
+    }[];
+    expect(lot.map((s) => s.name)).toEqual(['Remorque', 'Godets']);
+
+    // Corriger et retirer sont ouverts à tout le cercle, quel qu'ait été l'auteur de la saisie.
+    const corrigé = await app.inject({
+      method: 'PUT',
+      url: `/api/sub-equipments/${(godets.json() as { id: string }).id}`,
+      payload: { quantity: 4, notes: null },
+      cookies: alice.cookies,
+    });
+    expect(corrigé.statusCode).toBe(200);
+    expect(corrigé.json()).toMatchObject({ name: 'Godets', quantity: 4, notes: null });
+
+    // Chloé, hors cercle : le lot n'existe pas pour elle, en lecture comme en écriture.
+    expect((await get(`/api/equipments/${equipment.id}/sub-equipments`, chloe.cookies)).statusCode).toBe(404);
+    expect(
+      (await post('/api/sub-equipments', { equipmentId: equipment.id, name: 'Pirate' }, chloe.cookies)).statusCode,
+    ).toBe(404);
+    expect(
+      (
+        await app.inject({
+          method: 'PUT',
+          url: `/api/sub-equipments/${(remorque.json() as { id: string }).id}`,
+          payload: { name: 'Pirate' },
+          cookies: chloe.cookies,
+        })
+      ).statusCode,
+    ).toBe(404);
+    expect(
+      (
+        await app.inject({
+          method: 'DELETE',
+          url: `/api/sub-equipments/${(remorque.json() as { id: string }).id}`,
+          cookies: chloe.cookies,
+        })
+      ).statusCode,
+    ).toBe(404);
+
+    expect(
+      (
+        await app.inject({
+          method: 'DELETE',
+          url: `/api/sub-equipments/${(remorque.json() as { id: string }).id}`,
+          cookies: bruno.cookies,
+        })
+      ).statusCode,
+    ).toBe(204);
+    expect(
+      ((await get(`/api/equipments/${equipment.id}/sub-equipments`, alice.cookies)).json() as unknown[]).length,
+    ).toBe(1);
+  });
+
+  it('refuse une quantité fractionnaire ou nulle, et une modification vide', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment();
+    for (const quantity of [0, 1.5]) {
+      const refused = await post(
+        '/api/sub-equipments',
+        { equipmentId: equipment.id, name: 'Godets', quantity },
+        alice.cookies,
+      );
+      expect(refused.statusCode).toBe(400);
+    }
+    const créé = await post('/api/sub-equipments', { equipmentId: equipment.id, name: 'Godets' }, alice.cookies);
+    const vide = await app.inject({
+      method: 'PUT',
+      url: `/api/sub-equipments/${(créé.json() as { id: string }).id}`,
+      payload: {},
+      cookies: alice.cookies,
+    });
+    expect(vide.statusCode).toBe(400);
+  });
+
+  it('le lot disparaît avec l’équipement', async () => {
+    // Il n'accompagne plus rien : la cascade de la persistance l'emporte, sans laisser de rangée
+    // rattachée à un équipement qui n'existe plus.
+    const { equipment, alice } = await setupMembersAndEquipment();
+    await post('/api/sub-equipments', { equipmentId: equipment.id, name: 'Remorque' }, alice.cookies);
+    expect(
+      (await app.inject({ method: 'DELETE', url: `/api/equipments/${equipment.id}`, cookies: alice.cookies }))
+        .statusCode,
+    ).toBe(204);
+    expect((await get(`/api/equipments/${equipment.id}/sub-equipments`, alice.cookies)).statusCode).toBe(404);
+  });
+});
+
 describe('API — refus de téléversement rendus en français', () => {
   let filesApp: FastifyInstance;
   let tmpRoot: string;
@@ -1095,6 +1207,7 @@ describe('API — refus de téléversement rendus en français', () => {
   beforeEach(async () => {
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-refus-'));
     filesApp = await buildTestApp({
+      uploadsDir: path.join(tmpRoot, 'uploads'),
       documentsDir: path.join(tmpRoot, 'documents'),
       attachmentsDir: path.join(tmpRoot, 'attachments'),
     });
@@ -1163,6 +1276,69 @@ describe('API — refus de téléversement rendus en français', () => {
 
     expect(res.statusCode).toBe(413);
     expect((res.json() as { error: string }).error).toBe('Fichier trop lourd (25 Mo maximum).');
+  });
+
+  /**
+   * Partie fichier **sans** `filename=`, mais annonçant un type binaire : busboy la classe malgré
+   * tout en fichier. C'est ce qu'envoie un client mal formé — et ce que produit `fetch` avec un
+   * `Blob` non nommé.
+   */
+  function multipartSansNom(champs: Record<string, string>, contenu: Uint8Array) {
+    const boundary = '----sharemateRefusBoundary';
+    const morceaux: Uint8Array[] = Object.entries(champs).map(([nom, valeur]) =>
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${nom}"\r\n\r\n${valeur}\r\n`),
+    );
+    morceaux.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"\r\n` +
+          `Content-Type: application/octet-stream\r\n\r\n`,
+      ),
+      contenu,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    );
+    return {
+      payload: Buffer.concat(morceaux),
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    };
+  }
+
+  // Le plafond annoncé doit être celui de la route qui refuse : le greffon multipart lève le même
+  // code pour toutes, et un chiffre unique renvoyait le membre à un plafond qui n'était pas le sien.
+  it('refuse un justificatif trop lourd au plafond de sa route, et non à celui du dossier', async () => {
+    const { alice } = await setupMembersAndEquipment(filesApp);
+    const { payload, headers } = multipart({}, Buffer.alloc(12 * 1024 * 1024, 0x41), 'recu.jpg');
+
+    const res = await filesApp.inject({
+      method: 'POST',
+      url: '/api/uploads/receipts',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+
+    expect(res.statusCode).toBe(413);
+    expect((res.json() as { error: string }).error).toBe('Fichier trop lourd (10 Mo maximum).');
+  });
+
+  // Sans nom, pas d'extension à lire : `path.extname(undefined)` levait un TypeError bien après
+  // l'entrée, et un corps mal formé sortait en 500 au lieu du refus qu'il mérite.
+  it('refuse une partie fichier sans nom, sur les trois routes de dépôt', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(filesApp);
+    const fil = await post('/api/threads', { equipmentId: equipment.id, title: 'Panne' }, alice.cookies, filesApp);
+    const { id: threadId } = fil.json() as { id: string };
+
+    const dépôts = [
+      ['/api/documents/file', { equipmentId: equipment.id, category: 'MANUAL' }],
+      ['/api/messages/file', { threadId }],
+      ['/api/uploads/receipts', {}],
+    ] as const;
+
+    for (const [url, champs] of dépôts) {
+      const { payload, headers } = multipartSansNom(champs, Buffer.from('%PDF'));
+      const res = await filesApp.inject({ method: 'POST', url, payload, headers, cookies: alice.cookies });
+      expect({ url, code: res.statusCode }).toEqual({ url, code: 400 });
+      expect((res.json() as { error: string }).error).toMatch(/n’a pas de nom/);
+    }
   });
 
   // Ignoré, un champ démesuré se serait déguisé en autre chose : un `name` trop long serait

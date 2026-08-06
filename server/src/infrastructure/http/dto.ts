@@ -1,6 +1,7 @@
 import type { Member } from '../../domain/member/member.js';
 import type { DirectoryEntry } from '../../application/member-service.js';
 import type { Equipment } from '../../domain/equipment/equipment.js';
+import type { SubEquipment } from '../../domain/equipment/sub-equipment.js';
 import type { Reservation } from '../../domain/reservation/reservation.js';
 import { conflictMap } from '../../domain/reservation/reservation-conflict.js';
 import type { UsageRecord } from '../../domain/usage/usage-record.js';
@@ -37,6 +38,18 @@ export function equipmentDto(e: Equipment) {
     meterUnit: e.meterUnit,
     memberIds: e.memberIds,
     maintenanceThreshold: e.maintenanceThreshold,
+  };
+}
+
+/** Élément du lot d'un équipement (remorque, godets…). */
+export function subEquipmentDto(s: SubEquipment) {
+  return {
+    id: s.id,
+    equipmentId: s.equipmentId,
+    name: s.name,
+    quantity: s.quantity,
+    notes: s.notes,
+    position: s.position,
   };
 }
 

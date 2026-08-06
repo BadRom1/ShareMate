@@ -4,7 +4,7 @@ import type { EquipmentRepository } from './ports.js';
 
 /**
  * Règle d'accès unique de l'application : tout ce qui pend à un équipement
- * (réservations, usage, dépenses, discussions, checklists) n'est visible et
+ * (réservations, usage, dépenses, discussions, checklists, contenu du lot) n'est visible et
  * modifiable que par les membres de son cercle. Un membre authentifié qui n'en
  * fait pas partie est traité comme un étranger, en lecture comme en écriture.
  *
