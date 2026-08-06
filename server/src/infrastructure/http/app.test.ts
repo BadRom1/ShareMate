@@ -1207,6 +1207,7 @@ describe('API — refus de téléversement rendus en français', () => {
   beforeEach(async () => {
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sharemate-refus-'));
     filesApp = await buildTestApp({
+      uploadsDir: path.join(tmpRoot, 'uploads'),
       documentsDir: path.join(tmpRoot, 'documents'),
       attachmentsDir: path.join(tmpRoot, 'attachments'),
     });
@@ -1275,6 +1276,69 @@ describe('API — refus de téléversement rendus en français', () => {
 
     expect(res.statusCode).toBe(413);
     expect((res.json() as { error: string }).error).toBe('Fichier trop lourd (25 Mo maximum).');
+  });
+
+  /**
+   * Partie fichier **sans** `filename=`, mais annonçant un type binaire : busboy la classe malgré
+   * tout en fichier. C'est ce qu'envoie un client mal formé — et ce que produit `fetch` avec un
+   * `Blob` non nommé.
+   */
+  function multipartSansNom(champs: Record<string, string>, contenu: Uint8Array) {
+    const boundary = '----sharemateRefusBoundary';
+    const morceaux: Uint8Array[] = Object.entries(champs).map(([nom, valeur]) =>
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${nom}"\r\n\r\n${valeur}\r\n`),
+    );
+    morceaux.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"\r\n` +
+          `Content-Type: application/octet-stream\r\n\r\n`,
+      ),
+      contenu,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    );
+    return {
+      payload: Buffer.concat(morceaux),
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    };
+  }
+
+  // Le plafond annoncé doit être celui de la route qui refuse : le greffon multipart lève le même
+  // code pour toutes, et un chiffre unique renvoyait le membre à un plafond qui n'était pas le sien.
+  it('refuse un justificatif trop lourd au plafond de sa route, et non à celui du dossier', async () => {
+    const { alice } = await setupMembersAndEquipment(filesApp);
+    const { payload, headers } = multipart({}, Buffer.alloc(12 * 1024 * 1024, 0x41), 'recu.jpg');
+
+    const res = await filesApp.inject({
+      method: 'POST',
+      url: '/api/uploads/receipts',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+
+    expect(res.statusCode).toBe(413);
+    expect((res.json() as { error: string }).error).toBe('Fichier trop lourd (10 Mo maximum).');
+  });
+
+  // Sans nom, pas d'extension à lire : `path.extname(undefined)` levait un TypeError bien après
+  // l'entrée, et un corps mal formé sortait en 500 au lieu du refus qu'il mérite.
+  it('refuse une partie fichier sans nom, sur les trois routes de dépôt', async () => {
+    const { equipment, alice } = await setupMembersAndEquipment(filesApp);
+    const fil = await post('/api/threads', { equipmentId: equipment.id, title: 'Panne' }, alice.cookies, filesApp);
+    const { id: threadId } = fil.json() as { id: string };
+
+    const dépôts = [
+      ['/api/documents/file', { equipmentId: equipment.id, category: 'MANUAL' }],
+      ['/api/messages/file', { threadId }],
+      ['/api/uploads/receipts', {}],
+    ] as const;
+
+    for (const [url, champs] of dépôts) {
+      const { payload, headers } = multipartSansNom(champs, Buffer.from('%PDF'));
+      const res = await filesApp.inject({ method: 'POST', url, payload, headers, cookies: alice.cookies });
+      expect({ url, code: res.statusCode }).toEqual({ url, code: 400 });
+      expect((res.json() as { error: string }).error).toMatch(/n’a pas de nom/);
+    }
   });
 
   // Ignoré, un champ démesuré se serait déguisé en autre chose : un `name` trop long serait

@@ -1,5 +1,5 @@
 import Fastify from 'fastify';
-import type { FastifyInstance, FastifyServerOptions } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyServerOptions } from 'fastify';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
@@ -150,11 +150,20 @@ export interface AppDependencies {
  * inattendu) relèvent d'un client mal formé, et le message générique leur suffit.
  */
 const MULTIPART_ERRORS: Record<string, string> = {
-  FST_REQ_FILE_TOO_LARGE: `Fichier trop lourd (${MAX_DOCUMENT_SIZE_BYTES / (1024 * 1024)} Mo maximum).`,
   FST_FILES_LIMIT: 'Un seul fichier par envoi.',
   FST_PARTS_LIMIT: 'Trop d’éléments dans le formulaire.',
   FST_FIELDS_LIMIT: 'Trop de champs dans le formulaire.',
 };
+
+/**
+ * Refus de poids, au plafond de la route visée : un justificatif (10 Mo) et un document du dossier
+ * (25 Mo) n'acceptent pas le même fichier. Annoncer un plafond unique renvoyait le membre à un
+ * chiffre qui n'était pas le sien — « 25 Mo maximum » pour un reçu refusé à 12.
+ */
+function fileTooLargeMessage(request: FastifyRequest): string {
+  const maxBytes = request.routeOptions?.config?.maxFileBytes ?? MAX_DOCUMENT_SIZE_BYTES;
+  return `Fichier trop lourd (${maxBytes / (1024 * 1024)} Mo maximum).`;
+}
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
   const app = Fastify({
@@ -366,6 +375,9 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     // Corps multipart hors limites : @fastify/multipart échoue pendant la lecture du flux, donc
     // avant tout code applicatif, et ses messages sont en anglais. Le membre, lui, a simplement
     // choisi un fichier trop lourd.
+    if (httpError.code === 'FST_REQ_FILE_TOO_LARGE') {
+      return reply.status(413).send({ error: fileTooLargeMessage(request) });
+    }
     const multipartMessage = MULTIPART_ERRORS[httpError.code ?? ''];
     if (multipartMessage) {
       return reply.status(413).send({ error: multipartMessage });
