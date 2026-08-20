@@ -9,6 +9,13 @@ declare module 'fastify' {
   interface FastifyContextConfig {
     /** Route accessible sans session (login, invitation, santé…). */
     public?: boolean;
+    /**
+     * Poids maximal accepté par cette route de dépôt. Le refus est émis par le greffon multipart
+     * pendant la lecture du flux, donc hors de la route : c'est par là que le gestionnaire
+     * d'erreurs retrouve le plafond à annoncer, qui n'est pas le même pour un justificatif que
+     * pour un document.
+     */
+    maxFileBytes?: number;
   }
 }
 

@@ -10,6 +10,7 @@ import {
   SqliteNotificationRepository,
   SqliteReimbursementRepository,
   SqliteReservationRepository,
+  SqliteSubEquipmentRepository,
   SqliteUsageRecordRepository,
 } from './repositories.js';
 import {
@@ -22,6 +23,7 @@ import {
   InMemoryNotificationRepository,
   InMemoryReimbursementRepository,
   InMemoryReservationRepository,
+  InMemorySubEquipmentRepository,
   InMemoryUsageRecordRepository,
 } from '../../../application/testing/in-memory.js';
 import { NOTIFICATION_PAGE_SIZE } from '../../../application/ports.js';
@@ -35,10 +37,12 @@ import type {
   NotificationRepository,
   ReimbursementRepository,
   ReservationRepository,
+  SubEquipmentRepository,
   UsageRecordRepository,
 } from '../../../application/ports.js';
 import { Member } from '../../../domain/member/member.js';
 import { Equipment } from '../../../domain/equipment/equipment.js';
+import { SubEquipment } from '../../../domain/equipment/sub-equipment.js';
 import { Reservation } from '../../../domain/reservation/reservation.js';
 import { UsageRecord } from '../../../domain/usage/usage-record.js';
 import { Expense } from '../../../domain/expense/expense.js';
@@ -63,6 +67,7 @@ import { TimeRange } from '../../../domain/shared/time-range.js';
 interface Dépôts {
   members: MemberRepository;
   equipments: EquipmentRepository;
+  subEquipments: SubEquipmentRepository;
   reservations: ReservationRepository;
   usageRecords: UsageRecordRepository;
   expenses: ExpenseRepository;
@@ -81,6 +86,7 @@ const IMPLÉMENTATIONS: { nom: string; ouvrir: () => Dépôts }[] = [
       return {
         members: new SqliteMemberRepository(db),
         equipments: new SqliteEquipmentRepository(db),
+        subEquipments: new SqliteSubEquipmentRepository(db),
         reservations: new SqliteReservationRepository(db),
         usageRecords: new SqliteUsageRecordRepository(db),
         expenses: new SqliteExpenseRepository(db),
@@ -97,6 +103,7 @@ const IMPLÉMENTATIONS: { nom: string; ouvrir: () => Dépôts }[] = [
     ouvrir: () => ({
       members: new InMemoryMemberRepository(),
       equipments: new InMemoryEquipmentRepository(),
+      subEquipments: new InMemorySubEquipmentRepository(),
       reservations: new InMemoryReservationRepository(),
       usageRecords: new InMemoryUsageRecordRepository(),
       expenses: new InMemoryExpenseRepository(),
@@ -124,6 +131,10 @@ function équipement(id: string, name: string, memberIds: string[]): Equipment {
     memberIds,
     maintenanceThreshold: null,
   });
+}
+
+function sousÉquipement(id: string, equipmentId: string, position: number): SubEquipment {
+  return SubEquipment.create({ id, equipmentId, name: `Élément ${id}`, quantity: 1, position });
 }
 
 function réservation(id: string, equipmentId: string, début: string): Reservation {
@@ -236,6 +247,19 @@ describe.each(IMPLÉMENTATIONS)('Contrat des ports — $nom', ({ ouvrir }) => {
   it('range par nom les équipements du cercle du membre', async () => {
     expect((await dépôts.equipments.findByMemberId('m1')).map((e) => e.name)).toEqual(['Minipelle', 'Étau']);
     expect((await dépôts.equipments.findByMemberId('m2')).map((e) => e.name)).toEqual(['Broyeur', 'Minipelle']);
+  });
+
+  it('range le lot par position croissante, l’identifiant départageant les ex æquo', async () => {
+    await dépôts.subEquipments.save(sousÉquipement('s2', 'e2', 1));
+    await dépôts.subEquipments.save(sousÉquipement('s1', 'e2', 0));
+    // Deux éléments à la même position : aucun ajout n'en produit, mais une base reprise à la main
+    // peut en contenir, et les deux implémentations doivent alors les rendre dans le même ordre.
+    await dépôts.subEquipments.save(sousÉquipement('s4', 'e2', 2));
+    await dépôts.subEquipments.save(sousÉquipement('s3', 'e2', 2));
+    await dépôts.subEquipments.save(sousÉquipement('s5', 'e1', 0));
+
+    expect((await dépôts.subEquipments.findByEquipmentId('e2')).map((s) => s.id)).toEqual(['s1', 's2', 's3', 's4']);
+    expect(await dépôts.subEquipments.findByEquipmentId('e3')).toEqual([]);
   });
 
   it('range les réservations par début croissant, sur un équipement comme sur plusieurs', async () => {

@@ -1,5 +1,5 @@
 import Fastify from 'fastify';
-import type { FastifyInstance, FastifyServerOptions } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyServerOptions } from 'fastify';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
@@ -19,6 +19,7 @@ import type { Member } from '../../domain/member/member.js';
 import { MemberService } from '../../application/member-service.js';
 import { AuthService } from '../../application/auth-service.js';
 import { EquipmentService } from '../../application/equipment-service.js';
+import { SubEquipmentService } from '../../application/sub-equipment-service.js';
 import { ReservationService } from '../../application/reservation-service.js';
 import { UsageService } from '../../application/usage-service.js';
 import { ExpenseService } from '../../application/expense-service.js';
@@ -48,6 +49,7 @@ import type {
   ReimbursementRepository,
   ReservationRepository,
   SessionRepository,
+  SubEquipmentRepository,
   TokenGenerator,
   UsageRecordRepository,
 } from '../../application/ports.js';
@@ -58,6 +60,7 @@ import type { RateLimits } from './rate-limit.js';
 import { authRoutes } from './plugins/auth.js';
 import { memberRoutes } from './plugins/members.js';
 import { equipmentRoutes } from './plugins/equipments.js';
+import { subEquipmentRoutes } from './plugins/sub-equipments.js';
 import { reservationRoutes } from './plugins/reservations.js';
 import { usageRoutes } from './plugins/usage.js';
 import { expenseRoutes } from './plugins/expenses.js';
@@ -78,6 +81,7 @@ import { MAX_DOCUMENT_SIZE_BYTES } from '../../domain/document/document.js';
 export interface AppDependencies {
   members: MemberRepository;
   equipments: EquipmentRepository;
+  subEquipments: SubEquipmentRepository;
   reservations: ReservationRepository;
   usageRecords: UsageRecordRepository;
   expenses: ExpenseRepository;
@@ -146,11 +150,20 @@ export interface AppDependencies {
  * inattendu) relèvent d'un client mal formé, et le message générique leur suffit.
  */
 const MULTIPART_ERRORS: Record<string, string> = {
-  FST_REQ_FILE_TOO_LARGE: `Fichier trop lourd (${MAX_DOCUMENT_SIZE_BYTES / (1024 * 1024)} Mo maximum).`,
   FST_FILES_LIMIT: 'Un seul fichier par envoi.',
   FST_PARTS_LIMIT: 'Trop d’éléments dans le formulaire.',
   FST_FIELDS_LIMIT: 'Trop de champs dans le formulaire.',
 };
+
+/**
+ * Refus de poids, au plafond de la route visée : un justificatif (10 Mo) et un document du dossier
+ * (25 Mo) n'acceptent pas le même fichier. Annoncer un plafond unique renvoyait le membre à un
+ * chiffre qui n'était pas le sien — « 25 Mo maximum » pour un reçu refusé à 12.
+ */
+function fileTooLargeMessage(request: FastifyRequest): string {
+  const maxBytes = request.routeOptions?.config?.maxFileBytes ?? MAX_DOCUMENT_SIZE_BYTES;
+  return `Fichier trop lourd (${maxBytes / (1024 * 1024)} Mo maximum).`;
+}
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
   const app = Fastify({
@@ -271,6 +284,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.messages,
     attachmentStorage ?? undefined,
   );
+  const subEquipmentService = new SubEquipmentService(deps.subEquipments, deps.equipments, deps.idGenerator);
   const reservationService = new ReservationService(
     deps.reservations,
     deps.equipments,
@@ -361,6 +375,9 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     // Corps multipart hors limites : @fastify/multipart échoue pendant la lecture du flux, donc
     // avant tout code applicatif, et ses messages sont en anglais. Le membre, lui, a simplement
     // choisi un fichier trop lourd.
+    if (httpError.code === 'FST_REQ_FILE_TOO_LARGE') {
+      return reply.status(413).send({ error: fileTooLargeMessage(request) });
+    }
     const multipartMessage = MULTIPART_ERRORS[httpError.code ?? ''];
     if (multipartMessage) {
       return reply.status(413).send({ error: multipartMessage });
@@ -418,6 +435,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     await protectedScope.register(authRoutes, { authService, cookieSecure: deps.cookieSecure ?? false, rateLimits });
     await protectedScope.register(memberRoutes, { authService, memberService, rateLimits });
     await protectedScope.register(equipmentRoutes, { equipmentService });
+    await protectedScope.register(subEquipmentRoutes, { subEquipmentService });
     await protectedScope.register(reservationRoutes, { reservationService });
     await protectedScope.register(usageRoutes, { usageService });
     await protectedScope.register(expenseRoutes, { expenseService });

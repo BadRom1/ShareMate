@@ -68,6 +68,20 @@ export interface Equipment {
   maintenanceThreshold: number | null;
 }
 
+/**
+ * Élément du lot d'un équipement : la remorque de la minipelle, ses godets, sa pompe à graisse.
+ * Il décrit ce qui part avec l'équipement — il ne se réserve pas et ne porte pas de dépense.
+ */
+export interface SubEquipment {
+  id: string;
+  equipmentId: string;
+  name: string;
+  quantity: number;
+  /** Précision libre (dimensions, état, emplacement…), ou `null`. */
+  notes: string | null;
+  position: number;
+}
+
 /** PLANNED = prévisionnel, REQUIRED = nécessaire/obligatoire. */
 export type ReservationStatus = 'PLANNED' | 'REQUIRED';
 
@@ -395,6 +409,13 @@ export const api = {
   deleteEquipment: (id: string) => request<void>(`/api/equipments/${id}`, { method: 'DELETE' }),
   /** Se retirer du cercle : geste dédié, la mise à jour de l'équipement le refuse. */
   leaveEquipment: (id: string) => request<void>(`/api/equipments/${id}/leave`, { method: 'POST' }),
+
+  listSubEquipments: (equipmentId: string) => request<SubEquipment[]>(`/api/equipments/${equipmentId}/sub-equipments`),
+  addSubEquipment: (input: { equipmentId: string; name: string; quantity?: number; notes?: string | null }) =>
+    request<SubEquipment>('/api/sub-equipments', { method: 'POST', body: JSON.stringify(input) }),
+  updateSubEquipment: (id: string, changes: { name?: string; quantity?: number; notes?: string | null }) =>
+    request<SubEquipment>(`/api/sub-equipments/${id}`, { method: 'PUT', body: JSON.stringify(changes) }),
+  deleteSubEquipment: (id: string) => request<void>(`/api/sub-equipments/${id}`, { method: 'DELETE' }),
 
   calendar: () => request<Reservation[]>('/api/calendar'),
   reserve: (input: { equipmentId: string; start: string; end: string; status?: ReservationStatus; notes?: string }) =>

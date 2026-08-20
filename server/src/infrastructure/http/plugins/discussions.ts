@@ -131,46 +131,50 @@ export const discussionRoutes: FastifyPluginAsync<DiscussionRoutesOptions> = asy
    * envoi : le serveur voit alors le poids et l'extension réels, et rien ne reste dans le bucket
    * si le message est refusé.
    */
-  app.post('/api/messages/file', { config: { rateLimit: limit(rateLimits.sensitive) } }, async (request, reply) => {
-    const { fields, file } = await readUpload(request, MAX_STORED_FILE_BYTES);
-    if (!file) {
-      return reply.status(400).send({ error: 'Aucun fichier reçu.' });
-    }
-    const extension = path.extname(file.filename).toLowerCase();
-    if (!storage.supports(extension)) {
-      return reply
-        .status(400)
-        .send({ error: `Format non accepté. Formats gérés : ${storage.extensions().join(', ')}.` });
-    }
-    const threadId = requiredField(fields, 'threadId');
-    // Cercle et place disponible d'abord : refuser après l'écriture laisserait dans le bucket un
-    // objet que plus aucun message ne nommerait, c'est-à-dire hors de portée de la purge.
-    await discussionService.assertCanAttach(threadId, request.authMember.id, file.content.length);
+  app.post(
+    '/api/messages/file',
+    { config: { rateLimit: limit(rateLimits.sensitive), maxFileBytes: MAX_STORED_FILE_BYTES } },
+    async (request, reply) => {
+      const { fields, file } = await readUpload(request, MAX_STORED_FILE_BYTES);
+      if (!file) {
+        return reply.status(400).send({ error: 'Aucun fichier reçu.' });
+      }
+      const extension = path.extname(file.filename).toLowerCase();
+      if (!storage.supports(extension)) {
+        return reply
+          .status(400)
+          .send({ error: `Format non accepté. Formats gérés : ${storage.extensions().join(', ')}.` });
+      }
+      const threadId = requiredField(fields, 'threadId');
+      // Cercle et place disponible d'abord : refuser après l'écriture laisserait dans le bucket un
+      // objet que plus aucun message ne nommerait, c'est-à-dire hors de portée de la purge.
+      await discussionService.assertCanAttach(threadId, request.authMember.id, file.content.length);
 
-    const storageKey = await storage.save(file.content, extension);
-    try {
-      const message = await discussionService.postMessage({
-        threadId,
-        authorId: request.authMember.id,
-        // Le corps peut être vide : la pièce jointe suffit à faire un message.
-        body: fields.body ?? '',
-        parentId: fields.parentId || null,
-        attachment: {
-          storageKey,
-          fileName: file.filename,
-          // Le type est déduit de l'extension acceptée, jamais celui annoncé par le client :
-          // c'est lui qui sera servi en retour, et un `text/html` déclaré s'exécuterait.
-          contentType: storage.contentType(extension),
-          sizeBytes: file.content.length,
-        },
-      });
-      return reply.status(201).send(messageDto(message));
-    } catch (error) {
-      // L'objet vient d'être écrit et rien ne le nommera : on le retire avant de propager le refus.
-      await storage.delete(storageKey);
-      throw error;
-    }
-  });
+      const storageKey = await storage.save(file.content, extension);
+      try {
+        const message = await discussionService.postMessage({
+          threadId,
+          authorId: request.authMember.id,
+          // Le corps peut être vide : la pièce jointe suffit à faire un message.
+          body: fields.body ?? '',
+          parentId: fields.parentId || null,
+          attachment: {
+            storageKey,
+            fileName: file.filename,
+            // Le type est déduit de l'extension acceptée, jamais celui annoncé par le client :
+            // c'est lui qui sera servi en retour, et un `text/html` déclaré s'exécuterait.
+            contentType: storage.contentType(extension),
+            sizeBytes: file.content.length,
+          },
+        });
+        return reply.status(201).send(messageDto(message));
+      } catch (error) {
+        // L'objet vient d'être écrit et rien ne le nommera : on le retire avant de propager le refus.
+        await storage.delete(storageKey);
+        throw error;
+      }
+    },
+  );
 
   /**
    * Contenu d'une pièce jointe. La clé de l'objet ne circule jamais : on repart de l'identifiant

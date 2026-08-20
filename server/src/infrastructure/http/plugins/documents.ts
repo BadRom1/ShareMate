@@ -81,49 +81,53 @@ export const documentRoutes: FastifyPluginAsync<DocumentRoutesOptions> = async (
   // n'existent pas, plutôt que d'échouer à l'exécution. Les liens, eux, restent gérés.
   if (!storage) return;
 
-  app.post('/api/documents/file', { config: { rateLimit: limit(rateLimits.sensitive) } }, async (request, reply) => {
-    const { fields, file } = await readUpload(request, MAX_DOCUMENT_SIZE_BYTES);
-    if (!file) {
-      return reply.status(400).send({ error: 'Aucun fichier reçu.' });
-    }
-    const extension = path.extname(file.filename).toLowerCase();
-    if (!storage.supports(extension)) {
-      return reply
-        .status(400)
-        .send({ error: `Format non accepté. Formats gérés : ${storage.extensions().join(', ')}.` });
-    }
-    const equipmentId = requiredField(fields, 'equipmentId');
-    const category = enumField(fields, 'category', DOCUMENT_CATEGORIES);
-    // Cercle et place disponible d'abord : refuser après l'écriture laisserait dans le bucket un
-    // objet que plus aucun document ne nommerait, c'est-à-dire hors de portée de la purge.
-    await documentService.assertCanStore(equipmentId, request.authMember.id, file.content.length);
+  app.post(
+    '/api/documents/file',
+    { config: { rateLimit: limit(rateLimits.sensitive), maxFileBytes: MAX_DOCUMENT_SIZE_BYTES } },
+    async (request, reply) => {
+      const { fields, file } = await readUpload(request, MAX_DOCUMENT_SIZE_BYTES);
+      if (!file) {
+        return reply.status(400).send({ error: 'Aucun fichier reçu.' });
+      }
+      const extension = path.extname(file.filename).toLowerCase();
+      if (!storage.supports(extension)) {
+        return reply
+          .status(400)
+          .send({ error: `Format non accepté. Formats gérés : ${storage.extensions().join(', ')}.` });
+      }
+      const equipmentId = requiredField(fields, 'equipmentId');
+      const category = enumField(fields, 'category', DOCUMENT_CATEGORIES);
+      // Cercle et place disponible d'abord : refuser après l'écriture laisserait dans le bucket un
+      // objet que plus aucun document ne nommerait, c'est-à-dire hors de portée de la purge.
+      await documentService.assertCanStore(equipmentId, request.authMember.id, file.content.length);
 
-    const storageKey = await storage.save(file.content, extension);
-    try {
-      const document = await documentService.addDocument(
-        {
-          equipmentId,
-          name: fields.name,
-          category,
-          content: {
-            type: 'FILE',
-            storageKey,
-            fileName: file.filename,
-            // Le type est déduit de l'extension acceptée, jamais celui annoncé par le client :
-            // c'est lui qui sera servi en retour, et un `text/html` déclaré s'exécuterait.
-            contentType: storage.contentType(extension),
-            sizeBytes: file.content.length,
+      const storageKey = await storage.save(file.content, extension);
+      try {
+        const document = await documentService.addDocument(
+          {
+            equipmentId,
+            name: fields.name,
+            category,
+            content: {
+              type: 'FILE',
+              storageKey,
+              fileName: file.filename,
+              // Le type est déduit de l'extension acceptée, jamais celui annoncé par le client :
+              // c'est lui qui sera servi en retour, et un `text/html` déclaré s'exécuterait.
+              contentType: storage.contentType(extension),
+              sizeBytes: file.content.length,
+            },
           },
-        },
-        request.authMember.id,
-      );
-      return reply.status(201).send(documentDto(document));
-    } catch (error) {
-      // L'objet vient d'être écrit et rien ne le nommera : on le retire avant de propager le refus.
-      await storage.delete(storageKey);
-      throw error;
-    }
-  });
+          request.authMember.id,
+        );
+        return reply.status(201).send(documentDto(document));
+      } catch (error) {
+        // L'objet vient d'être écrit et rien ne le nommera : on le retire avant de propager le refus.
+        await storage.delete(storageKey);
+        throw error;
+      }
+    },
+  );
 
   /**
    * Contenu d'un fichier. La clé de l'objet ne circule jamais : on repart de l'identifiant du

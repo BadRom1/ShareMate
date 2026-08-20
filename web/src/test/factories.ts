@@ -16,6 +16,7 @@ import type {
   Reimbursement,
   Reservation,
   SettlementTransaction,
+  SubEquipment,
   ThreadSummary,
   UsageRecord,
 } from '../api';
@@ -36,6 +37,10 @@ export function anEquipment(over: Partial<Equipment> = {}): Equipment {
     maintenanceThreshold: null,
     ...over,
   };
+}
+
+export function aSubEquipment(over: Partial<SubEquipment> = {}): SubEquipment {
+  return { id: 's1', equipmentId: 'e1', name: 'Remorque', quantity: 1, notes: null, position: 0, ...over };
 }
 
 export function aReservation(over: Partial<Reservation> = {}): Reservation {
@@ -210,6 +215,11 @@ export function createApiStub() {
     updateEquipment: vi.fn(async (_id: string, _input: unknown) => anEquipment()),
     deleteEquipment: vi.fn(async (_id: string) => {}),
     leaveEquipment: vi.fn(async (_id: string) => {}),
+
+    listSubEquipments: vi.fn(async (_equipmentId: string) => [] as SubEquipment[]),
+    addSubEquipment: vi.fn(async (_input: unknown) => aSubEquipment()),
+    updateSubEquipment: vi.fn(async (_id: string, _changes: unknown) => aSubEquipment()),
+    deleteSubEquipment: vi.fn(async (_id: string) => {}),
 
     calendar: vi.fn(async () => [] as Reservation[]),
     reserve: vi.fn(async () => aReservation()),

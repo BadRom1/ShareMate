@@ -371,6 +371,25 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    // Contenu du lot d'un équipement : remorque, godets, pompe à graisse… Ces éléments n'ont pas
+    // d'existence propre — ils ne se réservent pas et ne portent pas de dépense —, d'où la cascade
+    // sur l'équipement : le lot disparaît avec ce qu'il accompagnait.
+    description: 'sous-équipements d’un équipement',
+    apply(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS sub_equipments (
+          id TEXT PRIMARY KEY,
+          equipment_id TEXT NOT NULL REFERENCES equipments(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          quantity INTEGER NOT NULL DEFAULT 1,
+          notes TEXT,
+          position INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_sub_equipments_equipment ON sub_equipments(equipment_id);
+      `);
+    },
+  },
 ];
 
 /** Version de schéma attendue par ce code : rank de la dernière migration connue. */

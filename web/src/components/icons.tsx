@@ -298,3 +298,24 @@ export function IconGrid(props: IconProps) {
     </svg>
   );
 }
+
+/** Caisse à outils (contenu du lot d'un équipement). */
+export function IconToolbox(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="2" y="8" width="20" height="12" rx="2" />
+      <path d="M8 8V6a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M2 13h20" />
+      <path d="M10 13v2h4v-2" />
+    </svg>
+  );
+}
+
+/** Chevron : replié (droite) ou déplié (bas) selon `open`. */
+export function IconChevron({ open = false, ...props }: IconProps & { open?: boolean }) {
+  return (
+    <svg {...base(props)}>
+      <path d={open ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'} />
+    </svg>
+  );
+}
