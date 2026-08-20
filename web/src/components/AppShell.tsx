@@ -35,7 +35,8 @@ interface Props {
  * Coque de l'application : l'équipement courant en haut, ses sections en bas, son contenu entre les deux.
  *
  * Le modèle est celui d'un espace de travail — on choisit d'abord de quel équipement on parle,
- * et tout l'écran parle de celui-là. La barre basse reste sous le pouce et ne défile jamais.
+ * et tout l'écran parle de celui-là. La coque tient la hauteur visible et ne défile pas : seul
+ * le contenu défile, entre les deux barres. La barre basse est donc toujours sous le pouce.
  */
 export function AppShell({
   equipments,
@@ -51,7 +52,7 @@ export function AppShell({
   children,
 }: Props) {
   return (
-    <>
+    <div className="app-shell">
       <header className="appbar">
         <EquipmentSwitcher
           equipments={equipments}
@@ -84,6 +85,6 @@ export function AppShell({
           );
         })}
       </nav>
-    </>
+    </div>
   );
 }

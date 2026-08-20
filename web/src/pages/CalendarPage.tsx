@@ -327,8 +327,14 @@ export function CalendarPage({ members, currentMemberId, equipment, onRecordUsag
     startEdit(r);
   }
 
+  /*
+   * Les grilles se cadrent sur la hauteur visible (voir `.cal-page`) : la carte prend ce qui reste
+   * sous les bandeaux. La vue liste garde sa hauteur naturelle, elle n'a rien à étirer.
+   */
+  const cardClass = view === 'list' ? 'card' : 'card cal-card';
+
   return (
-    <>
+    <div className="cal-page">
       {pageError && <div className="alert">{pageError}</div>}
       {info && <div className="notice">{info}</div>}
 
@@ -353,7 +359,7 @@ export function CalendarPage({ members, currentMemberId, equipment, onRecordUsag
         </div>
       ))}
 
-      <div className="card">
+      <div className={cardClass}>
         <div className="view-toggle" role="group" aria-label="Vue du calendrier">
           <button type="button" className={view === 'month' ? 'active' : ''} onClick={() => setView('month')}>
             Mois
@@ -606,6 +612,6 @@ export function CalendarPage({ members, currentMemberId, equipment, onRecordUsag
       )}
 
       <Fab label="Réserver un créneau" onClick={openCreate} />
-    </>
+    </div>
   );
 }
