@@ -31,6 +31,12 @@ function renderPage() {
   return render(<CalendarPage members={members} currentMemberId="m1" onRecordUsage={vi.fn()} />);
 }
 
+/** Le formulaire vit en modale : rien n'est saisissable tant qu'elle n'est pas ouverte. */
+async function openForm(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('button', { name: 'Réserver un créneau' }));
+  await screen.findByRole('button', { name: 'Réserver' });
+}
+
 /** Renseigne le créneau du formulaire (champs date/heure natifs). */
 function fillSlot(slot: { startDate: string; startTime: string; endDate: string; endTime: string }) {
   fireEvent.change(screen.getByLabelText('Date de début'), { target: { value: slot.startDate } });
@@ -43,7 +49,7 @@ describe('formulaire de réservation', () => {
   it("réserve le créneau saisi sur l'équipement choisi", async () => {
     const user = userEvent.setup();
     renderPage();
-    await screen.findByRole('button', { name: 'Réserver' });
+    await openForm(user);
 
     fillSlot({ startDate: '2026-03-02', startTime: '08:00', endDate: '2026-03-02', endTime: '12:00' });
     await user.click(screen.getByRole('button', { name: 'Réserver' }));
@@ -61,8 +67,10 @@ describe('formulaire de réservation', () => {
   });
 
   it('ne propose que les équipements de mon cercle', async () => {
+    const user = userEvent.setup();
     renderPage();
-    const select = await screen.findByLabelText('Équipement');
+    await openForm(user);
+    const select = screen.getByLabelText('Équipement');
 
     expect([...(select as HTMLSelectElement).options].map((o) => o.textContent)).toEqual(['Tracteur']);
   });
@@ -70,7 +78,7 @@ describe('formulaire de réservation', () => {
   it('refuse un créneau dont la fin précède le début', async () => {
     const user = userEvent.setup();
     renderPage();
-    await screen.findByRole('button', { name: 'Réserver' });
+    await openForm(user);
 
     fillSlot({ startDate: '2026-03-02', startTime: '12:00', endDate: '2026-03-02', endTime: '08:00' });
     await user.click(screen.getByRole('button', { name: 'Réserver' }));
@@ -93,7 +101,7 @@ describe('formulaire de réservation', () => {
       }),
     ]);
     renderPage();
-    await screen.findByRole('button', { name: 'Réserver' });
+    await openForm(user);
 
     fillSlot({ startDate: '2026-03-02', startTime: '09:00', endDate: '2026-03-02', endTime: '11:00' });
 
@@ -104,17 +112,73 @@ describe('formulaire de réservation', () => {
     expect(screen.getByLabelText('Heure de fin')).toHaveProperty('value', '14:00');
   });
 
-  it('pré-remplit la date en cliquant sur un jour du calendrier', async () => {
+  it('referme le formulaire et confirme une fois le créneau réservé', async () => {
     const user = userEvent.setup();
     renderPage();
-    await screen.findByRole('button', { name: 'Réserver' });
+    await openForm(user);
+
+    fillSlot({ startDate: '2026-03-02', startTime: '08:00', endDate: '2026-03-02', endTime: '12:00' });
+    await user.click(screen.getByRole('button', { name: 'Réserver' }));
+
+    expect(await screen.findByText('Réservation enregistrée.')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Réserver' })).toBeNull();
+  });
+
+  it('ouvre le formulaire pré-rempli en cliquant sur un jour du calendrier', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole('button', { name: 'Réserver un créneau' });
     const firstOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     const expected = `${firstOfMonth.getFullYear()}-${String(firstOfMonth.getMonth() + 1).padStart(2, '0')}-01`;
 
     await user.click(document.querySelector(`.cal-cell:not(.outside)`) as HTMLElement);
 
+    await screen.findByRole('button', { name: 'Réserver' });
     expect(screen.getByLabelText('Date de début')).toHaveProperty('value', expected);
     expect(screen.getByLabelText('Date de fin')).toHaveProperty('value', expected);
+  });
+});
+
+describe('ouverture du formulaire', () => {
+  it("reste fermé quand on clique la réservation d'un autre membre", async () => {
+    const user = userEvent.setup();
+    stub.calendar.mockResolvedValue([
+      aReservation({
+        id: 'r1',
+        equipmentId: 'e1',
+        memberId: 'm2',
+        start: new Date(2026, 2, 2, 8).toISOString(),
+        end: new Date(2026, 2, 2, 12).toISOString(),
+      }),
+    ]);
+    renderPage();
+    await screen.findByRole('button', { name: 'Réserver un créneau' });
+
+    await user.click(document.querySelector('.cal-event') as HTMLElement);
+
+    expect(screen.queryByRole('button', { name: 'Réserver' })).toBeNull();
+  });
+
+  it("attend le chargement des équipements avant d'ouvrir la saisie", () => {
+    stub.listEquipments.mockReturnValue(new Promise(() => {}));
+    renderPage();
+
+    expect(screen.getByRole('button', { name: 'Réserver un créneau' })).toHaveProperty('disabled', true);
+  });
+
+  it('part du premier équipement de mon cercle, pas du premier de la liste', async () => {
+    const user = userEvent.setup();
+    stub.listEquipments.mockResolvedValue([
+      anEquipment({ id: 'e1', name: 'Tracteur', memberIds: ['m2'] }),
+      anEquipment({ id: 'e2', name: 'Broyeur', memberIds: ['m1'] }),
+    ]);
+    renderPage();
+    await openForm(user);
+
+    fillSlot({ startDate: '2026-03-02', startTime: '08:00', endDate: '2026-03-02', endTime: '12:00' });
+    await user.click(screen.getByRole('button', { name: 'Réserver' }));
+
+    await waitFor(() => expect(stub.reserve).toHaveBeenCalledWith(expect.objectContaining({ equipmentId: 'e2' })));
   });
 });
 
@@ -138,7 +202,7 @@ describe('mes réservations', () => {
       }),
     ]);
     renderPage();
-    await screen.findByRole('button', { name: 'Réserver' });
+    await screen.findByRole('button', { name: 'Réserver un créneau' });
 
     await user.click(screen.getByRole('button', { name: 'Liste' }));
 

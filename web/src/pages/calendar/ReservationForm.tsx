@@ -69,10 +69,10 @@ interface Props {
   draft: ReservationDraft;
   onChange: (update: (draft: ReservationDraft) => ReservationDraft) => void;
   onSubmit: (event: React.FormEvent) => void;
-  onCancelEdit: () => void;
+  onCancel: () => void;
 }
 
-/** Formulaire de réservation (création, répétition et modification d'un créneau). */
+/** Formulaire de réservation (création, répétition et modification d'un créneau), affiché en modale. */
 export function ReservationForm({
   equipments,
   members,
@@ -81,7 +81,7 @@ export function ReservationForm({
   draft,
   onChange,
   onSubmit,
-  onCancelEdit,
+  onCancel,
 }: Props) {
   const range = useMemo(() => draftRange(draft), [draft]);
 
@@ -102,7 +102,7 @@ export function ReservationForm({
   }
 
   return (
-    <form className="stack" onSubmit={onSubmit}>
+    <form className="modal-form" onSubmit={onSubmit}>
       <div className="row">
         <label className="field">
           Équipement
@@ -233,15 +233,11 @@ export function ReservationForm({
           placeholder="Tranchée jardin, déménagement…"
         />
       </label>
-      <div className="row" style={{ alignItems: 'center' }}>
-        <button className="primary" style={{ flex: '0 0 auto' }}>
-          {editing ? 'Enregistrer les modifications' : 'Réserver'}
+      <div className="modal-actions">
+        <button type="button" className="ghost" onClick={onCancel}>
+          Annuler
         </button>
-        {editing && (
-          <button type="button" className="ghost" style={{ flex: '0 0 auto' }} onClick={onCancelEdit}>
-            Abandonner la modification
-          </button>
-        )}
+        <button className="primary">{editing ? 'Enregistrer les modifications' : 'Réserver'}</button>
       </div>
     </form>
   );

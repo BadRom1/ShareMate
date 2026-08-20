@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import type { Member, Reservation } from '../api';
 import { formatDay, formatTime, formatDateTime } from '../format';
@@ -15,6 +15,8 @@ import {
   weekDays,
 } from './calendar/grid';
 import { EMPTY_DRAFT, REPEAT_LABELS, STATUS_LABELS, ReservationForm, draftRange } from './calendar/ReservationForm';
+import { Modal } from '../components/Modal';
+import { IconPlus } from '../components/icons';
 
 interface Props {
   members: Member[];
@@ -46,6 +48,8 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
   const [equipmentFilter, setEquipmentFilter] = useState('all');
   const [view, setView] = useState<'month' | 'week' | 'list'>('month');
   const [editingId, setEditingId] = useState<string | null>(null);
+  /** Le formulaire vit dans une modale : le calendrier reste ce qu'on voit en arrivant. */
+  const [formOpen, setFormOpen] = useState(false);
   const [dismissed, setDismissed] = useState<string[]>(loadDismissed);
   const [month, setMonth] = useState(() => {
     const now = new Date();
@@ -53,19 +57,30 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
   });
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
 
+  // La confirmation porte sur le geste qu'on vient de faire : dès qu'on navigue ailleurs
+  // dans la grille, elle ne décrit plus ce qu'on a sous les yeux.
+  useEffect(() => {
+    setInfo(null);
+  }, [view, month, weekStart, equipmentFilter]);
+
   const [draft, setDraft] = useState(EMPTY_DRAFT);
 
   const resource = useApiResource(
     useCallback(async () => {
       const [equipments, reservations] = await Promise.all([api.listEquipments(), api.calendar()]);
-      setDraft((d) => (d.equipmentId === '' && equipments.length > 0 ? { ...d, equipmentId: equipments[0].id } : d));
+      // Le brouillon part d'un équipement de mon cercle : ce sont les seuls que le formulaire
+      // propose, et un `select` qui affiche une option tout en en soumettant une autre réserverait
+      // à mon insu sur un matériel auquel je n'ai pas accès.
+      const mine = equipments.find((e) => e.memberIds.includes(currentMemberId));
+      setDraft((d) => (d.equipmentId === '' && mine ? { ...d, equipmentId: mine.id } : d));
       return { equipments, reservations };
-    }, []),
+    }, [currentMemberId]),
   );
 
   const equipments = useMemo(() => resource.data?.equipments ?? [], [resource.data]);
   const reservations = useMemo(() => resource.data?.reservations ?? [], [resource.data]);
-  const error = actionError ?? resource.error;
+  /** Modale ouverte : l'échec de la saisie s'affiche dedans, la page derrière n'est pas lisible. */
+  const pageError = formOpen ? resource.error : (actionError ?? resource.error);
 
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;
@@ -130,9 +145,20 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
     return others.length > 0 ? `En conflit avec : ${others.join(', ')}` : '';
   }
 
-  function resetForm() {
+  function closeForm() {
+    setFormOpen(false);
     setEditingId(null);
+    setActionError(null);
     setDraft((d) => ({ ...EMPTY_DRAFT, equipmentId: d.equipmentId }));
+  }
+
+  /** Nouvelle réservation : la saisie repart vierge, seul l'équipement choisi est conservé. */
+  function openCreate() {
+    setEditingId(null);
+    setInfo(null);
+    setActionError(null);
+    setDraft((d) => ({ ...EMPTY_DRAFT, equipmentId: d.equipmentId }));
+    setFormOpen(true);
   }
 
   function startEdit(r: Reservation) {
@@ -141,6 +167,7 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
     setEditingId(r.id);
     setInfo(null);
     setActionError(null);
+    setFormOpen(true);
     setDraft({
       equipmentId: r.equipmentId,
       startDate: dateKey(start),
@@ -152,7 +179,6 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
       repeat: '',
       until: '',
     });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   async function submit(event: React.FormEvent) {
@@ -180,7 +206,7 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
             ? `Réservation modifiée — attention, elle est en conflit avec ${updated.conflictIds.length} créneau(x).`
             : 'Réservation modifiée.',
         );
-        resetForm();
+        closeForm();
       } else if (draft.repeat) {
         if (!draft.until) {
           setActionError('Indiquez la date de fin de répétition.');
@@ -200,7 +226,7 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
           `${created.length} réservation(s) créée(s) (${REPEAT_LABELS[draft.repeat].toLowerCase()})` +
             (conflicting > 0 ? `, dont ${conflicting} en conflit — voir le calendrier.` : '.'),
         );
-        resetForm();
+        closeForm();
       } else {
         const created = await api.reserve({
           equipmentId: draft.equipmentId,
@@ -209,13 +235,14 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
           status: draft.status,
           notes: draft.notes || undefined,
         });
-        if (created.conflictIds.length > 0) {
-          setInfo(
-            `Réservation enregistrée avec ${created.conflictIds.length} conflit(s). ` +
-              'Les créneaux concernés sont signalés dans le calendrier — voyez ensemble qui est prioritaire.',
-          );
-        }
-        setDraft((d) => ({ ...d, startDate: '', endDate: '', notes: '' }));
+        // La modale se referme : la confirmation s'affiche en tête de page, avec le créneau désormais visible dans la grille.
+        setInfo(
+          created.conflictIds.length > 0
+            ? `Réservation enregistrée avec ${created.conflictIds.length} conflit(s). ` +
+                'Les créneaux concernés sont signalés dans le calendrier — voyez ensemble qui est prioritaire.'
+            : 'Réservation enregistrée.',
+        );
+        closeForm();
       }
       await resource.reload();
     } catch (e) {
@@ -225,8 +252,16 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
 
   async function cancel(r: Reservation) {
     if (!confirm('Annuler cette réservation ?')) return;
-    await api.cancelReservation(r.id);
-    if (editingId === r.id) resetForm();
+    setActionError(null);
+    setInfo(null);
+    try {
+      await api.cancelReservation(r.id);
+    } catch (e) {
+      // Sans cela, un refus du serveur ne laissait que la ligne inchangée, sans explication.
+      setActionError(errorMessage(e));
+      return;
+    }
+    if (editingId === r.id) closeForm();
     await resource.reload();
   }
 
@@ -241,12 +276,11 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
   const days = useMemo(() => weekDays(weekStart), [weekStart]);
   const byDay = useMemo(() => reservationsByStartDay(visible), [visible]);
 
-  /** Jour cliqué dans la grille : pré-remplit le formulaire, sauf en cours de modification. */
+  /** Jour cliqué dans la grille : ouvre la saisie, déjà calée sur ce jour. */
   function pickDay(d: Date) {
-    if (editingId) return;
     const key = dateKey(d);
-    setDraft((f) => ({ ...f, startDate: key, endDate: f.endDate && f.endDate >= key ? f.endDate : key }));
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    openCreate();
+    setDraft((f) => ({ ...f, startDate: key, endDate: key }));
   }
 
   const accessibleEquipments = equipments.filter((e) => e.memberIds.includes(currentMemberId));
@@ -268,14 +302,16 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
   }
 
   function eventClick(r: Reservation, e: React.MouseEvent) {
-    if (r.memberId !== currentMemberId) return;
+    // Le clic s'arrête sur la réservation, même quand elle n'est pas modifiable : sinon il
+    // atteindrait la cellule du jour, qui ouvrirait une saisie que personne n'a demandée.
     e.stopPropagation();
+    if (r.memberId !== currentMemberId) return;
     startEdit(r);
   }
 
   return (
     <>
-      {error && <div className="alert">{error}</div>}
+      {pageError && <div className="alert">{pageError}</div>}
       {info && <div className="notice">{info}</div>}
 
       {myLosingConflicts.length > 0 && (
@@ -300,26 +336,17 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
       ))}
 
       <div className="card">
-        <h3>{editingId ? 'Modifier la réservation' : 'Réserver un créneau'}</h3>
-        {accessibleEquipments.length === 0 ? (
-          <p className="muted">Vous ne faites partie du cercle d'aucun équipement.</p>
-        ) : (
-          <ReservationForm
-            equipments={editingId ? equipments : accessibleEquipments}
-            members={members}
-            siblings={siblings}
-            editing={Boolean(editingId)}
-            draft={draft}
-            onChange={setDraft}
-            onSubmit={submit}
-            onCancelEdit={resetForm}
-          />
-        )}
-      </div>
-
-      <div className="card">
         <div className="row" style={{ alignItems: 'center', marginBottom: '0.75rem' }}>
           <h3 style={{ margin: 0, flex: '0 1 auto' }}>Calendrier partagé</h3>
+          <button
+            type="button"
+            className="primary card-action"
+            onClick={openCreate}
+            disabled={resource.loading}
+            title={resource.loading ? 'Chargement des équipements…' : undefined}
+          >
+            <IconPlus size={16} /> Réserver un créneau
+          </button>
           <div className="view-toggle" style={{ flex: '0 0 auto' }}>
             <button type="button" className={view === 'month' ? 'active' : ''} onClick={() => setView('month')}>
               Mois
@@ -389,7 +416,7 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
                     key={key}
                     className={`cal-cell${outside ? ' outside' : ''}${key === todayKey ? ' today' : ''}`}
                     onClick={() => pickDay(d)}
-                    title="Cliquer pour pré-remplir le formulaire de réservation"
+                    title="Cliquer pour réserver ce jour"
                   >
                     <span className="cal-day-num">{d.getDate()}</span>
                     {events.map((r) => (
@@ -412,8 +439,8 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
               })}
             </div>
             <p className="muted" style={{ marginBottom: 0 }}>
-              Bordure pleine : obligatoire · hachuré : prévisionnel · point rouge : conflit. Cliquez sur un jour pour
-              pré-remplir le formulaire, sur une de vos réservations pour la modifier.
+              Bordure pleine : obligatoire · hachuré : prévisionnel · point rouge : conflit. Cliquez sur un jour pour le
+              réserver, sur une de vos réservations pour la modifier.
             </p>
           </>
         )}
@@ -471,7 +498,7 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
                     <div
                       className={`week-head${key === todayKey ? ' today' : ''}`}
                       onClick={() => pickDay(day)}
-                      title="Cliquer pour pré-remplir le formulaire de réservation"
+                      title="Cliquer pour réserver ce jour"
                     >
                       {day.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric' })}
                     </div>
@@ -552,6 +579,26 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
           </>
         )}
       </div>
+
+      {formOpen && (
+        <Modal title={editingId ? 'Modifier la réservation' : 'Réserver un créneau'} onClose={closeForm}>
+          {actionError && <div className="alert">{actionError}</div>}
+          {!editingId && accessibleEquipments.length === 0 ? (
+            <p className="muted">Vous ne faites partie du cercle d'aucun équipement.</p>
+          ) : (
+            <ReservationForm
+              equipments={editingId ? equipments : accessibleEquipments}
+              members={members}
+              siblings={siblings}
+              editing={Boolean(editingId)}
+              draft={draft}
+              onChange={setDraft}
+              onSubmit={submit}
+              onCancel={closeForm}
+            />
+          )}
+        </Modal>
+      )}
     </>
   );
 }

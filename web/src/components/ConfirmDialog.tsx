@@ -1,5 +1,5 @@
-import { useEffect, useRef, type ReactNode } from 'react';
-import { IconClose } from './icons';
+import { useRef, type ReactNode } from 'react';
+import { Modal } from './Modal';
 
 interface Props {
   title: string;
@@ -19,37 +19,17 @@ interface Props {
 export function ConfirmDialog({ title, children, confirmLabel, busy = false, onConfirm, onCancel }: Props) {
   const cancelRef = useRef<HTMLButtonElement>(null);
 
-  useEffect(() => {
-    cancelRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') onCancel();
-    }
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onCancel]);
-
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal" role="alertdialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <h3 style={{ margin: 0 }}>{title}</h3>
-          <button className="icon-btn" onClick={onCancel} title="Fermer" aria-label="Fermer">
-            <IconClose size={20} />
-          </button>
-        </div>
-        <div className="modal-body">{children}</div>
-        <div className="modal-actions">
-          <button type="button" className="ghost" ref={cancelRef} onClick={onCancel}>
-            Annuler
-          </button>
-          <button type="button" className="danger" onClick={onConfirm} disabled={busy}>
-            {confirmLabel}
-          </button>
-        </div>
+    <Modal title={title} role="alertdialog" initialFocusRef={cancelRef} onClose={onCancel}>
+      <div className="modal-body">{children}</div>
+      <div className="modal-actions">
+        <button type="button" className="ghost" ref={cancelRef} onClick={onCancel}>
+          Annuler
+        </button>
+        <button type="button" className="danger" onClick={onConfirm} disabled={busy}>
+          {confirmLabel}
+        </button>
       </div>
-    </div>
+    </Modal>
   );
 }

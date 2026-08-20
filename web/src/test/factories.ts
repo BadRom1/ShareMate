@@ -140,6 +140,21 @@ export function aDocumentLink(over: Partial<EquipmentDocument> = {}): EquipmentD
   });
 }
 
+export function aUsageRecord(over: Partial<UsageRecord> = {}): UsageRecord {
+  return {
+    id: 'u1',
+    equipmentId: 'e1',
+    memberId: 'm1',
+    recordedAt: '2026-03-02T18:00:00.000Z',
+    meterReading: 120,
+    duration: 4,
+    fuelAddedLiters: null,
+    notes: null,
+    isMaintenance: false,
+    ...over,
+  };
+}
+
 export function aMaintenanceStatus(over: Partial<MaintenanceStatus> = {}): MaintenanceStatus {
   return {
     equipmentId: 'e1',
@@ -188,6 +203,7 @@ export function createApiStub() {
     updateReservation: vi.fn(async () => aReservation()),
     cancelReservation: vi.fn(async (_id: string) => {}),
 
+    recordUsage: vi.fn(async (_input: unknown) => aUsageRecord()),
     alerts: vi.fn(async () => [] as MaintenanceStatus[]),
     maintenanceStatus: vi.fn(async (_equipmentId: string) => aMaintenanceStatus()),
     usageByEquipment: vi.fn(async (_equipmentId: string) => [] as UsageRecord[]),

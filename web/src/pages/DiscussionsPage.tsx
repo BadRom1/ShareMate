@@ -5,6 +5,7 @@ import { formatRelative } from '../format';
 import { pickInitialEquipmentId, setLastEquipmentId } from '../lastEquipment';
 import { clearErrors, errorMessage, firstError, useApiResource } from '../useApiResource';
 import { IconBack, IconChat, IconCheck, IconClose, IconEdit, IconPlus, IconSend, IconTrash } from '../components/icons';
+import { Modal } from '../components/Modal';
 import { MessageTree } from './discussions/MessageTree';
 import { AttachmentDraft, AttachmentField } from './discussions/AttachmentField';
 
@@ -78,16 +79,6 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
   useEffect(() => {
     if (initialThreadId) setOpenThreadId(initialThreadId);
   }, [initialThreadId]);
-
-  // Échap ferme la modale de création.
-  useEffect(() => {
-    if (!showNewThread) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setShowNewThread(false);
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [showNewThread]);
 
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;
@@ -319,46 +310,38 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
       </div>
 
       {showNewThread && inCircle && (
-        <div className="modal-backdrop" onClick={() => setShowNewThread(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <h3 style={{ margin: 0 }}>Nouveau fil de discussion</h3>
-              <button className="icon-btn" onClick={() => setShowNewThread(false)} title="Fermer">
-                <IconClose size={20} />
+        <Modal title="Nouveau fil de discussion" onClose={() => setShowNewThread(false)}>
+          <form onSubmit={createThread} className="modal-form">
+            <label className="field">
+              Titre
+              <input
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                placeholder="ex. Panne moteur"
+                maxLength={200}
+                autoFocus
+              />
+            </label>
+            <label className="field">
+              Premier message <span className="muted">(optionnel)</span>
+              <textarea
+                value={newBody}
+                onChange={(e) => setNewBody(e.target.value)}
+                placeholder="Décrivez le sujet…"
+                rows={4}
+                maxLength={4000}
+              />
+            </label>
+            <div className="modal-actions">
+              <button type="button" className="ghost" onClick={() => setShowNewThread(false)}>
+                Annuler
+              </button>
+              <button type="submit" className="btn-primary" disabled={busy || !newTitle.trim()}>
+                <IconCheck size={18} /> Créer le fil
               </button>
             </div>
-            <form onSubmit={createThread} className="modal-form">
-              <label className="field">
-                Titre
-                <input
-                  value={newTitle}
-                  onChange={(e) => setNewTitle(e.target.value)}
-                  placeholder="ex. Panne moteur"
-                  maxLength={200}
-                  autoFocus
-                />
-              </label>
-              <label className="field">
-                Premier message <span className="muted">(optionnel)</span>
-                <textarea
-                  value={newBody}
-                  onChange={(e) => setNewBody(e.target.value)}
-                  placeholder="Décrivez le sujet…"
-                  rows={4}
-                  maxLength={4000}
-                />
-              </label>
-              <div className="modal-actions">
-                <button type="button" className="ghost" onClick={() => setShowNewThread(false)}>
-                  Annuler
-                </button>
-                <button type="submit" className="btn-primary" disabled={busy || !newTitle.trim()}>
-                  <IconCheck size={18} /> Créer le fil
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+          </form>
+        </Modal>
       )}
     </>
   );

@@ -180,6 +180,15 @@ button.primary:disabled {
   cursor: default;
 }
 
+/* Bouton d'action posé dans l'en-tête d'une carte : ouvre la saisie sans pousser la liste vers le bas. */
+button.card-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  align-self: center;
+}
+
 button.ghost {
   background: none;
   border: 1px solid var(--border);
@@ -1015,6 +1024,18 @@ th {
   border-radius: 8px;
   width: 100%;
   resize: vertical;
+}
+
+/* Une case à cocher garde sa taille de case : la règle ci-dessus vise les champs de saisie. */
+.modal-form input[type='checkbox'] {
+  width: auto;
+  padding: 0;
+  border: 0;
+}
+
+/* Le focus programmatique sur la boîte ouvre le dialogue au clavier, sans le cerner d'un liseré. */
+.modal:focus {
+  outline: none;
 }
 
 .modal-body {

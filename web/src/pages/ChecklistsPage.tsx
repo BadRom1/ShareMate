@@ -16,6 +16,7 @@ import {
   IconSquare,
   IconTrash,
 } from '../components/icons';
+import { Modal } from '../components/Modal';
 
 interface Props {
   members: Member[];
@@ -95,16 +96,6 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
   useEffect(() => {
     if (selectedId) setLastEquipmentId(selectedId);
   }, [selectedId]);
-
-  // Échap ferme la modale de création.
-  useEffect(() => {
-    if (!showNew) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setShowNew(false);
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [showNew]);
 
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;
@@ -335,45 +326,37 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
       </div>
 
       {showNew && (
-        <div className="modal-backdrop" onClick={() => setShowNew(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <h3 style={{ margin: 0 }}>Nouvelle checklist</h3>
-              <button className="icon-btn" onClick={() => setShowNew(false)} title="Fermer">
-                <IconClose size={20} />
+        <Modal title="Nouvelle checklist" onClose={() => setShowNew(false)}>
+          <form onSubmit={createChecklist} className="modal-form">
+            <label className="field">
+              Titre
+              <input
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                placeholder="ex. Avant utilisation"
+                maxLength={200}
+                autoFocus
+              />
+            </label>
+            <label className="field">
+              Points de contrôle <span className="muted">(un par ligne, optionnel)</span>
+              <textarea
+                value={newItems}
+                onChange={(e) => setNewItems(e.target.value)}
+                placeholder={'Niveau d’huile\nGasoil\nÉtat des chenilles'}
+                rows={6}
+              />
+            </label>
+            <div className="modal-actions">
+              <button type="button" className="ghost" onClick={() => setShowNew(false)}>
+                Annuler
+              </button>
+              <button type="submit" className="btn-primary" disabled={busy || !newTitle.trim()}>
+                <IconCheck size={18} /> Créer la checklist
               </button>
             </div>
-            <form onSubmit={createChecklist} className="modal-form">
-              <label className="field">
-                Titre
-                <input
-                  value={newTitle}
-                  onChange={(e) => setNewTitle(e.target.value)}
-                  placeholder="ex. Avant utilisation"
-                  maxLength={200}
-                  autoFocus
-                />
-              </label>
-              <label className="field">
-                Points de contrôle <span className="muted">(un par ligne, optionnel)</span>
-                <textarea
-                  value={newItems}
-                  onChange={(e) => setNewItems(e.target.value)}
-                  placeholder={'Niveau d’huile\nGasoil\nÉtat des chenilles'}
-                  rows={6}
-                />
-              </label>
-              <div className="modal-actions">
-                <button type="button" className="ghost" onClick={() => setShowNew(false)}>
-                  Annuler
-                </button>
-                <button type="submit" className="btn-primary" disabled={busy || !newTitle.trim()}>
-                  <IconCheck size={18} /> Créer la checklist
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+          </form>
+        </Modal>
       )}
     </>
   );

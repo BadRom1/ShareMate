@@ -15,6 +15,7 @@ import {
   IconTrash,
   IconUpload,
 } from '../components/icons';
+import { Modal } from '../components/Modal';
 
 interface Props {
   members: Member[];
@@ -112,16 +113,6 @@ export function DocumentsPage({ members, currentMemberId, initialEquipmentId }: 
   useEffect(() => {
     if (selectedId) setLastEquipmentId(selectedId);
   }, [selectedId]);
-
-  // Échap ferme la modale d'ajout.
-  useEffect(() => {
-    if (!draft) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeDraft();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [draft]);
 
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;
@@ -381,112 +372,104 @@ export function DocumentsPage({ members, currentMemberId, initialEquipmentId }: 
       </div>
 
       {draft && (
-        <div className="modal-backdrop" onClick={closeDraft}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <h3 style={{ margin: 0 }}>{draft === 'file' ? 'Déposer un fichier' : 'Ajouter un lien'}</h3>
-              <button className="icon-btn" onClick={closeDraft} title="Fermer" aria-label="Fermer">
-                <IconClose size={20} />
+        <Modal title={draft === 'file' ? 'Déposer un fichier' : 'Ajouter un lien'} onClose={closeDraft}>
+          <form onSubmit={submitDraft} className="modal-form">
+            <div className="nature">
+              <button
+                type="button"
+                className={draft === 'file' ? 'active' : ''}
+                onClick={() => setDraft('file')}
+                aria-pressed={draft === 'file'}
+              >
+                <IconFile size={16} /> Fichier
+              </button>
+              <button
+                type="button"
+                className={draft === 'link' ? 'active' : ''}
+                onClick={() => setDraft('link')}
+                aria-pressed={draft === 'link'}
+              >
+                <IconLink size={16} /> Lien
               </button>
             </div>
-            <form onSubmit={submitDraft} className="modal-form">
-              <div className="nature">
-                <button
-                  type="button"
-                  className={draft === 'file' ? 'active' : ''}
-                  onClick={() => setDraft('file')}
-                  aria-pressed={draft === 'file'}
-                >
-                  <IconFile size={16} /> Fichier
-                </button>
-                <button
-                  type="button"
-                  className={draft === 'link' ? 'active' : ''}
-                  onClick={() => setDraft('link')}
-                  aria-pressed={draft === 'link'}
-                >
-                  <IconLink size={16} /> Lien
-                </button>
-              </div>
 
-              {draft === 'file' ? (
-                // Le champ est lui-même la zone de dépôt : un bouton qui le déclencherait ferait
-                // deux contrôles pour un geste, et `hidden` le sortirait du parcours clavier.
-                <label className={`dropzone ${newFile ? 'filled' : ''}`}>
-                  <input
-                    type="file"
-                    className="visually-hidden"
-                    aria-label="Fichier à déposer"
-                    onChange={(e) => {
-                      chooseFile(e.target.files?.[0] ?? null);
-                      e.target.value = '';
-                    }}
-                  />
-                  {newFile ? (
-                    <>
-                      <IconFile size={22} />
-                      <span>
-                        <span className="doc-name">{newFile.name}</span>
-                        <span className="doc-sub">{formatBytes(newFile.size)} — cliquez pour changer</span>
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <IconUpload size={24} />
-                      <span>Choisissez un fichier</span>
-                      <span className="muted">PDF, image, document bureautique ou texte — 25 Mo maximum</span>
-                    </>
-                  )}
-                </label>
-              ) : (
-                <label className="field">
-                  Adresse
-                  <input
-                    value={newUrl}
-                    onChange={(e) => setNewUrl(e.target.value)}
-                    placeholder="https://…"
-                    maxLength={2000}
-                    autoFocus
-                  />
-                </label>
-              )}
-
-              <label className="field">
-                Nom affiché {draft === 'file' && <span className="muted">(le nom du fichier par défaut)</span>}
+            {draft === 'file' ? (
+              // Le champ est lui-même la zone de dépôt : un bouton qui le déclencherait ferait
+              // deux contrôles pour un geste, et `hidden` le sortirait du parcours clavier.
+              <label className={`dropzone ${newFile ? 'filled' : ''}`}>
                 <input
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="ex. Manuel d’utilisation"
-                  maxLength={200}
+                  type="file"
+                  className="visually-hidden"
+                  aria-label="Fichier à déposer"
+                  onChange={(e) => {
+                    chooseFile(e.target.files?.[0] ?? null);
+                    e.target.value = '';
+                  }}
+                />
+                {newFile ? (
+                  <>
+                    <IconFile size={22} />
+                    <span>
+                      <span className="doc-name">{newFile.name}</span>
+                      <span className="doc-sub">{formatBytes(newFile.size)} — cliquez pour changer</span>
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <IconUpload size={24} />
+                    <span>Choisissez un fichier</span>
+                    <span className="muted">PDF, image, document bureautique ou texte — 25 Mo maximum</span>
+                  </>
+                )}
+              </label>
+            ) : (
+              <label className="field">
+                Adresse
+                <input
+                  value={newUrl}
+                  onChange={(e) => setNewUrl(e.target.value)}
+                  placeholder="https://…"
+                  maxLength={2000}
+                  autoFocus
                 />
               </label>
+            )}
 
-              <label className="field">
-                Catégorie
-                <select value={newCategory} onChange={(e) => setNewCategory(e.target.value as DocumentCategory)}>
-                  {DOCUMENT_CATEGORIES.map((c) => (
-                    <option key={c} value={c}>
-                      {DOCUMENT_CATEGORY_LABELS[c]}
-                    </option>
-                  ))}
-                </select>
-              </label>
+            <label className="field">
+              Nom affiché {draft === 'file' && <span className="muted">(le nom du fichier par défaut)</span>}
+              <input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="ex. Manuel d’utilisation"
+                maxLength={200}
+              />
+            </label>
 
-              <div className="modal-actions">
-                <button type="button" className="ghost" onClick={closeDraft}>
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  className="btn-primary"
-                  disabled={busy || (draft === 'file' ? !newFile : newUrl.trim().length === 0)}
-                >
-                  <IconCheck size={18} /> {busy ? 'Envoi…' : 'Ajouter au dossier'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+            <label className="field">
+              Catégorie
+              <select value={newCategory} onChange={(e) => setNewCategory(e.target.value as DocumentCategory)}>
+                {DOCUMENT_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {DOCUMENT_CATEGORY_LABELS[c]}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="modal-actions">
+              <button type="button" className="ghost" onClick={closeDraft}>
+                Annuler
+              </button>
+              <button
+                type="submit"
+                className="btn-primary"
+                disabled={busy || (draft === 'file' ? !newFile : newUrl.trim().length === 0)}
+              >
+                <IconCheck size={18} /> {busy ? 'Envoi…' : 'Ajouter au dossier'}
+              </button>
+            </div>
+          </form>
+        </Modal>
       )}
     </>
   );
