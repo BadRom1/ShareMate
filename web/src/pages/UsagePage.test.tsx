@@ -16,26 +16,29 @@ vi.mock('../api', async (importOriginal) => {
 let stub: ApiStub;
 
 const members = [aMember({ id: 'm1', name: 'Alice' }), aMember({ id: 'm2', name: 'Bob' })];
+const tracteur = anEquipment({ id: 'e1', name: 'Tracteur', memberIds: ['m1', 'm2'] });
+const broyeur = anEquipment({ id: 'e2', name: 'Broyeur', memberIds: ['m1'] });
 
 beforeEach(() => {
   localStorage.clear();
   stub = createApiStub();
   for (const key of Object.keys(mocks.api)) delete mocks.api[key];
   Object.assign(mocks.api, stub);
-  stub.listEquipments.mockResolvedValue([
-    anEquipment({ id: 'e1', name: 'Tracteur', memberIds: ['m1', 'm2'] }),
-    anEquipment({ id: 'e2', name: 'Broyeur', memberIds: ['m1'] }),
-  ]);
   stub.maintenanceStatus.mockResolvedValue(aMaintenanceStatus({ currentReading: 100 }));
 });
 
-function renderPage() {
-  return render(<UsagePage members={members} currentMemberId="m1" />);
+function renderPage(equipment = tracteur) {
+  return render(<UsagePage members={members} currentMemberId="m1" equipment={equipment} />);
 }
 
-/** La saisie vit en modale : rien n'est renseignable tant qu'elle n'est pas ouverte. */
+/**
+ * La saisie vit en modale : rien n'est renseignable tant qu'elle n'est pas ouverte, et le seul
+ * déclencheur est le bouton flottant — un bouton ordinaire remis dans le flux ferait échouer ici.
+ */
 async function openForm(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByRole('button', { name: 'Saisir un relevé' }));
+  const fab = await screen.findByRole('button', { name: 'Saisir un relevé' });
+  expect(fab.classList.contains('fab')).toBe(true);
+  await user.click(fab);
   await screen.findByRole('button', { name: 'Enregistrer le relevé' });
 }
 
@@ -48,14 +51,29 @@ describe('historique', () => {
     expect(screen.queryByRole('button', { name: 'Enregistrer le relevé' })).toBeNull();
   });
 
-  it("recharge l'historique de l'équipement choisi dans l'en-tête", async () => {
-    const user = userEvent.setup();
-    renderPage();
+  it("recharge l'historique quand l'équipement de l'espace change", async () => {
+    const { rerender } = renderPage();
     await waitFor(() => expect(stub.usageByEquipment).toHaveBeenCalledWith('e1'));
 
-    await user.selectOptions(screen.getByLabelText('Équipement affiché'), 'e2');
+    rerender(<UsagePage members={members} currentMemberId="m1" equipment={broyeur} />);
 
     await waitFor(() => expect(stub.usageByEquipment).toHaveBeenCalledWith('e2'));
+    expect(stub.maintenanceStatus).toHaveBeenCalledWith('e2');
+  });
+
+  it("ne garde que les relevés de l'équipement courant dans la vue par membre", async () => {
+    const user = userEvent.setup();
+    stub.usageByMember.mockResolvedValue([
+      aUsageRecord({ id: 'u1', equipmentId: 'e1', meterReading: 120 }),
+      aUsageRecord({ id: 'u2', equipmentId: 'e2', meterReading: 340 }),
+    ]);
+    renderPage();
+    await screen.findByRole('button', { name: 'Saisir un relevé' });
+
+    await user.click(screen.getByLabelText('Mes relevés uniquement'));
+
+    expect(await screen.findByText('120')).toBeDefined();
+    expect(screen.queryByText('340')).toBeNull();
   });
 });
 
@@ -75,28 +93,16 @@ describe('saisie du relevé', () => {
     expect(screen.queryByRole('button', { name: 'Enregistrer le relevé' })).toBeNull();
   });
 
-  it("rend l'historique à l'équipement d'origine quand on annule", async () => {
+  it("retire la confirmation dès qu'on change d'équipement", async () => {
     const user = userEvent.setup();
-    renderPage();
-    await waitFor(() => expect(stub.usageByEquipment).toHaveBeenCalledWith('e1'));
-    await openForm(user);
-
-    await user.selectOptions(screen.getByLabelText('Équipement'), 'e2');
-    await user.click(screen.getByRole('button', { name: 'Annuler' }));
-
-    expect(screen.getByLabelText('Équipement affiché')).toHaveProperty('value', 'e1');
-  });
-
-  it("retire la confirmation dès qu'on regarde un autre historique", async () => {
-    const user = userEvent.setup();
-    renderPage();
+    const { rerender } = renderPage();
     await openForm(user);
 
     await user.type(screen.getByLabelText(/Durée d'utilisation/), '5');
     await user.click(screen.getByRole('button', { name: 'Enregistrer le relevé' }));
     expect(await screen.findByText('Relevé enregistré.')).toBeDefined();
 
-    await user.selectOptions(screen.getByLabelText('Équipement affiché'), 'e2');
+    rerender(<UsagePage members={members} currentMemberId="m1" equipment={broyeur} />);
 
     expect(screen.queryByText('Relevé enregistré.')).toBeNull();
   });

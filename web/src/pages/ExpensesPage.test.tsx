@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type * as ApiModule from '../api';
 import { ExpensesPage } from './ExpensesPage';
@@ -17,21 +17,24 @@ vi.mock('../api', async (importOriginal) => {
 let stub: ApiStub;
 
 const members = [aMember({ id: 'm1', name: 'Alice' }), aMember({ id: 'm2', name: 'Bob' })];
+const tracteur = anEquipment({ id: 'e1', name: 'Tracteur', memberIds: ['m1', 'm2'] });
+const broyeur = anEquipment({ id: 'e2', name: 'Broyeur', memberIds: ['m1'] });
 
 beforeEach(() => {
   stub = createApiStub();
   for (const key of Object.keys(mocks.api)) delete mocks.api[key];
   Object.assign(mocks.api, stub);
-  stub.listEquipments.mockResolvedValue([anEquipment({ id: 'e1', name: 'Tracteur', memberIds: ['m1', 'm2'] })]);
 });
 
-function renderPage() {
-  return render(<ExpensesPage members={members} currentMemberId="m1" />);
+function renderPage(equipment = tracteur) {
+  return render(<ExpensesPage members={members} currentMemberId="m1" equipment={equipment} />);
 }
 
-/** Ouvre le formulaire de dépense une fois l'équipement chargé. */
+/** Ouvre le formulaire de dépense une fois les comptes chargés, par le bouton flottant. */
 async function openForm(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByRole('button', { name: '+ Ajouter une dépense' }));
+  const fab = await screen.findByRole('button', { name: 'Ajouter une dépense' });
+  expect(fab.classList.contains('fab')).toBe(true);
+  await user.click(fab);
 }
 
 describe('formulaire de dépense', () => {
@@ -131,9 +134,37 @@ describe('formulaire de dépense', () => {
     // Le formulaire reste ouvert : la saisie ne doit pas être perdue.
     expect(screen.getByLabelText('Libellé')).toHaveProperty('value', 'Gazole');
   });
+
+  it("s'ouvre en modale depuis le bouton flottant, et l'annulation n'enregistre rien", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openForm(user);
+
+    const modale = screen.getByRole('dialog', { name: 'Nouvelle dépense — Tracteur' });
+    expect(within(modale).getByLabelText('Libellé')).toBeDefined();
+
+    await user.type(within(modale).getByLabelText('Libellé'), 'Plein abandonné');
+    await user.click(within(modale).getByRole('button', { name: 'Annuler' }));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByLabelText('Libellé')).toBeNull();
+    expect(stub.addExpense).not.toHaveBeenCalled();
+  });
 });
 
 describe('affichage des parts et des soldes', () => {
+  it('recharge les comptes quand l’équipement de l’espace change', async () => {
+    const { rerender } = renderPage();
+    await waitFor(() => expect(stub.listExpenses).toHaveBeenCalledWith('e1'));
+
+    rerender(<ExpensesPage members={members} currentMemberId="m1" equipment={broyeur} />);
+
+    await waitFor(() => expect(stub.listExpenses).toHaveBeenCalledWith('e2'));
+    expect(stub.balances).toHaveBeenCalledWith('e2');
+    expect(stub.settlement).toHaveBeenCalledWith('e2');
+    expect(stub.listReimbursements).toHaveBeenCalledWith('e2');
+  });
+
   it('détaille la part de chaque membre sur la ligne de dépense', async () => {
     stub.listExpenses.mockResolvedValue([anExpense({ label: 'Plein de gazole', sharesEuros: { m1: 45, m2: 45 } })]);
     renderPage();

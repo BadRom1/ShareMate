@@ -16,6 +16,12 @@ vi.mock('../api', async (importOriginal) => {
 let stub: ApiStub;
 
 const members = [aMember({ id: 'm1', name: 'Alice' }), aMember({ id: 'm2', name: 'Bob' })];
+const tracteur = anEquipment({ id: 'e1', name: 'Tracteur', memberIds: ['m1', 'm2'] });
+const broyeur = anEquipment({ id: 'e2', name: 'Broyeur', memberIds: ['m1', 'm2'] });
+
+function renderPage(equipment = tracteur) {
+  return render(<DocumentsPage members={members} currentMemberId="m1" equipment={equipment} />);
+}
 
 /** Ligne d'un document, repérée par son nom affiché. */
 function ligne(nom: string): HTMLElement {
@@ -35,10 +41,6 @@ beforeEach(() => {
   for (const key of Object.keys(mocks.api)) delete mocks.api[key];
   Object.assign(mocks.api, stub);
   window.localStorage.clear();
-  stub.listEquipments.mockResolvedValue([
-    anEquipment({ id: 'e1', name: 'Tracteur', memberIds: ['m1', 'm2'] }),
-    anEquipment({ id: 'e2', name: 'Broyeur', memberIds: ['m1', 'm2'] }),
-  ]);
   stub.listDocuments.mockResolvedValue([
     aDocument({ id: 'd1', name: 'Manuel d’utilisation', category: 'MANUAL', authorId: 'm2' }),
     aDocumentLink({ id: 'd2', name: 'Catalogue de pièces', category: 'OTHER' }),
@@ -47,7 +49,7 @@ beforeEach(() => {
 
 describe('liste du dossier', () => {
   it('affiche fichiers et liens dans la même liste, chacun avec ce qui le décrit', async () => {
-    render(<DocumentsPage members={members} currentMemberId="m1" />);
+    renderPage();
     await screen.findByText('Manuel d’utilisation');
 
     expect(sousTitre('Manuel d’utilisation')).toBe('Manuel · 4,2 Mo · Bob, 1 mars 2026');
@@ -58,7 +60,7 @@ describe('liste du dossier', () => {
   // Le contenu d'un fichier est servi par une redirection vers le stockage d'objets : suivre ce
   // lien par `fetch` échouerait sous `connect-src 'self'`, c'est donc bien un lien du navigateur.
   it('ouvre un fichier par l’API et un lien chez son hébergeur', async () => {
-    render(<DocumentsPage members={members} currentMemberId="m1" />);
+    renderPage();
     await screen.findByText('Manuel d’utilisation');
 
     const fichier = within(ligne('Manuel d’utilisation')).getByRole('link');
@@ -71,7 +73,7 @@ describe('liste du dossier', () => {
 
   it('filtre par catégorie, et la recherche porte sur le nom comme sur le fichier', async () => {
     const user = userEvent.setup();
-    render(<DocumentsPage members={members} currentMemberId="m1" />);
+    renderPage();
     await screen.findByText('Manuel d’utilisation');
 
     await user.click(screen.getByRole('button', { name: /^Manuel 1$/ }));
@@ -85,12 +87,12 @@ describe('liste du dossier', () => {
 
   it('recharge le dossier au changement d’équipement, filtre remis à zéro', async () => {
     const user = userEvent.setup();
-    render(<DocumentsPage members={members} currentMemberId="m1" />);
+    const { rerender } = renderPage();
     await screen.findByText('Manuel d’utilisation');
     await user.click(screen.getByRole('button', { name: /^Manuel 1$/ }));
 
     stub.listDocuments.mockResolvedValue([]);
-    await user.selectOptions(screen.getByLabelText('Équipement'), 'e2');
+    rerender(<DocumentsPage members={members} currentMemberId="m1" equipment={broyeur} />);
 
     expect(await screen.findByText(/Dossier vide/)).toBeTruthy();
     expect(stub.listDocuments).toHaveBeenCalledWith('e2');
@@ -98,12 +100,37 @@ describe('liste du dossier', () => {
 });
 
 describe('ajout', () => {
-  it('dépose un fichier avec sa catégorie, en proposant le nom du fichier', async () => {
-    const user = userEvent.setup();
-    render(<DocumentsPage members={members} currentMemberId="m1" />);
+  it('confie tout ajout au seul bouton flottant, fichier comme lien', async () => {
+    renderPage();
     await screen.findByText('Manuel d’utilisation');
 
-    await user.click(screen.getByRole('button', { name: /Déposer un fichier/ }));
+    const declencheurs = screen.getAllByRole('button', { name: /Ajouter un document/ });
+    expect(declencheurs).toHaveLength(1);
+    expect(declencheurs[0].classList.contains('fab')).toBe(true);
+    // Un seul chemin d'ajout : plus de bouton concurrent dans le flux de la page.
+    expect(screen.queryByRole('button', { name: /Ajouter un lien/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Déposer un fichier/ })).toBeNull();
+  });
+
+  it('ouvre une modale qui laisse choisir la nature, sans en imposer une', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Manuel d’utilisation');
+
+    await user.click(screen.getByRole('button', { name: /Ajouter un document/ }));
+
+    // Le titre n'annonce aucune nature, et les deux sont offertes en tête de boîte.
+    const modale = screen.getByRole('dialog', { name: 'Ajouter un document' });
+    expect(within(modale).getByRole('button', { name: /^Fichier$/ })).toBeTruthy();
+    expect(within(modale).getByRole('button', { name: /^Lien$/ })).toBeTruthy();
+  });
+
+  it('dépose un fichier avec sa catégorie, en proposant le nom du fichier', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Manuel d’utilisation');
+
+    await user.click(screen.getByRole('button', { name: /Ajouter un document/ }));
     const fichier = new File(['%PDF-1.4'], 'notice-kx027.pdf', { type: 'application/pdf' });
     await user.upload(screen.getByLabelText('Fichier à déposer'), fichier);
 
@@ -126,12 +153,13 @@ describe('ajout', () => {
     await waitFor(() => expect(stub.listDocuments).toHaveBeenCalledTimes(2));
   });
 
-  it('ajoute un lien, et bascule entre les deux natures sans fermer la modale', async () => {
+  it('ajoute un lien de bout en bout depuis le bouton flottant, sans fermer la modale', async () => {
     const user = userEvent.setup();
-    render(<DocumentsPage members={members} currentMemberId="m1" />);
+    renderPage();
     await screen.findByText('Manuel d’utilisation');
 
-    await user.click(screen.getByRole('button', { name: /Déposer un fichier/ }));
+    // Le seul déclencheur de la page mène aussi au lien : bascule de nature, puis envoi.
+    await user.click(screen.getByRole('button', { name: /Ajouter un document/ }));
     await user.click(screen.getByRole('button', { name: /^Lien$/ }));
 
     await user.type(screen.getByPlaceholderText('https://…'), 'https://exemple.fr/tuto');
@@ -145,15 +173,19 @@ describe('ajout', () => {
         category: 'MANUAL',
       }),
     );
+    // La modale se referme et le dossier est rechargé : l'ajout est allé jusqu'au bout.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(stub.listDocuments).toHaveBeenCalledTimes(2));
   });
 
   it('affiche le refus du serveur sans fermer la modale', async () => {
     const user = userEvent.setup();
     stub.addDocumentLink.mockRejectedValue(new Error('Un lien doit commencer par http:// ou https://.'));
-    render(<DocumentsPage members={members} currentMemberId="m1" />);
+    renderPage();
     await screen.findByText('Manuel d’utilisation');
 
-    await user.click(screen.getByRole('button', { name: /Ajouter un lien/ }));
+    await user.click(screen.getByRole('button', { name: /Ajouter un document/ }));
+    await user.click(screen.getByRole('button', { name: /^Lien$/ }));
     await user.type(screen.getByPlaceholderText('https://…'), 'javascript:alert(1)');
     await user.click(screen.getByRole('button', { name: /Ajouter au dossier/ }));
 
@@ -166,7 +198,7 @@ describe('renommage et suppression', () => {
   // Le dossier appartient au cercle : Alice reclasse un document déposé par Bob.
   it('renomme et reclasse un document déposé par quelqu’un d’autre', async () => {
     const user = userEvent.setup();
-    render(<DocumentsPage members={members} currentMemberId="m1" />);
+    renderPage();
     await screen.findByText('Manuel d’utilisation');
 
     await user.click(screen.getByRole('button', { name: 'Renommer Manuel d’utilisation' }));
@@ -184,7 +216,7 @@ describe('renommage et suppression', () => {
   it('demande confirmation avant de supprimer, et respecte le refus', async () => {
     const user = userEvent.setup();
     const confirmer = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    render(<DocumentsPage members={members} currentMemberId="m1" />);
+    renderPage();
     await screen.findByText('Manuel d’utilisation');
 
     await user.click(screen.getByRole('button', { name: 'Supprimer Manuel d’utilisation' }));
@@ -195,13 +227,5 @@ describe('renommage et suppression', () => {
     await user.click(screen.getByRole('button', { name: 'Supprimer Manuel d’utilisation' }));
     await waitFor(() => expect(stub.deleteDocument).toHaveBeenCalledWith('d1'));
     confirmer.mockRestore();
-  });
-});
-
-describe('sans équipement partagé', () => {
-  it('explique que le dossier suit un équipement', async () => {
-    stub.listEquipments.mockResolvedValue([]);
-    render(<DocumentsPage members={members} currentMemberId="m1" />);
-    expect(await screen.findByText(/Aucun équipement partagé avec vous/)).toBeTruthy();
   });
 });

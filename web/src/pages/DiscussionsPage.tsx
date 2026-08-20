@@ -1,26 +1,25 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import type { Member } from '../api';
+import type { Equipment, Member } from '../api';
 import { formatRelative } from '../format';
-import { pickInitialEquipmentId, setLastEquipmentId } from '../lastEquipment';
 import { clearErrors, errorMessage, firstError, useApiResource } from '../useApiResource';
-import { IconBack, IconChat, IconCheck, IconClose, IconEdit, IconPlus, IconSend, IconTrash } from '../components/icons';
+import { IconBack, IconChat, IconCheck, IconClose, IconEdit, IconSend, IconTrash } from '../components/icons';
 import { Modal } from '../components/Modal';
+import { Fab } from '../components/Fab';
 import { MessageTree } from './discussions/MessageTree';
 import { AttachmentDraft, AttachmentField } from './discussions/AttachmentField';
 
 interface Props {
   members: Member[];
   currentMemberId: string;
-  /** Équipement présélectionné (arrivée depuis une notification). */
-  initialEquipmentId?: string | null;
+  /** Équipement de l'espace de travail courant, choisi dans la coque de l'application. */
+  equipment: Equipment;
   /** Fil à ouvrir automatiquement (arrivée depuis une notification). */
   initialThreadId?: string | null;
 }
 
-/** Discussions par équipement : liste de fils, puis vue d'un fil avec ses messages. */
-export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, initialThreadId }: Props) {
-  const [selectedId, setSelectedId] = useState('');
+/** Discussions de l'équipement courant : liste de fils, puis vue d'un fil avec ses messages. */
+export function DiscussionsPage({ members, currentMemberId, equipment, initialThreadId }: Props) {
   const [openThreadId, setOpenThreadId] = useState<string | null>(initialThreadId ?? null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -38,41 +37,27 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
   /** Fichier retenu pour le prochain message, tant qu'il n'est pas parti. */
   const [file, setFile] = useState<File | null>(null);
 
-  const equipmentsResource = useApiResource(
-    useCallback(async () => {
-      const list = await api.listEquipments();
-      setSelectedId((id) =>
-        pickInitialEquipmentId(list, currentMemberId, { current: id, deepLink: initialEquipmentId }),
-      );
-      return list;
-    }, [currentMemberId, initialEquipmentId]),
-  );
-
-  const threadsResource = useApiResource(
-    useCallback(async () => (selectedId ? api.listThreads(selectedId) : []), [selectedId]),
-  );
+  const threadsResource = useApiResource(useCallback(() => api.listThreads(equipment.id), [equipment.id]));
 
   const messagesResource = useApiResource(
     useCallback(async () => (openThreadId ? api.listMessages(openThreadId) : []), [openThreadId]),
   );
 
-  const equipments = equipmentsResource.data ?? [];
   const threads = threadsResource.data ?? [];
   const messages = useMemo(() => messagesResource.data ?? [], [messagesResource.data]);
-  const error = actionError ?? firstError(equipmentsResource, threadsResource, messagesResource);
+  const error = actionError ?? firstError(threadsResource, messagesResource);
 
-  const selected = equipments.find((e) => e.id === selectedId) ?? null;
-  const inCircle = selected?.memberIds.includes(currentMemberId) ?? false;
+  const inCircle = equipment.memberIds.includes(currentMemberId);
   const openThread = threads.find((t) => t.id === openThreadId) ?? null;
   const circle = useMemo(
-    () => (selected ? members.filter((m) => selected.memberIds.includes(m.id)) : []),
-    [selected, members],
+    () => members.filter((m) => equipment.memberIds.includes(m.id)),
+    [equipment.memberIds, members],
   );
 
-  // Mémorise l'équipement consulté (partagé avec les autres onglets).
+  // Le fil ouvert appartient à l'équipement quitté : il se referme au changement d'espace.
   useEffect(() => {
-    if (selectedId) setLastEquipmentId(selectedId);
-  }, [selectedId]);
+    setOpenThreadId(null);
+  }, [equipment.id]);
 
   // Fil ciblé par un lien de notification, y compris quand un second lien arrive alors que
   // l'onglet est déjà affiché : l'état initial ne suffit pas, le composant reste monté.
@@ -90,11 +75,11 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
 
   async function createThread(event: React.FormEvent) {
     event.preventDefault();
-    if (!selectedId || !newTitle.trim()) return;
+    if (!newTitle.trim()) return;
     setBusy(true);
     setActionError(null);
     try {
-      const thread = await api.createThread(selectedId, newTitle.trim(), newBody.trim() || undefined);
+      const thread = await api.createThread(equipment.id, newTitle.trim(), newBody.trim() || undefined);
       setNewTitle('');
       setNewBody('');
       setShowNewThread(false);
@@ -184,15 +169,6 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
     }
   }
 
-  if (equipments.length === 0) {
-    return (
-      <>
-        {error && <div className="alert">{error}</div>}
-        <p className="empty">Créez d'abord un équipement : chaque équipement a ses fils de discussion.</p>
-      </>
-    );
-  }
-
   return (
     <>
       {error && (
@@ -200,7 +176,7 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
           className="alert"
           onClick={() => {
             setActionError(null);
-            clearErrors(equipmentsResource, threadsResource, messagesResource);
+            clearErrors(threadsResource, messagesResource);
           }}
         >
           {error}
@@ -208,31 +184,9 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
       )}
 
       <div className="card">
-        <div className="row" style={{ alignItems: 'center' }}>
-          <label className="field" style={{ flex: '0 0 auto', minWidth: '16rem' }}>
-            Équipement
-            <select
-              value={selectedId}
-              onChange={(e) => {
-                // Le fil ouvert appartient à l'équipement quitté : il se referme ici, et non dans
-                // un effet sur `selectedId` qui écraserait aussi le fil ciblé par une notification.
-                setOpenThreadId(null);
-                setSelectedId(e.target.value);
-              }}
-            >
-              {equipments.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {selected && (
-            <p className="muted" style={{ margin: 0 }}>
-              Cercle : {circle.map((m) => m.name).join(', ')}
-            </p>
-          )}
-        </div>
+        <p className="muted" style={{ margin: 0 }}>
+          Cercle : {circle.map((m) => m.name).join(', ')}
+        </p>
       </div>
 
       <div className={`split-layout ${openThread ? 'has-open' : ''}`}>
@@ -261,20 +215,10 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                 }}
-                title={selected?.name}
+                title={equipment.name}
               >
-                {selected ? selected.name : 'Fils'}
+                {equipment.name}
               </h3>
-              {inCircle && (
-                <button
-                  className="icon-btn icon-primary"
-                  onClick={() => setShowNewThread(true)}
-                  title="Nouveau fil"
-                  aria-label="Nouveau fil"
-                >
-                  <IconPlus size={20} />
-                </button>
-              )}
             </div>
 
             {threads.length === 0 ? (
@@ -343,6 +287,12 @@ export function DiscussionsPage({ members, currentMemberId, initialEquipmentId, 
           </form>
         </Modal>
       )}
+
+      {/* Seulement dans la liste : un fil ouvert a sa propre action principale — écrire un message —
+          et le bouton flottant viendrait se poser juste sur celui d'envoi du composeur, en bas à
+          droite lui aussi. Sur mobile la liste latérale est alors masquée, mais on y revient par le
+          bouton retour, qui est de toute façon le geste pour quitter le fil. */}
+      {inCircle && !openThread && <Fab label="Ouvrir un nouveau fil" onClick={() => setShowNewThread(true)} />}
     </>
   );
 

@@ -1,58 +1,51 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, receiptUrl } from '../api';
-import type { Expense, ExpenseCategory, Member, SettlementTransaction, SplitInput } from '../api';
+import type { Equipment, Expense, ExpenseCategory, Member, SettlementTransaction, SplitInput } from '../api';
 import { CATEGORY_LABELS, formatDate, formatEuros } from '../format';
 import { errorMessage, firstError, useApiResource } from '../useApiResource';
+import { Modal } from '../components/Modal';
+import { Fab } from '../components/Fab';
 
 interface Props {
   members: Member[];
   currentMemberId: string;
+  /** Équipement de l'espace de travail courant, choisi dans la coque de l'application. */
+  equipment: Equipment;
 }
 
 type SplitType = 'EQUAL' | 'USAGE_PRORATED' | 'CUSTOM';
 
-/** Dépenses, soldes et remboursements du cercle de l'équipement sélectionné. */
-export function ExpensesPage({ members, currentMemberId }: Props) {
-  const [selectedId, setSelectedId] = useState('');
+/** Dépenses, soldes et remboursements du cercle de l'équipement courant. */
+export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const equipmentsResource = useApiResource(
-    useCallback(async () => {
-      const list = await api.listEquipments();
-      setSelectedId((id) => id || list.find((e) => e.memberIds.includes(currentMemberId))?.id || list[0]?.id || '');
-      return list;
-    }, [currentMemberId]),
-  );
-
-  /** Dépenses, soldes, plan de remboursement et remboursements de l'équipement sélectionné. */
+  /** Dépenses, soldes, plan de remboursement et remboursements de l'équipement courant. */
   const accountsResource = useApiResource(
     useCallback(async () => {
-      if (!selectedId) return { expenses: [], balances: [], settlement: [], reimbursements: [] };
       const [expenses, balances, settlement, reimbursements] = await Promise.all([
-        api.listExpenses(selectedId),
-        api.balances(selectedId),
-        api.settlement(selectedId),
-        api.listReimbursements(selectedId),
+        api.listExpenses(equipment.id),
+        api.balances(equipment.id),
+        api.settlement(equipment.id),
+        api.listReimbursements(equipment.id),
       ]);
       return { expenses, balances, settlement, reimbursements };
-    }, [selectedId]),
+    }, [equipment.id]),
   );
 
-  const equipments = equipmentsResource.data ?? [];
   const expenses = accountsResource.data?.expenses ?? [];
   const balances = accountsResource.data?.balances ?? [];
   const settlement = accountsResource.data?.settlement ?? [];
   const reimbursements = accountsResource.data?.reimbursements ?? [];
-  const error = actionError ?? firstError(equipmentsResource, accountsResource);
+  // L'échec d'un chargement appartient à la page ; l'échec d'un enregistrement appartient à la
+  // modale, qui recouvre la page — un message affiché derrière elle ne serait pas lisible.
+  const pageError = firstError(accountsResource);
 
-  const selected = equipments.find((e) => e.id === selectedId) ?? null;
-
-  /** Membres du cercle de l'équipement sélectionné. */
+  /** Membres du cercle de l'équipement courant. */
   const circle = useMemo(
-    () => (selected ? members.filter((m) => selected.memberIds.includes(m.id)) : []),
-    [selected, members],
+    () => members.filter((m) => equipment.memberIds.includes(m.id)),
+    [equipment.memberIds, members],
   );
 
   const [form, setForm] = useState({
@@ -69,20 +62,26 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
 
   // À chaque changement d'équipement (ou de son cercle), recale le formulaire.
   // Clé primitive : évite de relancer l'effet quand le rechargement recrée des objets identiques.
-  const selectedMemberKey = selected ? selected.memberIds.join(',') : null;
+  const circleKey = equipment.memberIds.join(',');
   useEffect(() => {
-    if (selectedMemberKey === null) return;
-    const memberIds = selectedMemberKey === '' ? [] : selectedMemberKey.split(',');
+    const memberIds = circleKey === '' ? [] : circleKey.split(',');
     setForm((f) => ({
       ...f,
       payerId: memberIds.includes(f.payerId) ? f.payerId : (memberIds[0] ?? ''),
       equalMemberIds: memberIds,
       customAmounts: {},
     }));
-  }, [selectedId, selectedMemberKey]);
+  }, [circleKey]);
 
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;
+  }
+
+  function closeForm() {
+    // Le refus du serveur est attaché à la tentative qu'on abandonne : il ne doit pas
+    // accueillir la prochaine ouverture.
+    setActionError(null);
+    setShowForm(false);
   }
 
   function buildSplit(): SplitInput {
@@ -100,7 +99,6 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!selectedId) return;
     setActionError(null);
     setBusy(true);
     try {
@@ -109,7 +107,7 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
         receiptPath = await api.uploadReceipt(form.receiptFile);
       }
       await api.addExpense({
-        equipmentId: selectedId,
+        equipmentId: equipment.id,
         label: form.label,
         amountEuros: Number(form.amountEuros),
         payerId: form.payerId,
@@ -135,7 +133,6 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
   }
 
   async function markSettled(t: SettlementTransaction) {
-    if (!selectedId) return;
     if (
       !confirm(
         `Confirmer : ${memberName(t.fromMemberId)} a remboursé ${formatEuros(t.amountEuros)} à ${memberName(t.toMemberId)} ?`,
@@ -143,7 +140,7 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
     )
       return;
     await api.recordReimbursement({
-      equipmentId: selectedId,
+      equipmentId: equipment.id,
       fromMemberId: t.fromMemberId,
       toMemberId: t.toMemberId,
       amountEuros: t.amountEuros,
@@ -158,42 +155,13 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
     await accountsResource.reload();
   }
 
-  if (equipments.length === 0) {
-    return (
-      <>
-        {error && <div className="alert">{error}</div>}
-        <p className="empty">Créez d'abord un équipement : les dépenses se partagent au sein de son cercle.</p>
-      </>
-    );
-  }
-
   return (
     <>
-      {error && <div className="alert">{error}</div>}
-
-      <div className="card">
-        <div className="row" style={{ alignItems: 'center' }}>
-          <label className="field" style={{ flex: '0 0 auto', minWidth: '16rem' }}>
-            Équipement
-            <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
-              {equipments.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {selected && (
-            <p className="muted" style={{ margin: 0 }}>
-              Cercle : {circle.map((m) => m.name).join(', ')} — chaque équipement a ses propres dépenses et soldes.
-            </p>
-          )}
-        </div>
-      </div>
+      {pageError && <div className="alert">{pageError}</div>}
 
       <div className="grid">
         <div className="card">
-          <h3>Soldes {selected ? `— ${selected.name}` : ''}</h3>
+          <h3>Soldes — {equipment.name}</h3>
           <table>
             <tbody>
               {balances.map((b) => (
@@ -230,16 +198,10 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
         </div>
       </div>
 
-      {!showForm && (
-        <button className="primary" onClick={() => setShowForm(true)} style={{ margin: '1rem 0' }}>
-          + Ajouter une dépense
-        </button>
-      )}
-
-      {showForm && selected && (
-        <div className="card">
-          <h3>Nouvelle dépense — {selected.name}</h3>
-          <form className="stack" onSubmit={submit}>
+      {showForm && (
+        <Modal title={`Nouvelle dépense — ${equipment.name}`} onClose={closeForm}>
+          {actionError && <div className="alert">{actionError}</div>}
+          <form className="modal-form" onSubmit={submit}>
             <div className="row">
               <label className="field">
                 Libellé
@@ -328,8 +290,8 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
 
             {form.splitType === 'USAGE_PRORATED' && (
               <p className="muted">
-                Les parts seront calculées à partir des heures réservées par chaque membre du cercle sur {selected.name}
-                .
+                Les parts seront calculées à partir des heures réservées par chaque membre du cercle sur{' '}
+                {equipment.name}.
               </p>
             )}
 
@@ -361,16 +323,16 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
               />
             </label>
 
-            <div className="row">
+            <div className="modal-actions">
+              <button type="button" className="ghost" onClick={closeForm}>
+                Annuler
+              </button>
               <button className="primary" disabled={busy}>
                 Enregistrer
               </button>
-              <button type="button" className="ghost" onClick={() => setShowForm(false)}>
-                Annuler
-              </button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       <div className="card">
@@ -451,6 +413,8 @@ export function ExpensesPage({ members, currentMemberId }: Props) {
           </table>
         )}
       </div>
+
+      <Fab label="Ajouter une dépense" onClick={() => setShowForm(true)} />
     </>
   );
 }

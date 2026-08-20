@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { Equipment, Member, RecurrenceFrequency, Reservation, ReservationStatus } from '../../api';
+import type { Member, RecurrenceFrequency, Reservation, ReservationStatus } from '../../api';
 import { formatDateTime } from '../../format';
 import { dateKey, findNextFreeSlot, overlapping, timeKey } from './grid';
 
@@ -16,7 +16,6 @@ export const REPEAT_LABELS: Record<RecurrenceFrequency, string> = {
 
 /** Saisie du formulaire : dates et heures séparées, comme les champs HTML. */
 export interface ReservationDraft {
-  equipmentId: string;
   startDate: string;
   startTime: string;
   endDate: string;
@@ -28,7 +27,6 @@ export interface ReservationDraft {
 }
 
 export const EMPTY_DRAFT: ReservationDraft = {
-  equipmentId: '',
   startDate: '',
   startTime: '08:00',
   endDate: '',
@@ -60,8 +58,6 @@ export function draftForSlot(draft: ReservationDraft, slot: { start: Date; end: 
 }
 
 interface Props {
-  /** Équipements proposés : ceux du cercle du membre, ou tous en modification. */
-  equipments: Equipment[];
   members: Member[];
   /** Réservations du même équipement, pour signaler les chevauchements pendant la saisie. */
   siblings: Reservation[];
@@ -73,16 +69,7 @@ interface Props {
 }
 
 /** Formulaire de réservation (création, répétition et modification d'un créneau), affiché en modale. */
-export function ReservationForm({
-  equipments,
-  members,
-  siblings,
-  editing,
-  draft,
-  onChange,
-  onSubmit,
-  onCancel,
-}: Props) {
+export function ReservationForm({ members, siblings, editing, draft, onChange, onSubmit, onCancel }: Props) {
   const range = useMemo(() => draftRange(draft), [draft]);
 
   /** Conflits détectés en direct pendant la saisie, avant soumission. */
@@ -104,20 +91,6 @@ export function ReservationForm({
   return (
     <form className="modal-form" onSubmit={onSubmit}>
       <div className="row">
-        <label className="field">
-          Équipement
-          <select
-            value={draft.equipmentId}
-            disabled={editing}
-            onChange={(e) => onChange((d) => ({ ...d, equipmentId: e.target.value }))}
-          >
-            {equipments.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.name}
-              </option>
-            ))}
-          </select>
-        </label>
         <label className="field">
           Type de réservation
           <select

@@ -11,6 +11,14 @@
   --danger-light: #fbeae8;
   --warning: #9a6b00;
   --warning-light: #fdf3dd;
+  /* Texte posé sur un aplat vert. */
+  --on-green: #ffffff;
+  /* Pastilles d'équipement : cinq teintes distinctes, un membre en a cinq au plus. */
+  --eq-1: #1f6f54;
+  --eq-2: #b26a00;
+  --eq-3: #2f6bb0;
+  --eq-4: #7a4fa3;
+  --eq-5: #a83a52;
   --radius: 10px;
   font-size: 16px;
 }
@@ -32,10 +40,15 @@ body {
   line-height: 1.5;
 }
 
+/*
+ * Le bas ne porte qu'une marge de confort : `#root` héberge aussi les écrans sans barre basse
+ * (connexion, invitation), qui n'ont rien à dégager. La réserve pour la barre est ajoutée par
+ * `.app-main`, seul endroit où la barre existe réellement.
+ */
 #root {
   max-width: 960px;
   margin: 0 auto;
-  padding: 0 1rem 4rem;
+  padding: 0 1rem 1rem;
 }
 
 header.topbar {
@@ -180,15 +193,6 @@ button.primary:disabled {
   cursor: default;
 }
 
-/* Bouton d'action posé dans l'en-tête d'une carte : ouvre la saisie sans pousser la liste vers le bas. */
-button.card-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex: 0 0 auto;
-  align-self: center;
-}
-
 button.ghost {
   background: none;
   border: 1px solid var(--border);
@@ -330,20 +334,30 @@ th {
   background: var(--danger-light);
 }
 
+/*
+ * En-tête du calendrier, deux groupes que rien ne doit mêler : « quelle vue » (contrôle segmenté
+ * pleine largeur, en tête de carte) puis « quand » (la période et ses flèches, collées à la
+ * grille). La carte n'a plus de titre : la période en tient lieu.
+ */
 .view-toggle {
-  display: inline-flex;
+  display: flex;
+  width: 100%;
+  margin-bottom: 0.75rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
   overflow: hidden;
 }
 
 .view-toggle button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 48px;
   border: none;
   background: none;
-  padding: 0.35rem 0.9rem;
   font-size: 0.85rem;
   cursor: pointer;
   color: var(--muted);
+  white-space: nowrap;
 }
 
 .view-toggle button.active {
@@ -352,11 +366,92 @@ th {
   font-weight: 600;
 }
 
+/* Au-delà du mobile, le sélecteur reprend sa largeur naturelle plutôt que de s'étirer. */
+@media (min-width: 721px) {
+  .view-toggle {
+    width: auto;
+    align-self: flex-start;
+  }
+  .view-toggle button {
+    flex: 0 0 auto;
+    padding: 0 1.1rem;
+  }
+}
+
 .cal-nav {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.15rem 0.75rem;
   margin-bottom: 0.6rem;
+}
+
+/*
+ * La période intitule la grille — c'est elle, et non un titre de carte, qui dit ce qu'on regarde.
+ * Sur mobile elle occupe sa propre ligne : à 320 px, ni « septembre 2026 » ni « 1 sept. – 7 sept.
+ * 2026 » ne tiendraient à côté des trois boutons sans être rognés.
+ */
+.cal-period-label {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1.05rem;
+  color: var(--green-dark);
+}
+
+.cal-period-label.month {
+  text-transform: capitalize;
+}
+
+.cal-nav-actions {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* Cibles tactiles de la navigation temporelle : 48 px, comme la barre basse. */
+.cal-nav-actions button {
+  min-width: 48px;
+  min-height: 48px;
+  white-space: nowrap;
+}
+
+.cal-nav-arrow {
+  flex: 0 0 auto;
+  padding: 0;
+  font-size: 1.6rem;
+  line-height: 1;
+}
+
+/* Le retour à aujourd'hui ferme la ligne, à l'opposé des flèches. */
+.cal-nav-today {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0 0.75rem;
+}
+
+/*
+ * Anneau de focus des contrôles de l'agenda, tracé à l'intérieur comme dans le reste de
+ * l'application : le `overflow: hidden` du sélecteur de vue rognerait un anneau posé dehors,
+ * et les boutons des extrémités n'en montreraient plus qu'un morceau.
+ */
+.view-toggle button:focus-visible,
+.cal-nav-actions button:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: -2px;
+}
+
+/* Au-delà du mobile, la ligne est assez large pour tout tenir : période à gauche, boutons à droite. */
+@media (min-width: 721px) {
+  .cal-period-label {
+    flex: 1 1 auto;
+  }
+  .cal-nav-actions {
+    flex: 0 0 auto;
+  }
 }
 
 .cal-grid {
@@ -366,6 +461,16 @@ th {
   border-radius: 6px;
   overflow: hidden;
   margin-bottom: 0.6rem;
+}
+
+/* La légende a disparu de la vue mois : la grille ferme la carte, sans marge en trop. */
+.cal-grid:last-child {
+  margin-bottom: 0;
+}
+
+/* Précision de lecture sous la grille de la semaine : dernier élément de la carte. */
+.cal-note {
+  margin-bottom: 0;
 }
 
 .cal-head {
@@ -474,11 +579,18 @@ th {
   margin-bottom: 0.6rem;
 }
 
+/*
+ * Le jour et son quantième tiennent sur deux lignes centrées : « lun. 17 » d'un seul tenant
+ * serrait les sept colonnes au point de rogner le libellé dès le mobile. La hauteur reste fixe
+ * pour que la colonne des heures, dont l'en-tête est vide, démarre sa grille au même niveau.
+ */
 .week-head {
-  height: 2rem;
+  height: 2.6rem;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  line-height: 1.15;
   background: var(--green-light);
   color: var(--green-dark);
   font-size: 0.75rem;
@@ -486,6 +598,11 @@ th {
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   text-transform: capitalize;
+}
+
+/* Le quantième porte le repérage : c'est lui qu'on cherche, pas l'abrégé du jour. */
+.week-head-date {
+  font-size: 0.85rem;
 }
 
 .week-head.today {
@@ -557,17 +674,6 @@ th {
 
 /* --- Discussions --- */
 
-.message-list {
-  list-style: none;
-  margin: 0 0 1rem;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  max-height: 55vh;
-  overflow-y: auto;
-}
-
 .message {
   background: var(--green-light);
   border-radius: var(--radius);
@@ -614,10 +720,16 @@ th {
 }
 
 /* --- Arborescence des messages (réponses en sous-fils, façon Slack/Reddit) --- */
+/*
+ * Pas de `max-height` ici, et surtout pas en `vh` : le fil vit dans une coque qui consomme
+ * déjà ~380 px fixes (barre d'app, cartes, composeur, paddings). Un plafond en `vh` s'ajoute
+ * à ces 380 px au lieu de s'y soustraire, si bien que le document dépasse la fenêtre dès
+ * qu'elle descend sous ~844 px de haut : on se retrouve avec un défilement parasite du
+ * document par-dessus celui du fil, deux barres imbriquées dont l'une ne sert à rien.
+ * Le fil coule donc dans la page : un seul défilement, celui du document.
+ */
 .message-tree {
   margin: 0 0 1rem;
-  max-height: 55vh;
-  overflow-y: auto;
 }
 
 .message-branch {
@@ -675,8 +787,14 @@ th {
 
 /* --- Cloche de notifications --- */
 
+/*
+ * La cloche n'est pas le repère du panneau : elle est coincée entre le sélecteur et le menu,
+ * un panneau accroché à son bord droit débordait par la gauche en mobile. En la laissant
+ * `static`, le panneau se cale sur la barre d'app — qui, elle, fait exactement la largeur
+ * utile de l'écran.
+ */
 .bell {
-  position: relative;
+  position: static;
 }
 
 .bell-button {
@@ -714,11 +832,16 @@ th {
   line-height: 1.1rem;
 }
 
+/*
+ * Le panneau descend du bord droit de son ancre — la barre d'app pour la cloche, le bouton
+ * pour le menu utilisateur — et ne dépasse jamais la largeur de cette ancre : à 320 px il
+ * occupe la largeur utile, au-delà il se cale à 22 rem. Aucun débordement horizontal.
+ */
 .bell-panel {
   position: absolute;
   right: 0;
-  top: 130%;
-  width: min(22rem, 90vw);
+  top: calc(100% + 0.4rem);
+  width: min(22rem, 100%);
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1681,4 +1804,556 @@ th {
 .attachment-draft .attachment-name {
   flex: 1;
   min-width: 0;
+}
+
+/* --- Coque de navigation : barre d'app, feuille basse, barre basse --- */
+
+/*
+ * La barre d'app suit le défilement : le nom de l'équipement courant est le seul repère
+ * qui dit de quoi parle l'écran, il ne doit jamais disparaître.
+ */
+.appbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  /* Le switcher fait déjà 48 px de haut : la barre n'a plus besoin d'être aussi rembourrée. */
+  padding: calc(0.45rem + env(safe-area-inset-top)) 0 0.45rem;
+  background: var(--bg);
+}
+
+.appbar-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/*
+ * Le titre de l'écran est aussi le bouton qui mène aux autres équipements : c'est la cible la
+ * plus sollicitée de la coque, elle tient les 48 px comme la barre basse et la feuille.
+ */
+.switcher {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem 0.35rem 0.35rem;
+  margin-left: -0.35rem;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.switcher:hover {
+  background: var(--green-light);
+}
+
+.switcher > svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+/* Un nom long se coupe : la barre ne déborde jamais en largeur. */
+.switcher-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--green-dark);
+}
+
+.eq-dot {
+  flex: 0 0 auto;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background: var(--eq-1);
+}
+
+.eq-dot-1 {
+  background: var(--eq-1);
+}
+
+.eq-dot-2 {
+  background: var(--eq-2);
+}
+
+.eq-dot-3 {
+  background: var(--eq-3);
+}
+
+.eq-dot-4 {
+  background: var(--eq-4);
+}
+
+.eq-dot-5 {
+  background: var(--eq-5);
+}
+
+/*
+ * Feuille basse : même boîte de dialogue que les modales (piège à focus, Échap, fond cliquable),
+ * mais collée en bas, à portée du pouce. Les règles plus spécifiques annulent le plein écran mobile.
+ */
+.modal-backdrop.sheet {
+  align-items: flex-end;
+  padding: 0;
+}
+
+.modal-backdrop.sheet > .modal {
+  width: 100%;
+  max-width: 32rem;
+  height: auto;
+  max-height: 80vh;
+  border-radius: var(--radius) var(--radius) 0 0;
+  padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));
+  animation: sheet-up 0.18s ease-out;
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(1.5rem);
+  }
+}
+
+.sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sheet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Séparateur entre les équipements et les passages transverses. */
+.sheet-transverse {
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+}
+
+.sheet-item {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sheet-item:hover {
+  background: var(--green-light);
+}
+
+.sheet-item > svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.sheet-item[aria-current='true'] {
+  font-weight: 600;
+  color: var(--green-dark);
+}
+
+.sheet-item[aria-current='true'] > svg {
+  color: var(--green);
+}
+
+.sheet-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * Barre basse fixe : les cinq sections de l'équipement courant, toujours au même endroit.
+ * Le rembourrage bas rend sa hauteur à l'encoche des téléphones sans bouton physique.
+ */
+.tabbar {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 30;
+  display: flex;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.tabbar button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  padding: 0.4rem 0.15rem;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+/* Le libellé tient sur une ligne, y compris à 320 px de large. */
+.tabbar-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: clamp(0.62rem, 2.6vw, 0.72rem);
+  line-height: 1.2;
+}
+
+.tabbar button[aria-current='page'] {
+  color: var(--green-dark);
+  box-shadow: inset 0 2px 0 var(--green);
+}
+
+.tabbar button[aria-current='page'] .tabbar-label {
+  font-weight: 600;
+}
+
+/*
+ * Le contenu s'arrête au-dessus de la barre basse, sinon elle masque la dernière ligne.
+ * On dégage exactement la hauteur de la barre (`--tabbar-height`) plus l'encoche du bas ;
+ * la marge de confort, elle, vient déjà du padding bas de `#root`. Pas de valeur en dur :
+ * si la barre grandit, la réserve suit.
+ */
+.app-main {
+  padding-bottom: calc(var(--tabbar-height) + env(safe-area-inset-bottom));
+}
+
+/* Au-delà du mobile, la barre se recentre au lieu de s'étirer sur toute la largeur. */
+@media (min-width: 721px) {
+  .tabbar {
+    justify-content: center;
+  }
+  .tabbar button {
+    flex: 0 1 9rem;
+  }
+  .tabbar-label {
+    font-size: 0.8rem;
+  }
+}
+
+/*
+ * Écran posé par-dessus la coque (gestion du parc) : plein cadre et sans barre basse, parce
+ * qu'on n'y navigue pas — on y entre pour modifier le parc, puis on en repart.
+ */
+.screen {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  overflow-y: auto;
+  background: var(--bg);
+  padding: calc(0.75rem + env(safe-area-inset-top)) 1rem calc(2rem + env(safe-area-inset-bottom));
+}
+
+.screen-inner {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.screen-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.screen-head h2 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 1.35rem;
+  color: var(--green-dark);
+}
+
+/* --- Sous-onglets en pastilles --- */
+
+.segmented {
+  display: flex;
+  gap: 0.35rem;
+  /* Les pastilles sont montées à 48 px : la marge se resserre pour que la barre ne s'étale pas. */
+  margin-bottom: 0.7rem;
+  padding: 0.15rem 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.segmented::-webkit-scrollbar {
+  display: none;
+}
+
+/* Cibles tactiles de plein format, comme les autres boutons de navigation de la coque. */
+.segmented > [role='tab'] {
+  flex: 0 0 auto;
+  min-height: 48px;
+  padding: 0.35rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.segmented > [role='tab']:hover {
+  border-color: var(--green);
+  color: var(--green-dark);
+}
+
+.segmented > [role='tab'][aria-selected='true'] {
+  background: var(--green);
+  border-color: var(--green);
+  color: var(--on-green);
+  font-weight: 600;
+}
+
+/* --- Vue d'ensemble --- */
+
+.overview {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  overflow-y: auto;
+  background: var(--bg);
+  padding: calc(0.75rem + env(safe-area-inset-top)) 1rem calc(2rem + env(safe-area-inset-bottom));
+}
+
+.overview-inner {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.overview-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.overview-titles {
+  flex: 1;
+  min-width: 0;
+}
+
+.overview-titles h2 {
+  margin: 0;
+  font-size: 1.35rem;
+  color: var(--green-dark);
+}
+
+.overview-titles p {
+  margin: 0;
+}
+
+.overview-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.overview-row {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.4rem;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 8px 8px 0 0;
+  background: none;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.overview-list li:last-child .overview-row {
+  border-bottom: none;
+}
+
+.overview-row:hover {
+  background: var(--green-light);
+}
+
+.overview-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.overview-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.overview-row-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/*
+ * Les soldes se posent côte à côte, jamais bout à bout : chacun se règle avec les copropriétaires
+ * de son équipement, un total n'aurait pas de destinataire.
+ */
+.overview-balances {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+}
+
+.overview-balance {
+  width: 100%;
+  height: 100%;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.overview-balance:hover {
+  border-color: var(--green);
+}
+
+.overview-balance-head {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* --- Repère de focus commun à la coque (clavier uniquement) --- */
+
+.switcher:focus-visible,
+.sheet-item:focus-visible,
+.tabbar button:focus-visible,
+.overview-row:focus-visible,
+.overview-balance:focus-visible,
+.segmented > [role='tab']:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-backdrop.sheet > .modal {
+    animation: none;
+  }
+}
+
+/* --- Bouton d'action flottant (FAB) --- */
+
+/*
+ * Hauteur de référence de la barre basse. Elle n'était jusqu'ici qu'une conséquence de son
+ * contenu ; le FAB a besoin de s'y adosser, alors on la nomme une fois pour les deux.
+ */
+:root {
+  --tabbar-height: 56px;
+}
+
+.tabbar {
+  min-height: var(--tabbar-height);
+}
+
+/*
+ * L'action principale de l'écran, à portée du pouce. Elle flotte au-dessus de la barre basse
+ * (hauteur + encoche + marge de confort) et se range sous les modales, qui prennent la main.
+ */
+.fab {
+  position: fixed;
+  right: 1rem;
+  bottom: calc(var(--tabbar-height) + env(safe-area-inset-bottom) + 1rem);
+  /* Entre la barre basse (30) et le fond des modales (50) : par-dessus l'une, sous l'autre. */
+  z-index: 35;
+  /* Un FAB standard fait 56 px — au-delà du seuil de 48 px des cibles tactiles du projet. */
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--green);
+  color: var(--on-green);
+  box-shadow: 0 3px 10px rgb(0 0 0 / 25%);
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+
+.fab:hover {
+  background: var(--green-dark);
+}
+
+/* Enfoncement discret : le bouton répond au doigt, rien de plus. */
+.fab:active {
+  transform: scale(0.94);
+}
+
+/* L'anneau est sombre et posé à l'extérieur : sur un rond vert, un liseré vert ne se verrait pas. */
+.fab:focus-visible {
+  outline: 3px solid var(--text);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fab {
+    transition: none;
+  }
+  .fab:active {
+    transform: none;
+  }
 }

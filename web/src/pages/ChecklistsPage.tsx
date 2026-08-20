@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import type { ChecklistItem, Member } from '../api';
+import type { ChecklistItem, Equipment, Member } from '../api';
 import { formatDateTime, formatRelative } from '../format';
-import { pickInitialEquipmentId, setLastEquipmentId } from '../lastEquipment';
 import { clearErrors, errorMessage, firstError, useApiResource } from '../useApiResource';
 import {
   IconBack,
@@ -17,25 +16,22 @@ import {
   IconTrash,
 } from '../components/icons';
 import { Modal } from '../components/Modal';
+import { Fab } from '../components/Fab';
 
 interface Props {
   members: Member[];
   currentMemberId: string;
-  /** Équipement présélectionné (arrivée depuis un lien). */
-  initialEquipmentId?: string | null;
+  /** Équipement de l'espace de travail courant, choisi dans la coque de l'application. */
+  equipment: Equipment;
 }
 
 /**
- * Checklists par équipement : liste des checklists, puis vue d'une checklist avec ses points.
- * Une checklist appartient au cercle, pas à son créateur : tout membre du cercle peut la
+ * Checklists de l'équipement courant : liste des checklists, puis vue d'une checklist avec ses
+ * points. Une checklist appartient au cercle, pas à son créateur : tout membre du cercle peut la
  * remplir, la renommer, en modifier la structure et la supprimer. Le nom du créateur et
  * celui de l'auteur de chaque coche restent affichés comme trace.
- *
- * Seuls les équipements dont l'utilisateur fait partie du cercle sont proposés : hors du
- * cercle, rien n'est visible (le serveur applique la même règle, y compris en lecture).
  */
-export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }: Props) {
-  const [selectedId, setSelectedId] = useState('');
+export function ChecklistsPage({ members, equipment }: Props) {
   const [openChecklistId, setOpenChecklistId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -52,36 +48,20 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
   const [editDraft, setEditDraft] = useState('');
   const [newItemLabel, setNewItemLabel] = useState('');
 
-  const equipmentsResource = useApiResource(
-    useCallback(async () => {
-      // Filtré au cercle de l'utilisateur : un équipement qu'il ne partage pas n'a pas à
-      // apparaître, et ses checklists lui seraient de toute façon refusées par l'API.
-      const mine = (await api.listEquipments()).filter((e) => e.memberIds.includes(currentMemberId));
-      setSelectedId((id) =>
-        pickInitialEquipmentId(mine, currentMemberId, { current: id, deepLink: initialEquipmentId }),
-      );
-      return mine;
-    }, [currentMemberId, initialEquipmentId]),
-  );
-
-  const checklistsResource = useApiResource(
-    useCallback(async () => (selectedId ? api.listChecklists(selectedId) : []), [selectedId]),
-  );
+  const checklistsResource = useApiResource(useCallback(() => api.listChecklists(equipment.id), [equipment.id]));
 
   const itemsResource = useApiResource(
     useCallback(async () => (openChecklistId ? api.listChecklistItems(openChecklistId) : []), [openChecklistId]),
   );
 
-  const equipments = equipmentsResource.data ?? [];
   const checklists = checklistsResource.data ?? [];
   const items = itemsResource.data ?? [];
-  const error = actionError ?? firstError(equipmentsResource, checklistsResource, itemsResource);
+  const error = actionError ?? firstError(checklistsResource, itemsResource);
 
-  const selected = equipments.find((e) => e.id === selectedId) ?? null;
   const openChecklist = checklists.find((c) => c.id === openChecklistId) ?? null;
   const circle = useMemo(
-    () => (selected ? members.filter((m) => selected.memberIds.includes(m.id)) : []),
-    [selected, members],
+    () => members.filter((m) => equipment.memberIds.includes(m.id)),
+    [equipment.memberIds, members],
   );
   const checkedCount = items.filter((i) => i.checkedAt !== null).length;
 
@@ -92,10 +72,10 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
     setNewItemLabel('');
   }, [openChecklistId]);
 
-  // Mémorise l'équipement consulté (partagé avec les autres onglets).
+  // Changement d'équipement : la checklist ouverte appartenait au précédent.
   useEffect(() => {
-    if (selectedId) setLastEquipmentId(selectedId);
-  }, [selectedId]);
+    setOpenChecklistId(null);
+  }, [equipment.id]);
 
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;
@@ -107,13 +87,13 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
 
   async function createChecklist(event: React.FormEvent) {
     event.preventDefault();
-    if (!selectedId || !newTitle.trim()) return;
+    if (!newTitle.trim()) return;
     setBusy(true);
     setActionError(null);
     try {
       // Saisie multiligne : une ligne = un point de contrôle.
       const labels = newItems.split('\n');
-      const checklist = await api.createChecklist(selectedId, newTitle.trim(), labels);
+      const checklist = await api.createChecklist(equipment.id, newTitle.trim(), labels);
       setNewTitle('');
       setNewItems('');
       setShowNew(false);
@@ -205,15 +185,6 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
     }
   }
 
-  if (equipments.length === 0) {
-    return (
-      <>
-        {error && <div className="alert">{error}</div>}
-        <p className="empty">Aucun équipement partagé avec vous : les checklists s'organisent par équipement.</p>
-      </>
-    );
-  }
-
   return (
     <>
       {error && (
@@ -221,7 +192,7 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
           className="alert"
           onClick={() => {
             setActionError(null);
-            clearErrors(equipmentsResource, checklistsResource, itemsResource);
+            clearErrors(checklistsResource, itemsResource);
           }}
         >
           {error}
@@ -229,30 +200,9 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
       )}
 
       <div className="card">
-        <div className="row" style={{ alignItems: 'center' }}>
-          <label className="field" style={{ flex: '0 0 auto', minWidth: '16rem' }}>
-            Équipement
-            <select
-              value={selectedId}
-              onChange={(e) => {
-                // La checklist ouverte appartient à l'équipement quitté : elle se referme ici.
-                setOpenChecklistId(null);
-                setSelectedId(e.target.value);
-              }}
-            >
-              {equipments.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {selected && (
-            <p className="muted" style={{ margin: 0 }}>
-              Cercle : {circle.map((m) => m.name).join(', ')}
-            </p>
-          )}
-        </div>
+        <p className="muted" style={{ margin: 0 }}>
+          Cercle : {circle.map((m) => m.name).join(', ')}
+        </p>
       </div>
 
       <div className={`split-layout ${openChecklist ? 'has-open' : ''}`}>
@@ -281,18 +231,10 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                 }}
-                title={selected?.name}
+                title={equipment.name}
               >
-                {selected ? selected.name : 'Checklists'}
+                {equipment.name}
               </h3>
-              <button
-                className="icon-btn icon-primary"
-                onClick={() => setShowNew(true)}
-                title="Nouvelle checklist"
-                aria-label="Nouvelle checklist"
-              >
-                <IconPlus size={20} />
-              </button>
             </div>
 
             {checklists.length === 0 ? (
@@ -358,6 +300,12 @@ export function ChecklistsPage({ members, currentMemberId, initialEquipmentId }:
           </form>
         </Modal>
       )}
+
+      {/* Seulement dans la liste : une checklist ouverte a sa propre action principale — ajouter un
+          point — et le bouton flottant viendrait se poser juste sur celui du champ « Ajouter un
+          point… », en bas à droite lui aussi. Sur mobile la liste latérale est alors masquée, mais
+          on y revient par le bouton retour, qui est de toute façon le geste pour la quitter. */}
+      {!openChecklist && <Fab label="Créer une checklist" onClick={() => setShowNew(true)} />}
     </>
   );
 

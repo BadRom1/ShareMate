@@ -5,6 +5,7 @@ import type * as ApiModule from '../api';
 import { DiscussionsPage } from './DiscussionsPage';
 import { aMember, aMessage, aThread, anEquipment, createApiStub } from '../test/factories';
 import type { ApiStub } from '../test/factories';
+import type { Equipment } from '../api';
 
 const mocks = vi.hoisted(() => ({ api: {} as Record<string, unknown> }));
 
@@ -16,16 +17,21 @@ vi.mock('../api', async (importOriginal) => {
 let stub: ApiStub;
 
 const members = [aMember({ id: 'm1', name: 'Alice' }), aMember({ id: 'm2', name: 'Bob' })];
+const tracteur = anEquipment({ id: 'e1', name: 'Tracteur', memberIds: ['m1', 'm2'] });
+const broyeur = anEquipment({ id: 'e2', name: 'Broyeur', memberIds: ['m1', 'm2'] });
+
+function renderPage(props: { equipment?: Equipment; initialThreadId?: string } = {}) {
+  const { equipment = tracteur, initialThreadId } = props;
+  return render(
+    <DiscussionsPage members={members} currentMemberId="m1" equipment={equipment} initialThreadId={initialThreadId} />,
+  );
+}
 
 beforeEach(() => {
   stub = createApiStub();
   for (const key of Object.keys(mocks.api)) delete mocks.api[key];
   Object.assign(mocks.api, stub);
   window.localStorage.clear();
-  stub.listEquipments.mockResolvedValue([
-    anEquipment({ id: 'e1', name: 'Tracteur', memberIds: ['m1', 'm2'] }),
-    anEquipment({ id: 'e2', name: 'Broyeur', memberIds: ['m1', 'm2'] }),
-  ]);
   stub.listThreads.mockResolvedValue([aThread({ id: 't1', title: 'Panne moteur', equipmentId: 'e1' })]);
   stub.listMessages.mockResolvedValue([aMessage({ id: 'msg1', threadId: 't1', body: 'Bruit au démarrage.' })]);
 });
@@ -34,28 +40,28 @@ describe('ouverture d’un fil', () => {
   // Régression : le fil ciblé par une notification était refermé par un effet sur `selectedId`
   // qui s'exécute aussi au montage. Le lien menait alors à un panneau vide.
   it('ouvre au montage le fil désigné par une notification', async () => {
-    render(<DiscussionsPage members={members} currentMemberId="m1" initialEquipmentId="e1" initialThreadId="t1" />);
+    renderPage({ initialThreadId: 't1' });
 
     expect(await screen.findByText('Bruit au démarrage.')).toBeTruthy();
     expect(stub.listMessages).toHaveBeenCalledWith('t1');
   });
 
-  it('referme le fil quand on change d’équipement, sans le rouvrir', async () => {
-    const user = userEvent.setup();
-    render(<DiscussionsPage members={members} currentMemberId="m1" initialEquipmentId="e1" initialThreadId="t1" />);
+  it('referme le fil quand l’équipement de l’espace change, sans le rouvrir', async () => {
+    const { rerender } = renderPage({ initialThreadId: 't1' });
     await screen.findByText('Bruit au démarrage.');
 
     stub.listThreads.mockResolvedValue([]);
-    await user.selectOptions(screen.getByLabelText('Équipement'), 'e2');
+    rerender(<DiscussionsPage members={members} currentMemberId="m1" equipment={broyeur} initialThreadId="t1" />);
 
     // Le fil appartenait à l'équipement quitté : le panneau se vide et n'est pas rechargé.
     await waitFor(() => expect(screen.queryByText('Bruit au démarrage.')).toBeNull());
     expect(screen.getByText(/Sélectionnez un fil/)).toBeTruthy();
+    expect(stub.listThreads).toHaveBeenCalledWith('e2');
   });
 
   it('répond à un message précis et déplie le sous-fil', async () => {
     const user = userEvent.setup();
-    render(<DiscussionsPage members={members} currentMemberId="m1" initialEquipmentId="e1" initialThreadId="t1" />);
+    renderPage({ initialThreadId: 't1' });
     await screen.findByText('Bruit au démarrage.');
 
     await user.click(screen.getByRole('button', { name: 'Répondre' }));
@@ -69,7 +75,7 @@ describe('ouverture d’un fil', () => {
 
   it('ouvre un fil choisi dans la liste latérale', async () => {
     const user = userEvent.setup();
-    render(<DiscussionsPage members={members} currentMemberId="m1" initialEquipmentId="e1" />);
+    renderPage();
 
     // Sans lien de notification, aucun fil n'est ouvert au montage.
     expect(await screen.findByText(/Sélectionnez un fil/)).toBeTruthy();
@@ -83,7 +89,7 @@ describe('pièce jointe', () => {
 
   it('joint un fichier au message et le rappelle avant l’envoi', async () => {
     const user = userEvent.setup();
-    render(<DiscussionsPage members={members} currentMemberId="m1" initialEquipmentId="e1" initialThreadId="t1" />);
+    renderPage({ initialThreadId: 't1' });
     await screen.findByText('Bruit au démarrage.');
 
     await user.upload(screen.getByLabelText('Joindre un fichier au message'), fichier());
@@ -104,7 +110,7 @@ describe('pièce jointe', () => {
   // Envoyer une photo sans commentaire est un geste normal : le bouton doit s'armer sans texte.
   it('permet d’envoyer un fichier seul, sans texte', async () => {
     const user = userEvent.setup();
-    render(<DiscussionsPage members={members} currentMemberId="m1" initialEquipmentId="e1" initialThreadId="t1" />);
+    renderPage({ initialThreadId: 't1' });
     await screen.findByText('Bruit au démarrage.');
 
     expect(screen.getByRole('button', { name: 'Envoyer' }).hasAttribute('disabled')).toBe(true);
@@ -117,7 +123,7 @@ describe('pièce jointe', () => {
 
   it('retire le fichier retenu sans envoyer', async () => {
     const user = userEvent.setup();
-    render(<DiscussionsPage members={members} currentMemberId="m1" initialEquipmentId="e1" initialThreadId="t1" />);
+    renderPage({ initialThreadId: 't1' });
     await screen.findByText('Bruit au démarrage.');
 
     await user.upload(screen.getByLabelText('Joindre un fichier au message'), fichier());
@@ -129,7 +135,7 @@ describe('pièce jointe', () => {
 
   it('joint un fichier à une réponse', async () => {
     const user = userEvent.setup();
-    render(<DiscussionsPage members={members} currentMemberId="m1" initialEquipmentId="e1" initialThreadId="t1" />);
+    renderPage({ initialThreadId: 't1' });
     await screen.findByText('Bruit au démarrage.');
 
     await user.click(screen.getByRole('button', { name: 'Répondre' }));
@@ -152,7 +158,7 @@ describe('pièce jointe', () => {
         attachment: { fileName: 'panne.png', contentType: 'image/png', sizeBytes: 240_000 },
       }),
     ]);
-    render(<DiscussionsPage members={members} currentMemberId="m1" initialEquipmentId="e1" initialThreadId="t1" />);
+    renderPage({ initialThreadId: 't1' });
     await screen.findByText('Le voilà');
 
     const lien = screen.getByRole('link', { name: /panne\.png/ });
@@ -170,7 +176,34 @@ describe('pièce jointe', () => {
         attachment: { fileName: 'devis.pdf', contentType: 'application/pdf', sizeBytes: 12_000 },
       }),
     ]);
-    render(<DiscussionsPage members={members} currentMemberId="m1" initialEquipmentId="e1" initialThreadId="t1" />);
+    renderPage({ initialThreadId: 't1' });
     expect(await screen.findByRole('link', { name: /devis\.pdf/ })).toBeTruthy();
+  });
+});
+
+describe('bouton flottant', () => {
+  it('ouvre le formulaire de nouveau fil', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const fab = await screen.findByRole('button', { name: 'Ouvrir un nouveau fil' });
+    expect(fab.classList.contains('fab')).toBe(true);
+    await user.click(fab);
+
+    expect(await screen.findByRole('dialog', { name: 'Nouveau fil de discussion' })).toBeTruthy();
+  });
+
+  it('s’efface pendant la lecture d’un fil, où l’action est d’écrire un message', async () => {
+    renderPage({ initialThreadId: 't1' });
+    await screen.findByText('Bruit au démarrage.');
+
+    expect(screen.queryByRole('button', { name: 'Ouvrir un nouveau fil' })).toBeNull();
+  });
+
+  it('reste hors de portée d’un membre qui n’est pas du cercle', async () => {
+    renderPage({ equipment: anEquipment({ id: 'e1', name: 'Tracteur', memberIds: ['m2'] }) });
+
+    await screen.findByText('Panne moteur');
+    expect(screen.queryByRole('button', { name: 'Ouvrir un nouveau fil' })).toBeNull();
   });
 });

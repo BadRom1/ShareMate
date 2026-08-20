@@ -1,29 +1,21 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, setUnauthorizedHandler } from './api';
 import type { DirectoryMember, Member } from './api';
 import { EquipmentsPage } from './pages/EquipmentsPage';
 import { CalendarPage } from './pages/CalendarPage';
-import { UsagePage } from './pages/UsagePage';
+import { MaintenancePage } from './pages/MaintenancePage';
 import { ExpensesPage } from './pages/ExpensesPage';
 import { DiscussionsPage } from './pages/DiscussionsPage';
-import { ChecklistsPage } from './pages/ChecklistsPage';
 import { DocumentsPage } from './pages/DocumentsPage';
 import { BootstrapPage, InvitePage, LoginPage } from './pages/AuthPages';
-import { NotificationBell } from './components/NotificationBell';
-import { UserMenu } from './components/UserMenu';
+import { AppShell } from './components/AppShell';
+import { OverviewPanel } from './components/OverviewPanel';
+import { IconClose } from './components/icons';
+import { useRoute } from './navigation';
+import { useEscape } from './useEscape';
+import { pickInitialEquipmentId, setLastEquipmentId } from './lastEquipment';
+import { clearErrors, firstError, useApiResource } from './useApiResource';
 import { setupNativePush } from './notifications';
-
-type Tab = 'equipments' | 'calendar' | 'usage' | 'expenses' | 'discussions' | 'checklists' | 'documents';
-
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'discussions', label: 'Discussions' },
-  { id: 'calendar', label: 'Calendrier' },
-  { id: 'usage', label: 'Usage & entretien' },
-  { id: 'checklists', label: 'Checklists' },
-  { id: 'documents', label: 'Documents' },
-  { id: 'expenses', label: 'Dépenses & soldes' },
-  { id: 'equipments', label: 'Équipements' },
-];
 
 type Auth =
   | { kind: 'loading' }
@@ -86,69 +78,92 @@ export function App() {
   return <AuthenticatedApp member={auth.member} onLoggedOut={() => void backToLogin()} />;
 }
 
+/**
+ * Gestion du parc : écran plein cadre posé par-dessus la coque, jumeau de la vue d'ensemble.
+ * Même patron visuel, donc mêmes sorties — le bouton Fermer et la touche Échap.
+ */
+function EquipmentsScreen({
+  members,
+  currentMemberId,
+  onMembersChanged,
+  onClose,
+}: {
+  members: DirectoryMember[];
+  currentMemberId: string;
+  onMembersChanged: () => void;
+  onClose: () => void;
+}) {
+  useEscape(onClose);
+
+  return (
+    <section className="screen" aria-label="Mes équipements">
+      <div className="screen-inner">
+        <header className="screen-head">
+          <h2>Mes équipements</h2>
+          <button type="button" className="icon-btn" onClick={onClose} title="Fermer" aria-label="Fermer">
+            <IconClose size={22} />
+          </button>
+        </header>
+        <EquipmentsPage members={members} currentMemberId={currentMemberId} onMembersChanged={onMembersChanged} />
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Application connectée : un équipement est l'espace de travail courant, ses cinq sections sont
+ * les onglets de la coque, et deux écrans transverses (vue d'ensemble, gestion du parc) se posent
+ * par-dessus. Tout cela se lit dans l'URL, donc dans l'historique du navigateur.
+ */
 function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut: () => void }) {
-  const [members, setMembers] = useState<DirectoryMember[] | null>(null);
-  const [tab, setTab] = useState<Tab>('discussions');
-  const [usageEquipmentId, setUsageEquipmentId] = useState<string | null>(null);
-  const [discussionEquipmentId, setDiscussionEquipmentId] = useState<string | null>(null);
-  const [checklistEquipmentId, setChecklistEquipmentId] = useState<string | null>(null);
-  const [documentEquipmentId, setDocumentEquipmentId] = useState<string | null>(null);
-  const [discussionThreadId, setDiscussionThreadId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { route, go, follow } = useRoute();
+  const membersResource = useApiResource(useCallback(() => api.listMembers(), []));
+  const equipmentsResource = useApiResource(useCallback(() => api.listEquipments(), []));
 
-  const openUsageFor = useCallback((equipmentId: string) => {
-    setUsageEquipmentId(equipmentId);
-    setTab('usage');
-  }, []);
+  const members = membersResource.data;
+  const equipments = equipmentsResource.data;
 
-  /** Navigue depuis un lien de notification (`/?tab=discussions&equipment=e1`). */
-  const navigateTo = useCallback((link: string) => {
-    try {
-      const url = new URL(link, window.location.origin);
-      const target = url.searchParams.get('tab') as Tab | null;
-      const equipment = url.searchParams.get('equipment');
-      if (!target || !TABS.some((t) => t.id === target)) return;
-      if (target === 'usage' && equipment) setUsageEquipmentId(equipment);
-      if (target === 'checklists' && equipment) setChecklistEquipmentId(equipment);
-      if (target === 'documents' && equipment) setDocumentEquipmentId(equipment);
-      if (target === 'discussions') {
-        if (equipment) setDiscussionEquipmentId(equipment);
-        setDiscussionThreadId(url.searchParams.get('thread'));
-      }
-      setTab(target);
-    } catch {
-      /* lien invalide */
-    }
-  }, []);
+  /**
+   * Équipement de l'espace de travail courant. Le lien n'en désigne pas toujours un
+   * (`/?tab=calendar`) et peut en désigner un qui ne nous est plus partagé : dans les deux cas on
+   * retombe sur le dernier consulté plutôt que sur un écran vide.
+   */
+  const currentEquipmentId =
+    equipments === null || equipments.length === 0
+      ? null
+      : pickInitialEquipmentId(equipments, member.id, {
+          deepLink: route.view === 'equipment' ? route.equipmentId : null,
+        }) || null;
 
-  const loadMembers = useCallback(async () => {
-    try {
-      setMembers(await api.listMembers());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur de chargement.');
-    }
-  }, []);
-
+  // La prochaine ouverture reprend là où on en était, même sans équipement dans l'URL.
   useEffect(() => {
-    void loadMembers();
-  }, [loadMembers]);
+    if (currentEquipmentId) setLastEquipmentId(currentEquipmentId);
+  }, [currentEquipmentId]);
 
-  // Deep link initial (ouverture via un lien de notification).
+  // L'écran de gestion crée et supprime des équipements : la coque relit la liste en le quittant,
+  // par le bouton Fermer comme par le retour navigateur — mais pas en se démontant, sinon la
+  // déconnexion partirait chercher un parc qu'on n'a plus le droit de lire.
+  const reloadEquipments = equipmentsResource.reload;
+  const gestionOuverte = useRef(false);
   useEffect(() => {
-    if (window.location.search.includes('tab=')) navigateTo(window.location.href);
-  }, [navigateTo]);
+    if (route.view === 'equipments') gestionOuverte.current = true;
+    else if (gestionOuverte.current) {
+      gestionOuverte.current = false;
+      void reloadEquipments();
+    }
+  }, [route.view, reloadEquipments]);
 
   // Push natif (FCM) + clics de notification Web Push relayés par le service worker.
   useEffect(() => {
-    void setupNativePush(navigateTo);
+    void setupNativePush(follow);
     const sw = navigator.serviceWorker;
     if (!sw) return;
     const onMessage = (e: MessageEvent) => {
-      if (e.data?.type === 'notification-click' && typeof e.data.link === 'string') navigateTo(e.data.link);
+      if (e.data?.type === 'notification-click' && typeof e.data.link === 'string') follow(e.data.link);
     };
     sw.addEventListener('message', onMessage);
     return () => sw.removeEventListener('message', onMessage);
-  }, [navigateTo]);
+  }, [follow]);
 
   async function logout() {
     try {
@@ -158,58 +173,102 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
     }
   }
 
-  if (members === null) {
-    return <p className="empty">Chargement…</p>;
+  const error = firstError(membersResource, equipmentsResource);
+
+  // Annuaire et parc sont les deux dépendances de tous les écrans : rien ne s'affiche avant eux.
+  if (members === null || equipments === null) {
+    return error ? <div className="alert">{error}</div> : <p className="empty">Chargement…</p>;
   }
 
-  return (
-    <>
-      <header className="topbar">
-        <h1>🚜 ShareMate</h1>
-        <div className="who">
-          <NotificationBell onNavigate={navigateTo} />
-          <UserMenu member={member} onLogout={() => void logout()} />
-        </div>
-      </header>
+  if (route.view === 'overview') {
+    return (
+      <OverviewPanel
+        equipments={equipments}
+        members={members}
+        currentMemberId={member.id}
+        onOpenEquipment={(equipmentId, tab) => go({ view: 'equipment', equipmentId, tab })}
+        onClose={() => go({ view: 'equipment' })}
+      />
+    );
+  }
 
+  if (route.view === 'equipments') {
+    return (
+      <EquipmentsScreen
+        members={members}
+        currentMemberId={member.id}
+        onMembersChanged={() => void membersResource.reload()}
+        onClose={() => go({ view: 'equipment' })}
+      />
+    );
+  }
+
+  const currentEquipment = equipments.find((e) => e.id === currentEquipmentId) ?? null;
+
+  return (
+    <AppShell
+      equipments={equipments}
+      currentEquipmentId={currentEquipmentId}
+      tab={route.tab}
+      member={member}
+      onSelectEquipment={(equipmentId) => go({ view: 'equipment', equipmentId })}
+      onSelectTab={(tab) => go({ tab })}
+      onOpenOverview={() => go({ view: 'overview' })}
+      onAddEquipment={() => go({ view: 'equipments' })}
+      onNavigate={follow}
+      onLogout={() => void logout()}
+    >
       {error && (
-        <div className="alert" onClick={() => setError(null)}>
+        <div className="alert" onClick={() => clearErrors(membersResource, equipmentsResource)}>
           {error}
         </div>
       )}
 
-      <nav className="tabs">
-        {TABS.map((t) => (
-          <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => setTab(t.id)}>
-            {t.label}
+      {currentEquipment === null ? (
+        <>
+          <p className="empty">Aucun équipement partagé avec vous. Ajoutez votre minipelle, utilitaire, bétonnière…</p>
+          <button className="primary" onClick={() => go({ view: 'equipments' })}>
+            + Ajouter un équipement
           </button>
-        ))}
-      </nav>
-
-      {tab === 'equipments' && (
-        <EquipmentsPage members={members} currentMemberId={member.id} onMembersChanged={() => void loadMembers()} />
+        </>
+      ) : (
+        <>
+          {route.tab === 'agenda' && (
+            <CalendarPage
+              members={members}
+              currentMemberId={member.id}
+              equipment={currentEquipment}
+              // Le relevé se saisit dans l'entretien de l'équipement du créneau, pas de celui affiché.
+              onRecordUsage={(equipmentId) =>
+                go({ view: 'equipment', equipmentId, tab: 'maintenance', section: 'usage' })
+              }
+            />
+          )}
+          {route.tab === 'maintenance' && (
+            <MaintenancePage
+              members={members}
+              currentMemberId={member.id}
+              equipment={currentEquipment}
+              section={route.section}
+              onSelectSection={(section) => go({ section })}
+            />
+          )}
+          {route.tab === 'expenses' && (
+            <ExpensesPage members={members} currentMemberId={member.id} equipment={currentEquipment} />
+          )}
+          {route.tab === 'forum' && (
+            <DiscussionsPage
+              members={members}
+              currentMemberId={member.id}
+              equipment={currentEquipment}
+              initialThreadId={route.threadId}
+            />
+          )}
+          {route.tab === 'documents' && (
+            <DocumentsPage members={members} currentMemberId={member.id} equipment={currentEquipment} />
+          )}
+        </>
       )}
-      {tab === 'calendar' && (
-        <CalendarPage members={members} currentMemberId={member.id} onRecordUsage={openUsageFor} />
-      )}
-      {tab === 'usage' && (
-        <UsagePage members={members} currentMemberId={member.id} initialEquipmentId={usageEquipmentId} />
-      )}
-      {tab === 'checklists' && (
-        <ChecklistsPage members={members} currentMemberId={member.id} initialEquipmentId={checklistEquipmentId} />
-      )}
-      {tab === 'documents' && (
-        <DocumentsPage members={members} currentMemberId={member.id} initialEquipmentId={documentEquipmentId} />
-      )}
-      {tab === 'expenses' && <ExpensesPage members={members} currentMemberId={member.id} />}
-      {tab === 'discussions' && (
-        <DiscussionsPage
-          members={members}
-          currentMemberId={member.id}
-          initialEquipmentId={discussionEquipmentId}
-          initialThreadId={discussionThreadId}
-        />
-      )}
-    </>
+    </AppShell>
   );
 }

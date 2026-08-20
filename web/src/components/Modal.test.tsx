@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Modal } from './Modal';
+import { useEscape } from '../useEscape';
 
 function renderModal(onClose = vi.fn()) {
   const view = render(
@@ -73,6 +74,42 @@ describe('Modal', () => {
     view.unmount();
 
     expect(document.body.style.overflow).toBe('');
+  });
+
+  /*
+   * La boîte doit sortir de l'arbre qui l'ouvre : un ancêtre `position`é avec un `z-index`
+   * (la barre d'app) plafonnerait sinon son empilement au sien, et la barre basse passerait
+   * par-dessus la feuille — c'est ce qui masquait « Ajouter un équipement ».
+   */
+  it("rend la boîte hors de l'élément qui l'ouvre", () => {
+    const { view } = renderModal();
+
+    expect(view.container.contains(screen.getByRole('dialog'))).toBe(false);
+    expect(backdrop().parentElement).toBe(document.body);
+  });
+
+  /* Le garde-fou de `useEscape` cherche `[aria-modal]` dans le document : le portail l'y laisse. */
+  it('garde la main sur Échap face à un écran plein cadre', async () => {
+    const user = userEvent.setup();
+    const onEscape = vi.fn();
+    function EcranPleinCadre() {
+      useEscape(onEscape);
+      return null;
+    }
+    const onClose = vi.fn();
+    render(
+      <>
+        <EcranPleinCadre />
+        <Modal title="Saisie" onClose={onClose}>
+          <p>Contenu</p>
+        </Modal>
+      </>,
+    );
+
+    await user.keyboard('{Escape}');
+
+    expect(onClose).toHaveBeenCalled();
+    expect(onEscape).not.toHaveBeenCalled();
   });
 
   it("rend le focus à ce qui l'a ouverte", () => {

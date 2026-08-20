@@ -235,3 +235,66 @@ export function IconPaperclip(props: IconProps) {
     </svg>
   );
 }
+
+/** Calendrier (agenda de l'équipement). */
+export function IconCalendar(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path d="M16 2v4M8 2v4M3 10h18" />
+    </svg>
+  );
+}
+
+/** Clé plate (entretien et relevés). */
+export function IconWrench(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z" />
+    </svg>
+  );
+}
+
+/**
+ * Euro barré (dépenses et soldes). L'arc enveloppe les barres et l'ensemble est centré dans la
+ * grille de 24 : un demi-cercle collé à droite laissait les barres flotter dans le vide à gauche,
+ * et l'icône paraissait décalée à côté des autres onglets.
+ */
+export function IconEuro(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M19 6a7 7 0 1 0 0 12" />
+      <path d="M5 10h9M5 14h9" />
+    </svg>
+  );
+}
+
+/** Chevron bas (déploie la feuille du sélecteur d'équipement). */
+export function IconChevronDown(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+/** Chevron haut (feuille du sélecteur ouverte). */
+export function IconChevronUp(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="m18 15-6-6-6 6" />
+    </svg>
+  );
+}
+
+/** Quatre cases (vue d'ensemble, tous équipements confondus). */
+export function IconGrid(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="14" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+    </svg>
+  );
+}

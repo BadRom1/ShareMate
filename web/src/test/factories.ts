@@ -66,6 +66,20 @@ export function aThread(over: Partial<ThreadSummary> = {}): ThreadSummary {
   };
 }
 
+export function aChecklist(over: Partial<ChecklistSummary> = {}): ChecklistSummary {
+  return {
+    id: 'c1',
+    equipmentId: 'e1',
+    authorId: 'm1',
+    title: 'Avant utilisation',
+    createdAt: '2026-03-01T08:00:00.000Z',
+    updatedAt: '2026-03-01T08:00:00.000Z',
+    itemCount: 2,
+    checkedCount: 0,
+    ...over,
+  };
+}
+
 export function aMessage(over: Partial<Message> = {}): Message {
   return {
     id: 'msg1',

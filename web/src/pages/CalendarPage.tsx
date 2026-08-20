@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import type { Member, Reservation } from '../api';
+import type { Equipment, Member, Reservation } from '../api';
 import { formatDay, formatTime, formatDateTime } from '../format';
 import { errorMessage, useApiResource } from '../useApiResource';
 import {
@@ -16,20 +16,40 @@ import {
 } from './calendar/grid';
 import { EMPTY_DRAFT, REPEAT_LABELS, STATUS_LABELS, ReservationForm, draftRange } from './calendar/ReservationForm';
 import { Modal } from '../components/Modal';
-import { IconPlus } from '../components/icons';
+import { Fab } from '../components/Fab';
 
 interface Props {
   members: Member[];
   currentMemberId: string;
-  /** Bascule vers l'onglet Usage avec l'équipement pré-sélectionné. */
+  /** Équipement de l'espace de travail courant, choisi dans la coque de l'application. */
+  equipment: Equipment;
+  /** Bascule vers l'onglet Entretien, sur l'équipement du créneau terminé. */
   onRecordUsage: (equipmentId: string) => void;
 }
 
 /** Couleurs attribuées aux équipements dans le calendrier (cycle). */
 const EQUIPMENT_COLORS = ['#1f6f54', '#2b5e8c', '#8c5e2b', '#6d3f8c', '#8c2b4e', '#3d7a7a', '#5e6d1f', '#994f1f'];
 
+/**
+ * Couleur de l'équipement : stable d'une session à l'autre, et distincte d'un espace de travail
+ * au suivant, sans dépendre du rang de l'équipement dans une liste qu'on ne charge plus ici.
+ */
+function equipmentColor(id: string): string {
+  let hash = 0;
+  for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) % EQUIPMENT_COLORS.length;
+  return EQUIPMENT_COLORS[hash];
+}
+
 /** Plage horaire affichée dans la vue semaine. */
 const WEEK_HOURS = { start: 6, end: 22 };
+
+/**
+ * Clé de lecture du code visuel des grilles. La légende visible a disparu, mais l'information
+ * reste due : rien d'autre ne dit qu'une bordure hachurée vaut « prévisionnel ». Réservée aux
+ * lecteurs d'écran, elle est posée juste avant la grille pour être lue au moment où elle sert.
+ */
+const GRID_LEGEND =
+  'Clé de lecture des créneaux : bordure pleine, créneau obligatoire ; fond hachuré, créneau prévisionnel ; point rouge, créneau en conflit.';
 
 const DISMISSED_KEY = 'sharemate.usageReminders.dismissed';
 
@@ -42,10 +62,9 @@ function loadDismissed(): string[] {
   }
 }
 
-export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props) {
+export function CalendarPage({ members, currentMemberId, equipment, onRecordUsage }: Props) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
-  const [equipmentFilter, setEquipmentFilter] = useState('all');
   const [view, setView] = useState<'month' | 'week' | 'list'>('month');
   const [editingId, setEditingId] = useState<string | null>(null);
   /** Le formulaire vit dans une modale : le calendrier reste ce qu'on voit en arrivant. */
@@ -61,45 +80,32 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
   // dans la grille, elle ne décrit plus ce qu'on a sous les yeux.
   useEffect(() => {
     setInfo(null);
-  }, [view, month, weekStart, equipmentFilter]);
+  }, [view, month, weekStart, equipment.id]);
 
   const [draft, setDraft] = useState(EMPTY_DRAFT);
 
   const resource = useApiResource(
     useCallback(async () => {
-      const [equipments, reservations] = await Promise.all([api.listEquipments(), api.calendar()]);
-      // Le brouillon part d'un équipement de mon cercle : ce sont les seuls que le formulaire
-      // propose, et un `select` qui affiche une option tout en en soumettant une autre réserverait
-      // à mon insu sur un matériel auquel je n'ai pas accès.
-      const mine = equipments.find((e) => e.memberIds.includes(currentMemberId));
-      setDraft((d) => (d.equipmentId === '' && mine ? { ...d, equipmentId: mine.id } : d));
-      return { equipments, reservations };
-    }, [currentMemberId]),
+      // L'agenda du serveur couvre tous les équipements : l'onglet ne montre que celui de
+      // l'espace de travail courant.
+      const reservations = await api.calendar();
+      return reservations.filter((r) => r.equipmentId === equipment.id);
+    }, [equipment.id]),
   );
 
-  const equipments = useMemo(() => resource.data?.equipments ?? [], [resource.data]);
-  const reservations = useMemo(() => resource.data?.reservations ?? [], [resource.data]);
+  const reservations = useMemo(() => resource.data ?? [], [resource.data]);
   /** Modale ouverte : l'échec de la saisie s'affiche dedans, la page derrière n'est pas lisible. */
   const pageError = formOpen ? resource.error : (actionError ?? resource.error);
+  /** Hors du cercle, l'agenda reste consultable mais aucun créneau n'est réservable. */
+  const inCircle = equipment.memberIds.includes(currentMemberId);
+  const color = equipmentColor(equipment.id);
 
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;
   }
 
-  function equipmentName(id: string) {
-    return equipments.find((e) => e.id === id)?.name ?? id;
-  }
-
-  function equipmentColor(id: string) {
-    const index = equipments.findIndex((e) => e.id === id);
-    return EQUIPMENT_COLORS[(index + EQUIPMENT_COLORS.length) % EQUIPMENT_COLORS.length];
-  }
-
-  /** Réservations de l'équipement du formulaire, hors réservation en cours d'édition. */
-  const siblings = useMemo(
-    () => reservations.filter((r) => r.equipmentId === draft.equipmentId && r.id !== editingId),
-    [reservations, draft.equipmentId, editingId],
-  );
+  /** Réservations voisines du créneau saisi, hors réservation en cours d'édition. */
+  const siblings = useMemo(() => reservations.filter((r) => r.id !== editingId), [reservations, editingId]);
 
   const byId = useMemo(() => new Map(reservations.map((r) => [r.id, r])), [reservations]);
 
@@ -137,27 +143,33 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
     localStorage.setItem(DISMISSED_KEY, JSON.stringify(next));
   }
 
-  function conflictTitle(r: Reservation): string {
-    const others = r.conflictIds
+  /** Les créneaux qui chevauchent celui-ci, décrits pour l'infobulle. */
+  function conflictPeers(r: Reservation): string {
+    return r.conflictIds
       .map((id) => byId.get(id))
       .filter((o): o is Reservation => Boolean(o))
-      .map((o) => `${memberName(o.memberId)} (${formatDateTime(o.start)} → ${formatDateTime(o.end)})`);
-    return others.length > 0 ? `En conflit avec : ${others.join(', ')}` : '';
+      .map((o) => `${memberName(o.memberId)} (${formatDateTime(o.start)} → ${formatDateTime(o.end)})`)
+      .join(', ');
+  }
+
+  function conflictTitle(r: Reservation): string {
+    const peers = conflictPeers(r);
+    return peers ? `En conflit avec : ${peers}` : '';
   }
 
   function closeForm() {
     setFormOpen(false);
     setEditingId(null);
     setActionError(null);
-    setDraft((d) => ({ ...EMPTY_DRAFT, equipmentId: d.equipmentId }));
+    setDraft(EMPTY_DRAFT);
   }
 
-  /** Nouvelle réservation : la saisie repart vierge, seul l'équipement choisi est conservé. */
+  /** Nouvelle réservation : la saisie repart vierge. */
   function openCreate() {
     setEditingId(null);
     setInfo(null);
     setActionError(null);
-    setDraft((d) => ({ ...EMPTY_DRAFT, equipmentId: d.equipmentId }));
+    setDraft(EMPTY_DRAFT);
     setFormOpen(true);
   }
 
@@ -169,7 +181,6 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
     setActionError(null);
     setFormOpen(true);
     setDraft({
-      equipmentId: r.equipmentId,
       startDate: dateKey(start),
       startTime: timeKey(start),
       endDate: dateKey(end),
@@ -213,7 +224,7 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
           return;
         }
         const created = await api.reserveRecurring({
-          equipmentId: draft.equipmentId,
+          equipmentId: equipment.id,
           start,
           end,
           status: draft.status,
@@ -229,7 +240,7 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
         closeForm();
       } else {
         const created = await api.reserve({
-          equipmentId: draft.equipmentId,
+          equipmentId: equipment.id,
           start,
           end,
           status: draft.status,
@@ -265,11 +276,7 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
     await resource.reload();
   }
 
-  const visible = useMemo(() => {
-    const filtered =
-      equipmentFilter === 'all' ? reservations : reservations.filter((r) => r.equipmentId === equipmentFilter);
-    return [...filtered].sort((a, b) => a.start.localeCompare(b.start));
-  }, [reservations, equipmentFilter]);
+  const visible = useMemo(() => [...reservations].sort((a, b) => a.start.localeCompare(b.start)), [reservations]);
 
   const monthDays = useMemo(() => monthGridDays(month), [month]);
   const eventsByDay = useMemo(() => reservationsByDay(visible), [visible]);
@@ -283,22 +290,33 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
     setDraft((f) => ({ ...f, startDate: key, endDate: key }));
   }
 
-  const accessibleEquipments = equipments.filter((e) => e.memberIds.includes(currentMemberId));
   const todayKey = dateKey(new Date());
   const monthLabel = month.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
   const weekLabel = `${days[0].toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} – ${days[6].toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}`;
 
-  function eventTitle(r: Reservation): string {
+  /**
+   * Description d'un créneau, clé de lecture du code visuel comprise : la légende sous la grille
+   * a disparu, chaque réservation porte donc elle-même de quoi décoder sa bordure et son point.
+   */
+  function eventLines(r: Reservation): string[] {
+    const peers = conflictPeers(r);
     return [
-      `${equipmentName(r.equipmentId)} — ${memberName(r.memberId)}`,
+      `${equipment.name} — ${memberName(r.memberId)}`,
       `${formatDateTime(r.start)} → ${formatDateTime(r.end)}`,
-      STATUS_LABELS[r.status],
-      conflictTitle(r),
+      r.status === 'PLANNED' ? `${STATUS_LABELS.PLANNED} (hachuré)` : `${STATUS_LABELS.REQUIRED} (bordure pleine)`,
+      r.conflictIds.length > 0 ? `Point rouge : conflit${peers ? ` avec ${peers}` : ''}` : '',
       r.notes ?? '',
-      r.memberId === currentMemberId ? 'Cliquer pour modifier' : '',
-    ]
-      .filter(Boolean)
-      .join('\n');
+    ].filter(Boolean);
+  }
+
+  /** Infobulle : la description, plus l'invite à modifier quand le créneau est le mien. */
+  function eventTitle(r: Reservation): string {
+    return [...eventLines(r), r.memberId === currentMemberId ? 'Cliquer pour modifier' : ''].filter(Boolean).join('\n');
+  }
+
+  /** Même contenu pour les lecteurs d'écran, sur une seule ligne. */
+  function eventLabel(r: Reservation): string {
+    return eventLines(r).join(' · ');
   }
 
   function eventClick(r: Reservation, e: React.MouseEvent) {
@@ -317,15 +335,15 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
       {myLosingConflicts.length > 0 && (
         <div className="alert">
           ⚠️ Vous n'êtes pas prioritaire sur {myLosingConflicts.length} de vos réservations :{' '}
-          {myLosingConflicts.map((r) => `${equipmentName(r.equipmentId)} le ${formatDateTime(r.start)}`).join(' ; ')}.
-          Voyez avec les membres concernés ou déplacez vos créneaux.
+          {myLosingConflicts.map((r) => `${equipment.name} le ${formatDateTime(r.start)}`).join(' ; ')}. Voyez avec les
+          membres concernés ou déplacez vos créneaux.
         </div>
       )}
 
       {usageReminders.map((r) => (
         <div className="notice" key={r.id}>
-          🔧 Votre créneau <strong>{equipmentName(r.equipmentId)}</strong> ({formatDateTime(r.start)} →{' '}
-          {formatDateTime(r.end)}) est terminé. Pensez à saisir le relevé du compteur.{' '}
+          🔧 Votre créneau <strong>{equipment.name}</strong> ({formatDateTime(r.start)} → {formatDateTime(r.end)}) est
+          terminé. Pensez à saisir le relevé du compteur.{' '}
           <button type="button" className="ghost" onClick={() => onRecordUsage(r.equipmentId)}>
             Saisir le relevé
           </button>{' '}
@@ -336,71 +354,52 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
       ))}
 
       <div className="card">
-        <div className="row" style={{ alignItems: 'center', marginBottom: '0.75rem' }}>
-          <h3 style={{ margin: 0, flex: '0 1 auto' }}>Calendrier partagé</h3>
-          <button
-            type="button"
-            className="primary card-action"
-            onClick={openCreate}
-            disabled={resource.loading}
-            title={resource.loading ? 'Chargement des équipements…' : undefined}
-          >
-            <IconPlus size={16} /> Réserver un créneau
+        <div className="view-toggle" role="group" aria-label="Vue du calendrier">
+          <button type="button" className={view === 'month' ? 'active' : ''} onClick={() => setView('month')}>
+            Mois
           </button>
-          <div className="view-toggle" style={{ flex: '0 0 auto' }}>
-            <button type="button" className={view === 'month' ? 'active' : ''} onClick={() => setView('month')}>
-              Mois
-            </button>
-            <button type="button" className={view === 'week' ? 'active' : ''} onClick={() => setView('week')}>
-              Semaine
-            </button>
-            <button type="button" className={view === 'list' ? 'active' : ''} onClick={() => setView('list')}>
-              Liste
-            </button>
-          </div>
-          <select
-            style={{ flex: '0 0 auto', marginLeft: 'auto' }}
-            value={equipmentFilter}
-            onChange={(e) => setEquipmentFilter(e.target.value)}
-          >
-            <option value="all">Tous les équipements</option>
-            {equipments.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.name}
-              </option>
-            ))}
-          </select>
+          <button type="button" className={view === 'week' ? 'active' : ''} onClick={() => setView('week')}>
+            Semaine
+          </button>
+          <button type="button" className={view === 'list' ? 'active' : ''} onClick={() => setView('list')}>
+            Liste
+          </button>
         </div>
 
         {view === 'month' && (
           <>
             <div className="cal-nav">
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}
-              >
-                ‹
-              </button>
-              <strong style={{ textTransform: 'capitalize' }}>{monthLabel}</strong>
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}
-              >
-                ›
-              </button>
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => {
-                  const now = new Date();
-                  setMonth(new Date(now.getFullYear(), now.getMonth(), 1));
-                }}
-              >
-                Aujourd'hui
-              </button>
+              <strong className="cal-period-label month">{monthLabel}</strong>
+              <div className="cal-nav-actions">
+                <button
+                  type="button"
+                  className="ghost cal-nav-arrow"
+                  aria-label="Mois précédent"
+                  onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}
+                >
+                  ‹
+                </button>
+                <button
+                  type="button"
+                  className="ghost cal-nav-arrow"
+                  aria-label="Mois suivant"
+                  onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}
+                >
+                  ›
+                </button>
+                <button
+                  type="button"
+                  className="ghost cal-nav-today"
+                  onClick={() => {
+                    const now = new Date();
+                    setMonth(new Date(now.getFullYear(), now.getMonth(), 1));
+                  }}
+                >
+                  Aujourd'hui
+                </button>
+              </div>
             </div>
+            <p className="visually-hidden">{GRID_LEGEND}</p>
             <div className="cal-grid">
               {['lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.', 'dim.'].map((d) => (
                 <div className="cal-head" key={d}>
@@ -423,58 +422,64 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
                       <div
                         key={r.id}
                         className={`cal-event${r.status === 'PLANNED' ? ' planned' : ''}${r.conflictIds.length > 0 ? ' conflict' : ''}${r.memberId === currentMemberId ? ' mine' : ''}`}
-                        style={{ borderLeftColor: equipmentColor(r.equipmentId) }}
+                        style={{ borderLeftColor: color }}
                         title={eventTitle(r)}
+                        aria-label={eventLabel(r)}
                         onClick={(e) => eventClick(r, e)}
                       >
                         {r.conflictIds.length > 0 && <span className="conflict-dot" />}
                         <span className="cal-event-time">
                           {dateKey(new Date(r.start)) === key ? formatTime(r.start) : '…'}
                         </span>{' '}
-                        {equipmentName(r.equipmentId)} · {memberName(r.memberId)}
+                        {memberName(r.memberId)}
                       </div>
                     ))}
                   </div>
                 );
               })}
             </div>
-            <p className="muted" style={{ marginBottom: 0 }}>
-              Bordure pleine : obligatoire · hachuré : prévisionnel · point rouge : conflit. Cliquez sur un jour pour le
-              réserver, sur une de vos réservations pour la modifier.
-            </p>
           </>
         )}
 
         {view === 'week' && (
           <>
             <div className="cal-nav">
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => {
-                  const d = new Date(weekStart);
-                  d.setDate(d.getDate() - 7);
-                  setWeekStart(d);
-                }}
-              >
-                ‹
-              </button>
-              <strong>{weekLabel}</strong>
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => {
-                  const d = new Date(weekStart);
-                  d.setDate(d.getDate() + 7);
-                  setWeekStart(d);
-                }}
-              >
-                ›
-              </button>
-              <button type="button" className="ghost" onClick={() => setWeekStart(startOfWeek(new Date()))}>
-                Aujourd'hui
-              </button>
+              <strong className="cal-period-label">{weekLabel}</strong>
+              <div className="cal-nav-actions">
+                <button
+                  type="button"
+                  className="ghost cal-nav-arrow"
+                  aria-label="Semaine précédente"
+                  onClick={() => {
+                    const d = new Date(weekStart);
+                    d.setDate(d.getDate() - 7);
+                    setWeekStart(d);
+                  }}
+                >
+                  ‹
+                </button>
+                <button
+                  type="button"
+                  className="ghost cal-nav-arrow"
+                  aria-label="Semaine suivante"
+                  onClick={() => {
+                    const d = new Date(weekStart);
+                    d.setDate(d.getDate() + 7);
+                    setWeekStart(d);
+                  }}
+                >
+                  ›
+                </button>
+                <button
+                  type="button"
+                  className="ghost cal-nav-today"
+                  onClick={() => setWeekStart(startOfWeek(new Date()))}
+                >
+                  Aujourd'hui
+                </button>
+              </div>
             </div>
+            <p className="visually-hidden">{GRID_LEGEND}</p>
             <div className="week-grid">
               <div className="week-hours-col">
                 <div className="week-head" />
@@ -500,7 +505,8 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
                       onClick={() => pickDay(day)}
                       title="Cliquer pour réserver ce jour"
                     >
-                      {day.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric' })}
+                      <span className="week-head-day">{day.toLocaleDateString('fr-FR', { weekday: 'short' })}</span>
+                      <span className="week-head-date">{day.getDate()}</span>
                     </div>
                     <div className="week-body" onClick={() => pickDay(day)}>
                       {placed.map(({ reservation: r, lane, top, height }) => (
@@ -512,13 +518,14 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
                             height: `${height}%`,
                             left: `${(lane * 100) / laneCount}%`,
                             width: `${100 / laneCount}%`,
-                            borderLeftColor: equipmentColor(r.equipmentId),
+                            borderLeftColor: color,
                           }}
                           title={eventTitle(r)}
+                          aria-label={eventLabel(r)}
                           onClick={(e) => eventClick(r, e)}
                         >
                           {r.conflictIds.length > 0 && <span className="conflict-dot" />}
-                          <span className="cal-event-time">{formatTime(r.start)}</span> {equipmentName(r.equipmentId)}
+                          <span className="cal-event-time">{formatTime(r.start)}</span>
                           <br />
                           {memberName(r.memberId)}
                         </div>
@@ -528,9 +535,9 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
                 );
               })}
             </div>
-            <p className="muted" style={{ marginBottom: 0 }}>
+            <p className="muted cal-note">
               Plage affichée : {WEEK_HOURS.start} h – {WEEK_HOURS.end} h. Les réservations en conflit s'affichent côte à
-              côte. Cliquez sur une de vos réservations pour la modifier.
+              côte.
             </p>
           </>
         )}
@@ -546,13 +553,12 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
                   return (
                     <div
                       className={`reservation-item${r.conflictIds.length > 0 ? ' conflict' : ''}`}
-                      style={{ borderLeftColor: equipmentColor(r.equipmentId) }}
+                      style={{ borderLeftColor: color }}
                       key={r.id}
                     >
                       <span className="time">
                         {formatTime(r.start)} → {multiDay ? formatDateTime(r.end) : formatTime(r.end)}
                       </span>
-                      <span className="badge">{equipmentName(r.equipmentId)}</span>
                       <span>{memberName(r.memberId)}</span>
                       {r.status === 'PLANNED' && <span className="badge warn">Prévisionnel</span>}
                       {r.conflictIds.length > 0 && (
@@ -583,11 +589,10 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
       {formOpen && (
         <Modal title={editingId ? 'Modifier la réservation' : 'Réserver un créneau'} onClose={closeForm}>
           {actionError && <div className="alert">{actionError}</div>}
-          {!editingId && accessibleEquipments.length === 0 ? (
-            <p className="muted">Vous ne faites partie du cercle d'aucun équipement.</p>
+          {!editingId && !inCircle ? (
+            <p className="muted">Vous ne faites pas partie du cercle de cet équipement.</p>
           ) : (
             <ReservationForm
-              equipments={editingId ? equipments : accessibleEquipments}
               members={members}
               siblings={siblings}
               editing={Boolean(editingId)}
@@ -599,6 +604,8 @@ export function CalendarPage({ members, currentMemberId, onRecordUsage }: Props)
           )}
         </Modal>
       )}
+
+      <Fab label="Réserver un créneau" onClick={openCreate} />
     </>
   );
 }

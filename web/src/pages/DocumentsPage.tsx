@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DOCUMENT_CATEGORIES, api, documentContentUrl } from '../api';
-import type { DocumentCategory, EquipmentDocument, Member } from '../api';
+import type { DocumentCategory, Equipment, EquipmentDocument, Member } from '../api';
 import { DOCUMENT_CATEGORY_LABELS, formatBytes, formatDate, linkHost } from '../format';
-import { pickInitialEquipmentId, setLastEquipmentId } from '../lastEquipment';
 import { clearErrors, errorMessage, firstError, useApiResource } from '../useApiResource';
 import {
   IconCheck,
@@ -16,12 +15,13 @@ import {
   IconUpload,
 } from '../components/icons';
 import { Modal } from '../components/Modal';
+import { Fab } from '../components/Fab';
 
 interface Props {
   members: Member[];
   currentMemberId: string;
-  /** Équipement présélectionné (arrivée depuis un lien). */
-  initialEquipmentId?: string | null;
+  /** Équipement de l'espace de travail courant, choisi dans la coque de l'application. */
+  equipment: Equipment;
 }
 
 /** Nature en cours d'ajout dans la modale : un fichier à déposer, ou un lien à coller. */
@@ -34,12 +34,8 @@ type Filter = DocumentCategory | '*';
  * Dossier de documents d'un équipement : fichiers déposés dans le stockage d'objets et liens
  * externes, dans une seule liste. Un document appartient au cercle et non à son déposant — tout
  * membre peut le renommer, le reclasser et le supprimer ; le nom du déposant reste affiché.
- *
- * Seuls les équipements dont l'utilisateur fait partie du cercle sont proposés : hors du cercle,
- * rien n'est visible (le serveur applique la même règle, y compris en lecture).
  */
-export function DocumentsPage({ members, currentMemberId, initialEquipmentId }: Props) {
-  const [selectedId, setSelectedId] = useState('');
+export function DocumentsPage({ members, equipment }: Props) {
   const [filter, setFilter] = useState<Filter>('*');
   const [search, setSearch] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
@@ -57,30 +53,14 @@ export function DocumentsPage({ members, currentMemberId, initialEquipmentId }: 
   const [editName, setEditName] = useState('');
   const [editCategory, setEditCategory] = useState<DocumentCategory>('OTHER');
 
-  const equipmentsResource = useApiResource(
-    useCallback(async () => {
-      // Filtré au cercle de l'utilisateur : un équipement qu'il ne partage pas n'a pas à
-      // apparaître, et son dossier lui serait de toute façon refusé par l'API.
-      const mine = (await api.listEquipments()).filter((e) => e.memberIds.includes(currentMemberId));
-      setSelectedId((id) =>
-        pickInitialEquipmentId(mine, currentMemberId, { current: id, deepLink: initialEquipmentId }),
-      );
-      return mine;
-    }, [currentMemberId, initialEquipmentId]),
-  );
+  const documentsResource = useApiResource(useCallback(() => api.listDocuments(equipment.id), [equipment.id]));
 
-  const documentsResource = useApiResource(
-    useCallback(async () => (selectedId ? api.listDocuments(selectedId) : []), [selectedId]),
-  );
-
-  const equipments = equipmentsResource.data ?? [];
   const documents = useMemo(() => documentsResource.data ?? [], [documentsResource.data]);
-  const error = actionError ?? firstError(equipmentsResource, documentsResource);
+  const error = actionError ?? firstError(documentsResource);
 
-  const selected = equipments.find((e) => e.id === selectedId) ?? null;
   const circle = useMemo(
-    () => (selected ? members.filter((m) => selected.memberIds.includes(m.id)) : []),
-    [selected, members],
+    () => members.filter((m) => equipment.memberIds.includes(m.id)),
+    [equipment.memberIds, members],
   );
 
   const counts = useMemo(() => {
@@ -107,12 +87,7 @@ export function DocumentsPage({ members, currentMemberId, initialEquipmentId }: 
     setFilter('*');
     setSearch('');
     setEditingId(null);
-  }, [selectedId]);
-
-  // Mémorise l'équipement consulté (partagé avec les autres onglets).
-  useEffect(() => {
-    if (selectedId) setLastEquipmentId(selectedId);
-  }, [selectedId]);
+  }, [equipment.id]);
 
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;
@@ -122,13 +97,15 @@ export function DocumentsPage({ members, currentMemberId, initialEquipmentId }: 
     setActionError(errorMessage(e));
   }
 
-  function openDraft(kind: Draft) {
+  function openDraft() {
     setActionError(null);
     setNewName('');
     setNewUrl('');
     setNewFile(null);
     setNewCategory('MANUAL');
-    setDraft(kind);
+    // Le sélecteur de nature ouvre la modale : les deux chemins sont à un clic l'un de l'autre,
+    // aucun n'est caché derrière l'autre. Le dépôt de fichier est simplement celui qui est prêt.
+    setDraft('file');
   }
 
   function closeDraft() {
@@ -143,20 +120,19 @@ export function DocumentsPage({ members, currentMemberId, initialEquipmentId }: 
 
   async function submitDraft(event: React.FormEvent) {
     event.preventDefault();
-    if (!selectedId) return;
     setBusy(true);
     setActionError(null);
     try {
       if (draft === 'link') {
         await api.addDocumentLink({
-          equipmentId: selectedId,
+          equipmentId: equipment.id,
           url: newUrl.trim(),
           name: newName.trim() || undefined,
           category: newCategory,
         });
       } else if (newFile) {
         await api.uploadDocument(newFile, {
-          equipmentId: selectedId,
+          equipmentId: equipment.id,
           category: newCategory,
           name: newName.trim() || undefined,
         });
@@ -192,15 +168,6 @@ export function DocumentsPage({ members, currentMemberId, initialEquipmentId }: 
     }
   }
 
-  if (equipments.length === 0) {
-    return (
-      <>
-        {error && <div className="alert">{error}</div>}
-        <p className="empty">Aucun équipement partagé avec vous : les documents s’organisent par équipement.</p>
-      </>
-    );
-  }
-
   return (
     <>
       {error && (
@@ -208,7 +175,7 @@ export function DocumentsPage({ members, currentMemberId, initialEquipmentId }: 
           className="alert"
           onClick={() => {
             setActionError(null);
-            clearErrors(equipmentsResource, documentsResource);
+            clearErrors(documentsResource);
           }}
         >
           {error}
@@ -216,23 +183,9 @@ export function DocumentsPage({ members, currentMemberId, initialEquipmentId }: 
       )}
 
       <div className="card">
-        <div className="row" style={{ alignItems: 'center' }}>
-          <label className="field" style={{ flex: '0 0 auto', minWidth: '16rem' }}>
-            Équipement
-            <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
-              {equipments.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {selected && (
-            <p className="muted" style={{ margin: 0 }}>
-              Cercle : {circle.map((m) => m.name).join(', ')}
-            </p>
-          )}
-        </div>
+        <p className="muted" style={{ margin: 0 }}>
+          Cercle : {circle.map((m) => m.name).join(', ')}
+        </p>
       </div>
 
       <div className="card">
@@ -248,12 +201,6 @@ export function DocumentsPage({ members, currentMemberId, initialEquipmentId }: 
               aria-label="Rechercher un document"
             />
           </div>
-          <button className="ghost" onClick={() => openDraft('link')}>
-            <IconLink size={16} /> Ajouter un lien
-          </button>
-          <button className="btn-primary" onClick={() => openDraft('file')}>
-            <IconUpload size={16} /> Déposer un fichier
-          </button>
         </div>
 
         <div className="chips">
@@ -371,8 +318,9 @@ export function DocumentsPage({ members, currentMemberId, initialEquipmentId }: 
         )}
       </div>
 
+      {/* Titre neutre : la nature se choisit dans la boîte, le titre n'en annonce donc aucune. */}
       {draft && (
-        <Modal title={draft === 'file' ? 'Déposer un fichier' : 'Ajouter un lien'} onClose={closeDraft}>
+        <Modal title="Ajouter un document" onClose={closeDraft}>
           <form onSubmit={submitDraft} className="modal-form">
             <div className="nature">
               <button
@@ -471,6 +419,9 @@ export function DocumentsPage({ members, currentMemberId, initialEquipmentId }: 
           </form>
         </Modal>
       )}
+
+      {/* Seul chemin d'ajout de l'écran, fichier comme lien : le libellé couvre les deux natures. */}
+      <Fab label="Ajouter un document" onClick={openDraft} />
     </>
   );
 }
