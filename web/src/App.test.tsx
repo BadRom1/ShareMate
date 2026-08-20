@@ -70,7 +70,7 @@ describe('navigation par lien de notification', () => {
 
     render(<App />);
 
-    await waitFor(() => expect(activeTab()).toBe('Entretien'));
+    await waitFor(() => expect(activeTab()).toBe('Machine'));
     expect(currentEquipment()).toBe('Remorque');
     // L'onglet est marqué actif avant que `UsagePage` n'ait lancé sa requête : attendre l'appel
     // plutôt que le supposer déjà parti, sinon l'assertion court après l'effet (échec intermittent).
@@ -96,7 +96,7 @@ describe('navigation par lien de notification', () => {
 
     clickNotification('/?tab=checklists&equipment=e2');
 
-    await waitFor(() => expect(activeTab()).toBe('Entretien'));
+    await waitFor(() => expect(activeTab()).toBe('Machine'));
     expect(currentEquipment()).toBe('Remorque');
     await waitFor(() => expect(stub.listChecklists).toHaveBeenCalledWith('e2'));
   });
@@ -121,11 +121,11 @@ describe('navigation par lien de notification', () => {
   it("ignore un lien dont l'onglet est inconnu plutôt que de vider l'écran", async () => {
     window.history.replaceState(null, '', '/?tab=usage&equipment=e2');
     render(<App />);
-    await waitFor(() => expect(activeTab()).toBe('Entretien'));
+    await waitFor(() => expect(activeTab()).toBe('Machine'));
 
     clickNotification('/?tab=inconnu&equipment=e2');
 
-    expect(activeTab()).toBe('Entretien');
+    expect(activeTab()).toBe('Machine');
     expect(currentEquipment()).toBe('Remorque');
   });
 
@@ -137,7 +137,7 @@ describe('navigation par lien de notification', () => {
 
     render(<App />);
 
-    await waitFor(() => expect(activeTab()).toBe('Entretien'));
+    await waitFor(() => expect(activeTab()).toBe('Machine'));
     expect(currentEquipment()).toBe('Tracteur');
     expect(screen.queryByText(/Aucun équipement partagé avec vous/)).toBeNull();
     await waitFor(() => expect(stub.usageByEquipment).toHaveBeenCalledWith('e1'));

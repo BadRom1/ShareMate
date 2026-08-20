@@ -62,7 +62,7 @@ describe('AppShell', () => {
       .getAllByRole('button')
       .map((b) => b.textContent);
 
-    expect(libelles).toEqual(['Agenda', 'Entretien', 'Dépenses', 'Forum', 'Documents']);
+    expect(libelles).toEqual(['Agenda', 'Machine', 'Dépenses', 'Forum', 'Documents']);
   });
 
   it('signale l’onglet courant par aria-current', () => {

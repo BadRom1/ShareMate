@@ -3,7 +3,8 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type * as ApiModule from '../api';
 import { MaintenancePage } from './MaintenancePage';
-import { aChecklist, aMember, anEquipment, createApiStub } from '../test/factories';
+import type { MaintenanceSection } from '../navigation';
+import { aChecklist, aMember, aSubEquipment, anEquipment, createApiStub } from '../test/factories';
 import type { ApiStub } from '../test/factories';
 
 const mocks = vi.hoisted(() => ({ api: {} as Record<string, unknown> }));
@@ -26,7 +27,7 @@ beforeEach(() => {
   stub.listChecklists.mockResolvedValue([aChecklist({ title: 'Avant utilisation' })]);
 });
 
-function renderPage(section: 'usage' | 'checklists', onSelectSection = vi.fn()) {
+function renderPage(section: MaintenanceSection, onSelectSection = vi.fn()) {
   render(
     <MaintenancePage
       members={members}
@@ -39,7 +40,7 @@ function renderPage(section: 'usage' | 'checklists', onSelectSection = vi.fn()) 
   return onSelectSection;
 }
 
-describe('sous-onglets de l’entretien', () => {
+describe('sous-onglets de la machine', () => {
   it('montre les relevés et marque la pastille « Relevés » comme active', async () => {
     renderPage('usage');
 
@@ -59,6 +60,16 @@ describe('sous-onglets de l’entretien', () => {
     expect((await screen.findByRole('button', { name: 'Créer une checklist' })).classList.contains('fab')).toBe(true);
     expect(document.querySelectorAll('.fab')).toHaveLength(1);
     expect(screen.getByRole('tab', { name: 'Checklists' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tab', { name: 'Relevés' }).getAttribute('aria-selected')).toBe('false');
+  });
+
+  it('montre le contenu du lot déplié et marque sa pastille comme active', async () => {
+    stub.listSubEquipments.mockResolvedValue([aSubEquipment({ id: 's1', name: 'Remorque' })]);
+    renderPage('lot');
+
+    expect(await screen.findByText('Remorque')).toBeDefined();
+    expect(screen.queryByRole('button', { name: /^Contenu du lot/ })).toBeNull();
+    expect(screen.getByRole('tab', { name: 'Contenu du lot' }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('tab', { name: 'Relevés' }).getAttribute('aria-selected')).toBe('false');
   });
 

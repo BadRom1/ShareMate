@@ -30,13 +30,13 @@ describe('parseRoute', () => {
     expect(parseRoute('/?tab=calendar')).toEqual(aRoute({ equipmentId: null, tab: 'agenda' }));
   });
 
-  it('traduit l’ancien onglet Usage vers la section Usage de l’entretien', () => {
+  it('traduit l’ancien onglet Usage vers la section Relevés de l’onglet Machine', () => {
     expect(parseRoute('/?tab=usage&equipment=e2')).toEqual(
       aRoute({ equipmentId: 'e2', tab: 'maintenance', section: 'usage' }),
     );
   });
 
-  it('traduit l’ancien onglet Checklists vers la section Checklists de l’entretien', () => {
+  it('traduit l’ancien onglet Checklists vers la section Checklists de l’onglet Machine', () => {
     expect(parseRoute('/?tab=checklists&equipment=e2')).toEqual(
       aRoute({ equipmentId: 'e2', tab: 'maintenance', section: 'checklists' }),
     );
@@ -62,9 +62,12 @@ describe('parseRoute', () => {
     expect(parseRoute('/?tab=discussions&equipment=e1&thread=t1')).toEqual(aRoute({ tab: 'forum', threadId: 't1' }));
   });
 
-  it('lit la sous-section d’entretien passée à part', () => {
+  it('lit la sous-section de la machine passée à part', () => {
     expect(parseRoute('/?tab=maintenance&equipment=e1&section=checklists')).toEqual(
       aRoute({ tab: 'maintenance', section: 'checklists' }),
+    );
+    expect(parseRoute('/?tab=maintenance&equipment=e1&section=lot')).toEqual(
+      aRoute({ tab: 'maintenance', section: 'lot' }),
     );
   });
 
@@ -95,10 +98,13 @@ describe('routeToSearch', () => {
     expect(routeToSearch({ view: 'equipments' })).toBe('?view=equipments');
   });
 
-  it('écrit le fil du forum et la sous-section d’entretien', () => {
+  it('écrit le fil du forum et la sous-section de la machine', () => {
     expect(routeToSearch(aRoute({ tab: 'forum', threadId: 't1' }))).toBe('?equipment=e1&tab=forum&thread=t1');
     expect(routeToSearch(aRoute({ tab: 'maintenance', section: 'checklists' }))).toBe(
       '?equipment=e1&tab=maintenance&section=checklists',
+    );
+    expect(routeToSearch(aRoute({ tab: 'maintenance', section: 'lot' }))).toBe(
+      '?equipment=e1&tab=maintenance&section=lot',
     );
   });
 
@@ -109,6 +115,7 @@ describe('routeToSearch', () => {
       aRoute({ tab: 'forum', threadId: 't1' }),
       aRoute({ tab: 'maintenance', section: 'checklists' }),
       aRoute({ tab: 'maintenance', section: 'usage' }),
+      aRoute({ tab: 'maintenance', section: 'lot' }),
       aRoute({ tab: 'documents' }),
       { view: 'overview' },
       { view: 'equipments' },
@@ -120,7 +127,7 @@ describe('routeToSearch', () => {
 describe('TABS', () => {
   it('liste les cinq onglets de la barre basse dans l’ordre', () => {
     expect(TABS.map((t) => t.id)).toEqual(['agenda', 'maintenance', 'expenses', 'forum', 'documents']);
-    expect(TABS.map((t) => t.label)).toEqual(['Agenda', 'Entretien', 'Dépenses', 'Forum', 'Documents']);
+    expect(TABS.map((t) => t.label)).toEqual(['Agenda', 'Machine', 'Dépenses', 'Forum', 'Documents']);
   });
 });
 
@@ -137,6 +144,15 @@ describe('useRoute', () => {
     const { result } = renderHook(() => useRoute());
 
     expect(result.current.route).toEqual(aRoute({ equipmentId: 'e2', tab: 'maintenance', section: 'usage' }));
+  });
+
+  it('rouvre le contenu du lot après un rechargement de la page', () => {
+    window.history.replaceState(null, '', '/?tab=maintenance&equipment=e1&section=lot');
+
+    const { result } = renderHook(() => useRoute());
+
+    expect(result.current.route).toEqual(aRoute({ tab: 'maintenance', section: 'lot' }));
+    expect(window.location.search).toBe('?equipment=e1&tab=maintenance&section=lot');
   });
 
   it('n’empile pas d’entrée d’historique au premier rendu', () => {

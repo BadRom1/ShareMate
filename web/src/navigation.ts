@@ -11,14 +11,14 @@ export type Tab = 'agenda' | 'maintenance' | 'expenses' | 'forum' | 'documents';
 /** Ordre d'affichage dans la barre basse. */
 export const TABS: { id: Tab; label: string }[] = [
   { id: 'agenda', label: 'Agenda' },
-  { id: 'maintenance', label: 'Entretien' },
+  { id: 'maintenance', label: 'Machine' },
   { id: 'expenses', label: 'Dépenses' },
   { id: 'forum', label: 'Forum' },
   { id: 'documents', label: 'Documents' },
 ];
 
-/** Sous-section de l'onglet Entretien. */
-export type MaintenanceSection = 'usage' | 'checklists';
+/** Sous-section de l'onglet Machine : ce qu'on relève, ce qu'on vérifie, ce qui part avec elle. */
+export type MaintenanceSection = 'usage' | 'checklists' | 'lot';
 
 export type Route =
   | { view: 'equipment'; equipmentId: string | null; tab: Tab; section: MaintenanceSection; threadId: string | null }
@@ -55,7 +55,7 @@ const OVERVIEW_TABS = ['equipments', 'overview'];
 const DEFAULT_SECTION: MaintenanceSection = 'usage';
 
 function isSection(value: string | null): value is MaintenanceSection {
-  return value === 'usage' || value === 'checklists';
+  return value === 'usage' || value === 'checklists' || value === 'lot';
 }
 
 /** Route par défaut : le premier onglet du dernier équipement consulté. */

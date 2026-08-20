@@ -2,11 +2,13 @@ import type { Equipment, Member } from '../api';
 import type { MaintenanceSection } from '../navigation';
 import { UsagePage } from './UsagePage';
 import { ChecklistsPage } from './ChecklistsPage';
+import { LotPage } from './LotPage';
 
-/** Les deux faces de l'entretien : ce qu'on a relevé, ce qu'on a vérifié. */
+/** Les trois faces de la machine : ce qu'on a relevé, ce qu'on a vérifié, ce qui part avec elle. */
 const SECTIONS: { id: MaintenanceSection; label: string }[] = [
   { id: 'usage', label: 'Relevés' },
   { id: 'checklists', label: 'Checklists' },
+  { id: 'lot', label: 'Contenu du lot' },
 ];
 
 interface Props {
@@ -20,8 +22,8 @@ interface Props {
 }
 
 /**
- * Entretien de l'équipement courant : relevés d'usage et checklists sous un même onglet.
- * La page ne fait que choisir laquelle des deux vues afficher — chacune garde sa logique.
+ * Machine courante : relevés d'usage, checklists et contenu du lot sous un même onglet.
+ * La page ne fait que choisir laquelle des trois vues afficher — chacune garde sa logique.
  */
 export function MaintenancePage({ members, currentMemberId, equipment, section, onSelectSection }: Props) {
   return (
@@ -40,11 +42,11 @@ export function MaintenancePage({ members, currentMemberId, equipment, section, 
         ))}
       </div>
 
-      {section === 'usage' ? (
-        <UsagePage members={members} currentMemberId={currentMemberId} equipment={equipment} />
-      ) : (
+      {section === 'usage' && <UsagePage members={members} currentMemberId={currentMemberId} equipment={equipment} />}
+      {section === 'checklists' && (
         <ChecklistsPage members={members} currentMemberId={currentMemberId} equipment={equipment} />
       )}
+      {section === 'lot' && <LotPage equipment={equipment} />}
     </>
   );
 }

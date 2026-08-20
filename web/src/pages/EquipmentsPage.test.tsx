@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import type * as ApiModule from '../api';
 import { EquipmentsPage } from './EquipmentsPage';
 import { ApiError } from '../api';
-import { aMember, aSubEquipment, anEquipment, createApiStub } from '../test/factories';
+import { aMember, anEquipment, createApiStub } from '../test/factories';
 import type { ApiStub } from '../test/factories';
 
 const mocks = vi.hoisted(() => ({ api: {} as Record<string, unknown> }));
@@ -70,95 +70,5 @@ describe('quitter le cercle', () => {
 
     expect(await screen.findByText('Équipement introuvable : e1')).toBeTruthy();
     expect(screen.getByText('Tracteur')).toBeTruthy();
-  });
-});
-
-describe('contenu du lot (sous-équipements)', () => {
-  it('affiche le lot replié, puis le détaille à l’ouverture', async () => {
-    const user = userEvent.setup();
-    stub.listEquipments.mockResolvedValue([anEquipment({ id: 'e1', name: 'Minipelle' })]);
-    stub.listSubEquipments.mockResolvedValue([
-      aSubEquipment({ id: 's1', name: 'Remorque', notes: 'Plaque AB-123-CD' }),
-      aSubEquipment({ id: 's2', name: 'Godets', quantity: 3, position: 1 }),
-    ]);
-    renderPage();
-
-    // Replié : le décompte suffit, le détail attend un geste.
-    const toggle = await screen.findByRole('button', { name: /Contenu du lot/ });
-    expect(screen.queryByText('Remorque')).toBeNull();
-
-    await user.click(toggle);
-    expect(screen.getByText('Remorque')).toBeTruthy();
-    expect(screen.getByText('Plaque AB-123-CD')).toBeTruthy();
-    expect(screen.getByText('Godets')).toBeTruthy();
-    // La quantité n'est affichée que lorsqu'il y a plus d'un exemplaire.
-    expect(screen.getByText('3 ×')).toBeTruthy();
-  });
-
-  it('ajoute un élément au lot puis relit la liste', async () => {
-    const user = userEvent.setup();
-    stub.listEquipments.mockResolvedValue([anEquipment({ id: 'e1', name: 'Minipelle' })]);
-    renderPage();
-
-    await user.click(await screen.findByRole('button', { name: /Contenu du lot/ }));
-    await user.type(screen.getByLabelText('Nom du sous-équipement à ajouter'), 'Jerrican');
-    await user.clear(screen.getByLabelText('Quantité à ajouter'));
-    await user.type(screen.getByLabelText('Quantité à ajouter'), '2');
-    await user.type(screen.getByLabelText('Précision à ajouter'), '20 L');
-    await user.click(screen.getByRole('button', { name: 'Ajouter au lot' }));
-
-    await waitFor(() =>
-      expect(stub.addSubEquipment).toHaveBeenCalledWith({
-        equipmentId: 'e1',
-        name: 'Jerrican',
-        quantity: 2,
-        notes: '20 L',
-      }),
-    );
-    // Le lot est relu avec la liste des équipements : l'ajout doit apparaître sans recharger la page.
-    await waitFor(() => expect(stub.listSubEquipments).toHaveBeenCalledTimes(2));
-  });
-
-  it('corrige la quantité d’un élément du lot', async () => {
-    const user = userEvent.setup();
-    stub.listEquipments.mockResolvedValue([anEquipment({ id: 'e1', name: 'Minipelle' })]);
-    stub.listSubEquipments.mockResolvedValue([aSubEquipment({ id: 's2', name: 'Godets', quantity: 2 })]);
-    renderPage();
-
-    await user.click(await screen.findByRole('button', { name: /Contenu du lot/ }));
-    await user.click(screen.getByRole('button', { name: 'Modifier Godets' }));
-    const quantité = screen.getByLabelText('Quantité');
-    await user.clear(quantité);
-    await user.type(quantité, '4');
-    await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
-
-    await waitFor(() =>
-      expect(stub.updateSubEquipment).toHaveBeenCalledWith('s2', { name: 'Godets', quantity: 4, notes: null }),
-    );
-  });
-
-  it('retire un élément du lot', async () => {
-    const user = userEvent.setup();
-    stub.listEquipments.mockResolvedValue([anEquipment({ id: 'e1', name: 'Minipelle' })]);
-    stub.listSubEquipments.mockResolvedValue([aSubEquipment({ id: 's1', name: 'Remorque' })]);
-    renderPage();
-
-    await user.click(await screen.findByRole('button', { name: /Contenu du lot/ }));
-    await user.click(screen.getByRole('button', { name: 'Retirer Remorque du lot' }));
-    await waitFor(() => expect(stub.deleteSubEquipment).toHaveBeenCalledWith('s1'));
-  });
-
-  it('affiche le refus du serveur sans vider le lot affiché', async () => {
-    const user = userEvent.setup();
-    stub.listEquipments.mockResolvedValue([anEquipment({ id: 'e1', name: 'Minipelle' })]);
-    stub.listSubEquipments.mockResolvedValue([aSubEquipment({ id: 's1', name: 'Remorque' })]);
-    stub.deleteSubEquipment.mockRejectedValue(new ApiError('Sous-équipement introuvable : s1', 404));
-    renderPage();
-
-    await user.click(await screen.findByRole('button', { name: /Contenu du lot/ }));
-    await user.click(screen.getByRole('button', { name: 'Retirer Remorque du lot' }));
-
-    expect(await screen.findByText('Sous-équipement introuvable : s1')).toBeTruthy();
-    expect(screen.getByText('Remorque')).toBeTruthy();
   });
 });
