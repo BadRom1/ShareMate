@@ -41,14 +41,17 @@ body {
 }
 
 /*
- * Le bas ne porte qu'une marge de confort : `#root` héberge aussi les écrans sans barre basse
- * (connexion, invitation), qui n'ont rien à dégager. La réserve pour la barre est ajoutée par
- * `.app-main`, seul endroit où la barre existe réellement.
+ * Deux mondes vivent ici : la coque de l'application, qui occupe exactement la hauteur visible
+ * et défile à l'intérieur d'elle-même, et les écrans sans barre basse (connexion, invitation),
+ * qui défilent avec le document. La gouttière est donc latérale seulement : un rembourrage bas
+ * s'ajouterait aux 100 % de hauteur de la coque, le document déborderait d'un cran et la barre
+ * basse ne serait plus tout à fait au bas de l'écran. Le confort en bas de page est rendu là où
+ * il vaut quelque chose — par `.app-main` sous la coque, par la marge des cartes ailleurs.
  */
 #root {
   max-width: 960px;
   margin: 0 auto;
-  padding: 0 1rem 1rem;
+  padding: 0 1rem;
 }
 
 header.topbar {
@@ -454,13 +457,72 @@ th {
   }
 }
 
+/*
+ * L'agenda est le seul écran qui se cadre sur la hauteur de la fenêtre. Une grille plus haute que
+ * la vue ne se lit pas : on n'y voit jamais le mois entier, et ses colonnes s'étirent bien au-delà
+ * de ce qu'on regarde. La page prend donc la hauteur visible, la carte ce qui reste sous les
+ * bandeaux, et la grille ce qui reste dans la carte. La vue liste, elle, garde sa hauteur
+ * naturelle : une liste courte n'a rien à étirer.
+ */
+.cal-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * Bandeaux et carte gardent leur hauteur : seule la carte des grilles cède du terrain, et rien ne
+ * se laisse comprimer sous son contenu. `flex: 0 0 auto` le dit à la place du défaut `0 1 auto`,
+ * qui écraserait une alerte de trois lignes pour faire tenir la page dans la hauteur.
+ */
+.cal-page > *,
+.cal-card > * {
+  flex: 0 0 auto;
+}
+
+/* Dernière carte du volet : la marge de confort vient de `.app-main`, pas de la carte. */
+.cal-page > .card {
+  margin-bottom: 0;
+}
+
+/*
+ * La carte prend la hauteur restante, la grille prend celle qui reste dans la carte. Aucune des
+ * deux ne fixe `min-height: 0` : leur minimum, c'est le plancher de lisibilité de la grille
+ * (18 rem). Quand la fenêtre est trop courte pour lui, la carte reste entière et déborde — le
+ * volet défile, plutôt que de rogner la grille hors de ses bords.
+ */
+.cal-page > .cal-card {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.cal-card > .cal-grid,
+.cal-card > .week-grid {
+  flex: 1 1 auto;
+}
+
+/*
+ * Les jours de la semaine gardent leur hauteur, les semaines — quatre à six selon le mois — se
+ * partagent le reste à parts égales. `minmax(0, 1fr)` est ce qui rend ce partage possible : avec
+ * le minimum automatique d'une piste `1fr`, une journée chargée pousserait sa semaine et la
+ * grille redeviendrait plus haute que l'écran. Les créneaux en trop sont rognés par la cellule.
+ */
 .cal-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
+  grid-template-rows: auto;
+  grid-auto-rows: minmax(0, 1fr);
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
   margin-bottom: 0.6rem;
+  /*
+   * Hauteur de départ, et plancher de lisibilité : une grille de flexbox ne descend jamais sous
+   * la hauteur qu'elle se donne, alors même qu'elle s'étire volontiers au-dessus. Sur une fenêtre
+   * trop courte pour ces 18 rem, la carte reste entière et c'est le volet qui défile.
+   */
+  height: 18rem;
 }
 
 /* La légende a disparu de la vue mois : la grille ferme la carte, sans marge en trop. */
@@ -483,8 +545,9 @@ th {
   border-bottom: 1px solid var(--border);
 }
 
+/* La hauteur d'une cellule est celle de sa semaine : c'est la grille qui la distribue. */
 .cal-cell {
-  min-height: 5.5rem;
+  min-height: 0;
   padding: 0.25rem;
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
@@ -573,10 +636,31 @@ th {
 .week-grid {
   display: grid;
   grid-template-columns: 3rem repeat(7, 1fr);
+  /* Une seule rangée, qui prend toute la hauteur de la grille : les colonnes s'y étirent. */
+  grid-template-rows: minmax(0, 1fr);
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
   margin-bottom: 0.6rem;
+  /* Même hauteur de départ, même plancher que la vue mois. */
+  height: 18rem;
+}
+
+/*
+ * Chaque colonne empile son en-tête et son corps : l'en-tête garde sa hauteur, le corps prend
+ * tout le reste. C'est ce qui remplace la hauteur fixe d'autrefois — heures et créneaux étant
+ * placés en pourcentage, la plage 6 h – 22 h reste juste à n'importe quelle hauteur.
+ */
+.week-hours-col,
+.week-day-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.week-hours,
+.week-body {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /*
@@ -616,7 +700,6 @@ th {
 
 .week-hours {
   position: relative;
-  height: 28rem;
   border-right: 1px solid var(--border);
 }
 
@@ -639,7 +722,6 @@ th {
 
 .week-body {
   position: relative;
-  height: 28rem;
   cursor: pointer;
   /* Une ligne toutes les 2 heures (8 tranches sur la plage 6h-22h). */
   background-image: repeating-linear-gradient(
@@ -1809,13 +1891,26 @@ th {
 /* --- Coque de navigation : barre d'app, feuille basse, barre basse --- */
 
 /*
- * La barre d'app suit le défilement : le nom de l'équipement courant est le seul repère
- * qui dit de quoi parle l'écran, il ne doit jamais disparaître.
+ * La coque occupe exactement la hauteur visible et ne défile pas : c'est son contenu qui défile,
+ * entre une barre d'app posée en haut et une barre basse posée en bas. Rien n'est plus `fixed` —
+ * la barre basse est en bas parce qu'elle est le dernier élément d'une colonne de la hauteur de
+ * l'écran, et non parce qu'on l'a collée à un bord que la barre d'adresse mobile fait glisser.
+ * `dvh` suit justement cette barre d'adresse ; `vh` reste en secours pour les moteurs sans `dvh`.
+ */
+.app-shell {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * Le nom de l'équipement courant est le seul repère qui dit de quoi parle l'écran : il ne doit
+ * jamais disparaître. Il n'y a plus besoin de `sticky` pour cela — la barre est hors du volet
+ * qui défile, donc immobile par construction.
  */
 .appbar {
-  position: sticky;
-  top: 0;
-  z-index: 20;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -1990,19 +2085,21 @@ th {
 }
 
 /*
- * Barre basse fixe : les cinq sections de l'équipement courant, toujours au même endroit.
+ * Barre basse : les cinq sections de l'équipement courant, toujours au même endroit. Dernier
+ * élément de la coque, elle est ancrée au bas de l'écran sans jamais se rétrécir.
  * Le rembourrage bas rend sa hauteur à l'encoche des téléphones sans bouton physique.
  */
 .tabbar {
-  position: fixed;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 30;
+  flex: 0 0 auto;
   display: flex;
   background: var(--card);
   border-top: 1px solid var(--border);
   padding-bottom: env(safe-area-inset-bottom);
+  /*
+   * Elle seule touche les deux bords de l'écran, alors que la coque reste centrée et gouttiérée :
+   * son filet de séparation court d'un bord à l'autre, comme lorsqu'elle était `fixed`.
+   */
+  margin-inline: calc(50% - 50vw);
 }
 
 .tabbar button {
@@ -2042,13 +2139,20 @@ th {
 }
 
 /*
- * Le contenu s'arrête au-dessus de la barre basse, sinon elle masque la dernière ligne.
- * On dégage exactement la hauteur de la barre (`--tabbar-height`) plus l'encoche du bas ;
- * la marge de confort, elle, vient déjà du padding bas de `#root`. Pas de valeur en dur :
- * si la barre grandit, la réserve suit.
+ * Le contenu est la seule partie qui défile : les deux barres encadrent un volet dont la hauteur
+ * est ce qui reste, et non l'inverse. Plus besoin de réserver la hauteur de la barre basse — elle
+ * n'est plus posée par-dessus. `min-height: 0` autorise ce volet à devenir plus court que son
+ * contenu : sans lui, un élément de flexbox refuse de descendre sous sa hauteur naturelle et
+ * c'est la barre basse qui serait poussée hors de l'écran.
  */
 .app-main {
-  padding-bottom: calc(var(--tabbar-height) + env(safe-area-inset-bottom));
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* Le défilement reste inertiel sur iOS, comme celui du document qu'il remplace. */
+  -webkit-overflow-scrolling: touch;
+  /* La marge de confort en bas de page, que `#root` ne donne plus sous la coque. */
+  padding-bottom: 1rem;
 }
 
 /* Au-delà du mobile, la barre se recentre au lieu de s'étirer sur toute la largeur. */
@@ -2316,7 +2420,10 @@ th {
   position: fixed;
   right: 1rem;
   bottom: calc(var(--tabbar-height) + env(safe-area-inset-bottom) + 1rem);
-  /* Entre la barre basse (30) et le fond des modales (50) : par-dessus l'une, sous l'autre. */
+  /*
+   * Au-dessus de la barre basse — qui n'est plus positionnée, un simple élément de la coque — et
+   * sous le fond des modales (50), qui prend la main dès qu'il paraît.
+   */
   z-index: 35;
   /* Un FAB standard fait 56 px — au-delà du seuil de 48 px des cibles tactiles du projet. */
   width: 56px;

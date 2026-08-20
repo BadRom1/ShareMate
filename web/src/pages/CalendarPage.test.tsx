@@ -244,6 +244,26 @@ describe('clé de lecture de la grille', () => {
   });
 });
 
+describe('cadrage en hauteur des grilles', () => {
+  // Les deux grilles se cadrent sur la hauteur visible : sans `cal-card`, la carte reprend sa
+  // hauteur naturelle et la grille redevient plus haute que l'écran, colonnes étirées comprises.
+  // La vue liste, elle, n'a rien à étirer — la classe doit disparaître avec elle.
+  it('marque la carte des grilles, pas celle de la liste', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole('button', { name: 'Réserver un créneau' });
+
+    const carte = () => document.querySelector('.cal-page > .card') as HTMLElement;
+    expect(carte().classList.contains('cal-card')).toBe(true);
+
+    await user.click(screen.getByRole('button', { name: 'Semaine' }));
+    expect(carte().classList.contains('cal-card')).toBe(true);
+
+    await user.click(screen.getByRole('button', { name: 'Liste' }));
+    expect(carte().classList.contains('cal-card')).toBe(false);
+  });
+});
+
 describe('en-tête de la vue semaine', () => {
   // Le jour et le quantième sur deux lignes : à 320 px, « lun. 17 » d'un seul tenant rognait.
   it('sépare le jour du quantième dans chaque colonne', async () => {
