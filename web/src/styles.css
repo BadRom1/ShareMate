@@ -966,6 +966,9 @@ th {
   gap: 0.1rem;
   flex: 1;
   min-width: 0;
+  /* Titre et corps viennent de saisies de membres : un nom d'équipement ou une URL sans espace
+     doit se couper, sinon `min-width: 0` ne suffit pas et le texte passe par-dessus la croix. */
+  overflow-wrap: anywhere;
   text-align: left;
   border: none;
   background: none;
@@ -979,12 +982,19 @@ th {
   background: var(--green-light);
 }
 
+/*
+ * La croix voisine immédiatement la zone d'ouverture de la notification, et son geste est sans
+ * retour : elle prend la cible tactile de 44 px du reste de l'application, et non le seul
+ * `padding` de `.icon-btn` (27 px, où un pouce visant la fin du message efface la ligne).
+ * Le rouge au survol vient de `.icon-danger`, comme les huit autres boutons destructifs :
+ * une règle locale ici perdrait la cascade contre `.icon-btn:hover`, déclaré plus bas.
+ */
 .notif-dismiss {
   flex: 0 0 auto;
-}
-
-.notif-dismiss:hover {
-  color: var(--danger);
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
 }
 
 .notif-title {

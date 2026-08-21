@@ -3,6 +3,7 @@ import { api } from '../api';
 import type { AppNotification, NotificationPreference } from '../api';
 import { NOTIFICATION_LABELS, formatRelative } from '../format';
 import { enableWebPush, webPushPermission } from '../notifications';
+import { useEscape } from '../useEscape';
 import { errorMessage } from '../useApiResource';
 import { ConfirmDialog } from './ConfirmDialog';
 import { IconBell, IconClose } from './icons';
@@ -25,7 +26,11 @@ export function NotificationBell({ onNavigate }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearing, setClearing] = useState(false);
+  /** Rang de la ligne effacée, à qui rendre le focus une fois la liste redessinée. */
+  const [focusRank, setFocusRank] = useState<number | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLUListElement | null>(null);
+  const prefsButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const refreshCount = useCallback(async () => {
     try {
@@ -35,12 +40,17 @@ export function NotificationBell({ onNavigate }: Props) {
     }
   }, []);
 
-  /** Recharge la liste depuis le serveur : seule version qui fasse foi après un échec d'écriture. */
+  /**
+   * Recharge la liste depuis le serveur — seule version qui fasse foi après un échec d'écriture.
+   * Rend `false` si le serveur n'a pas répondu : l'appelant sait alors qu'il reste seul juge de
+   * ce qu'il affiche, au lieu de croire qu'il vient d'être remis d'accord avec la base.
+   */
   const reload = useCallback(async () => {
     try {
       setItems(await api.listNotifications());
+      return true;
     } catch {
-      /* hors-ligne : la liste affichée reste celle du dernier chargement */
+      return false;
     }
   }, []);
 
@@ -64,12 +74,41 @@ export function NotificationBell({ onNavigate }: Props) {
     return () => document.removeEventListener('mousedown', onClick);
   }, [open, confirmClear]);
 
+  /*
+   * Le panneau fermé ne garde rien : ni le message d'erreur du geste précédent, ni une
+   * confirmation en cours. Sans cette remise à zéro, un panneau refermé pendant la confirmation
+   * laissait `confirmClear` à vrai — la boîte revenait sans être demandée à la réouverture, et la
+   * garde ci-dessous bloquait définitivement la fermeture au clic extérieur.
+   */
+  useEffect(() => {
+    if (open) return;
+    setConfirmClear(false);
+    setError(null);
+  }, [open]);
+
+  /*
+   * Rend le focus après un effacement : la croix de la ligne qui prend la place de celle qui
+   * part, la dernière si c'était la fin de la liste, l'engrenage quand le centre se vide. Sans
+   * cela le focus retombe sur `document.body` et le clavier repart du haut de la page à chaque
+   * notification effacée.
+   */
+  useEffect(() => {
+    if (focusRank === null) return;
+    setFocusRank(null);
+    const croix = listRef.current?.querySelectorAll<HTMLButtonElement>('.notif-dismiss');
+    const cible = croix?.length ? croix[Math.min(focusRank, croix.length - 1)] : prefsButtonRef.current;
+    cible?.focus();
+  }, [focusRank, items]);
+
+  // Échap referme le panneau — mais pas quand la confirmation est ouverte : le hook laisse la
+  // main à la boîte de dialogue, sinon un seul appui emporterait les deux.
+  useEscape(useCallback(() => setOpen(false), []));
+
   async function toggleOpen() {
     const next = !open;
     setOpen(next);
     if (next) {
       setShowPrefs(false);
-      setError(null);
       await reload();
     }
   }
@@ -88,24 +127,37 @@ export function NotificationBell({ onNavigate }: Props) {
   }
 
   async function markAll() {
-    await api.markAllNotificationsRead();
-    await refreshCount();
-    await reload();
+    setError(null);
+    try {
+      await api.markAllNotificationsRead();
+      // Tout est lu : le badge vaut zéro, c'est une déduction, pas une question à reposer.
+      setCount(0);
+      await reload();
+    } catch (e) {
+      setError(errorMessage(e));
+    }
   }
 
   /**
    * Écarte une notification. Le retrait est immédiat, sans attendre le serveur : le geste est un
-   * rangement, et une liste qui ne bouge pas se relit comme un clic manqué. Si l'appel échoue, la
-   * liste du serveur reprend la main — la ligne réapparaît plutôt que de mentir sur son sort.
+   * rangement, et une liste qui ne bouge pas se relit comme un clic manqué. En cas d'échec la
+   * ligne revient — celle du serveur si on l'a jointe, sinon celle qu'on affichait : la panne la
+   * plus banale coupe les deux appels, et se taire alors afficherait un centre vide qui ne l'est
+   * pas.
    */
   async function dismiss(n: AppNotification) {
     setError(null);
-    setItems((prev) => prev.filter((item) => item.id !== n.id));
+    const avant = items;
+    setItems(avant.filter((item) => item.id !== n.id));
+    setFocusRank(avant.findIndex((item) => item.id === n.id));
     try {
       await api.dismissNotification(n.id);
-      if (!n.readAt) await refreshCount();
+      // Une non-lue de moins : le badge suit sans second aller-retour, que le réseau se
+      // dégrade ou non. Le sondage périodique corrigera ce que cette soustraction ignore.
+      if (!n.readAt) setCount((c) => Math.max(0, c - 1));
     } catch (e) {
       setError(errorMessage(e));
+      setItems(avant);
       await reload();
     }
   }
@@ -116,7 +168,9 @@ export function NotificationBell({ onNavigate }: Props) {
     try {
       await api.dismissAllNotifications();
       setItems([]);
-      await refreshCount();
+      // Le centre est vide : plus rien à compter. Un `unreadCount` en échec laissait sinon un
+      // badge chiffré au-dessus d'une liste vide, et un « Tout lire » qui ne lisait rien.
+      setCount(0);
     } catch (e) {
       setError(errorMessage(e));
       await reload();
@@ -128,7 +182,12 @@ export function NotificationBell({ onNavigate }: Props) {
 
   async function openPrefs() {
     setShowPrefs(true);
-    setPrefs(await api.notificationPreferences());
+    setError(null);
+    try {
+      setPrefs(await api.notificationPreferences());
+    } catch (e) {
+      setError(errorMessage(e));
+    }
   }
 
   function togglePref(index: number, channel: 'inApp' | 'push') {
@@ -136,8 +195,13 @@ export function NotificationBell({ onNavigate }: Props) {
   }
 
   async function savePrefs() {
-    setPrefs(await api.updateNotificationPreferences(prefs));
-    setShowPrefs(false);
+    setError(null);
+    try {
+      setPrefs(await api.updateNotificationPreferences(prefs));
+      setShowPrefs(false);
+    } catch (e) {
+      setError(errorMessage(e));
+    }
   }
 
   async function activatePush() {
@@ -165,6 +229,13 @@ export function NotificationBell({ onNavigate }: Props) {
 
       {open && (
         <div className="bell-panel">
+          {/* Le bandeau vit au-dessus des deux vues : une erreur d'effacement ne doit pas
+              disparaître parce qu'on ouvre les préférences, ni revenir en quittant celles-ci. */}
+          {error && (
+            <div className="alert" role="alert" onClick={() => setError(null)}>
+              {error}
+            </div>
+          )}
           {showPrefs ? (
             <>
               <div className="bell-head">
@@ -218,20 +289,20 @@ export function NotificationBell({ onNavigate }: Props) {
                       Tout effacer
                     </button>
                   )}
-                  <button className="link" onClick={() => void openPrefs()} aria-label="Préférences">
+                  <button
+                    className="link"
+                    onClick={() => void openPrefs()}
+                    aria-label="Préférences"
+                    ref={prefsButtonRef}
+                  >
                     ⚙︎
                   </button>
                 </div>
               </div>
-              {error && (
-                <div className="alert" onClick={() => setError(null)}>
-                  {error}
-                </div>
-              )}
               {items.length === 0 ? (
                 <p className="empty">Aucune notification.</p>
               ) : (
-                <ul className="notif-list">
+                <ul className="notif-list" ref={listRef}>
                   {items.map((n) => (
                     <li key={n.id} className={n.readAt ? 'notif' : 'notif notif-unread'}>
                       <button className="notif-item" onClick={() => void openItem(n)}>
@@ -240,7 +311,7 @@ export function NotificationBell({ onNavigate }: Props) {
                         <span className="muted notif-time">{formatRelative(n.createdAt)}</span>
                       </button>
                       <button
-                        className="icon-btn notif-dismiss"
+                        className="icon-btn icon-danger notif-dismiss"
                         onClick={() => void dismiss(n)}
                         title="Effacer"
                         aria-label={`Effacer la notification « ${n.title} »`}
@@ -260,9 +331,9 @@ export function NotificationBell({ onNavigate }: Props) {
                   onCancel={() => setConfirmClear(false)}
                 >
                   <p style={{ margin: 0 }}>
-                    {items.length === 1
-                      ? 'La notification de votre centre disparaîtra.'
-                      : `Les ${items.length} notifications de votre centre disparaîtront, lues comme non lues.`}
+                    {/* Sans chiffre : la liste n'est qu'une page (100 au plus), le vidage porte
+                        sur tout le centre. Annoncer « les 100 » en effacerait bien davantage. */}
+                    Toutes les notifications de votre centre disparaîtront, lues comme non lues.
                   </p>
                   <p className="muted" style={{ margin: 0 }}>
                     Seul votre affichage est vidé : les messages, dépenses et réservations annoncés restent en place,

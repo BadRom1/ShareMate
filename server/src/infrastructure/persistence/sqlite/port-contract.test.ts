@@ -367,12 +367,24 @@ describe.each(IMPLÉMENTATIONS)('Contrat des ports — $nom', ({ ouvrir }) => {
     await dépôts.notifications.save(notification('n1', '2026-01-01T00:00:00.000Z'));
     await dépôts.notifications.save(notification('n2', '2026-01-02T00:00:00.000Z'));
 
-    await dépôts.notifications.delete('n1');
+    await dépôts.notifications.delete('n1', 'm1');
     // Idempotent : le second clic d'une liste déjà rafraîchie ailleurs ne doit pas lever.
-    await dépôts.notifications.delete('n1');
+    await dépôts.notifications.delete('n1', 'm1');
+    await dépôts.notifications.delete('inconnue', 'm1');
 
     expect(await dépôts.notifications.findById('n1')).toBeNull();
     expect((await dépôts.notifications.findByRecipient('m1')).map((n) => n.id)).toEqual(['n2']);
+    expect(await dépôts.notifications.countUnread('m1')).toBe(1);
+  });
+
+  // Le destinataire fait partie de la condition d'effacement, comme pour un canal push : le port
+  // ne s'en remet pas au contrôle de l'appelant pour un geste définitif.
+  it('n’efface pas la notification d’un autre destinataire', async () => {
+    await dépôts.notifications.save(notification('n1', '2026-01-01T00:00:00.000Z'));
+
+    await dépôts.notifications.delete('n1', 'm2');
+
+    expect(await dépôts.notifications.findById('n1')).not.toBeNull();
     expect(await dépôts.notifications.countUnread('m1')).toBe(1);
   });
 
@@ -383,6 +395,9 @@ describe.each(IMPLÉMENTATIONS)('Contrat des ports — $nom', ({ ouvrir }) => {
     await dépôts.notifications.markRead('n2');
 
     await dépôts.notifications.deleteAll('m1');
+    // Vider un centre déjà vide n'est pas une erreur : le service le promet, le port le tient.
+    await dépôts.notifications.deleteAll('m1');
+    await dépôts.notifications.deleteAll('m3');
 
     expect(await dépôts.notifications.findByRecipient('m1')).toEqual([]);
     expect(await dépôts.notifications.countUnread('m1')).toBe(0);

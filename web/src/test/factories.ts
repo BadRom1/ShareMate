@@ -13,11 +13,11 @@ import type {
   MaintenanceStatus,
   Member,
   Message,
+  NotificationPreference,
   Reimbursement,
   Reservation,
   SettlementTransaction,
   SubEquipment,
-  NotificationPreference,
   ThreadSummary,
   UsageRecord,
 } from '../api';

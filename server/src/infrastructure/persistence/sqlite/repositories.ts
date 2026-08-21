@@ -1015,8 +1015,10 @@ export class SqliteNotificationRepository implements NotificationRepository {
       .run(new Date().toISOString(), recipientId);
   }
 
-  async delete(id: string): Promise<void> {
-    this.db.prepare('DELETE FROM notifications WHERE id = ?').run(id);
+  async delete(id: string, recipientId: string): Promise<void> {
+    // Le destinataire est dans la clause, et non seulement dans le contrôle qui précède :
+    // la suppression reste juste même si l'appelant, un jour, oublie de le vérifier.
+    this.db.prepare('DELETE FROM notifications WHERE id = ? AND recipient_id = ?').run(id, recipientId);
   }
 
   async deleteAll(recipientId: string): Promise<void> {

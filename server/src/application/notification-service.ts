@@ -118,7 +118,7 @@ export class NotificationService implements Notifier {
    */
   async dismiss(id: string, memberId: string): Promise<void> {
     await this.requireOwn(id, memberId);
-    await this.notifications.delete(id);
+    await this.notifications.delete(id, memberId);
   }
 
   /** Vide le centre du membre. Sans effet s'il l'est déjà. */

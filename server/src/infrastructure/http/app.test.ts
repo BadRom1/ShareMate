@@ -409,6 +409,10 @@ describe('API — authentification', () => {
       expect((await get(url)).statusCode).toBe(401);
     }
     expect((await post('/api/reservations', {})).statusCode).toBe(401);
+    // Les effacements aussi : la garde vient de la composition, pas du verbe ni du chemin.
+    for (const url of ['/api/notifications', '/api/notifications/n1']) {
+      expect((await app.inject({ method: 'DELETE', url })).statusCode, url).toBe(401);
+    }
   });
 
   it('me : needsBootstrap au départ, puis membre connecté après bootstrap', async () => {
