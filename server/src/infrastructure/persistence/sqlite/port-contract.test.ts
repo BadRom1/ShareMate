@@ -195,10 +195,10 @@ function document(id: string, equipmentId: string, quand: string, storageKey?: s
   });
 }
 
-function notification(id: string, quand: string): Notification {
+function notification(id: string, quand: string, recipientId = 'm1'): Notification {
   return Notification.create({
     id,
-    recipientId: 'm1',
+    recipientId,
     type: 'MESSAGE_POSTED',
     title: `Notification ${id}`,
     body: '',
@@ -361,5 +361,31 @@ describe.each(IMPLÉMENTATIONS)('Contrat des ports — $nom', ({ ouvrir }) => {
 
     expect((await dépôts.notifications.findByRecipient('m1', { unreadOnly: true })).map((n) => n.id)).toEqual(['n1']);
     expect(await dépôts.notifications.countUnread('m1')).toBe(1);
+  });
+
+  it('efface une notification sans toucher aux autres, et sans se plaindre d’un inconnu', async () => {
+    await dépôts.notifications.save(notification('n1', '2026-01-01T00:00:00.000Z'));
+    await dépôts.notifications.save(notification('n2', '2026-01-02T00:00:00.000Z'));
+
+    await dépôts.notifications.delete('n1');
+    // Idempotent : le second clic d'une liste déjà rafraîchie ailleurs ne doit pas lever.
+    await dépôts.notifications.delete('n1');
+
+    expect(await dépôts.notifications.findById('n1')).toBeNull();
+    expect((await dépôts.notifications.findByRecipient('m1')).map((n) => n.id)).toEqual(['n2']);
+    expect(await dépôts.notifications.countUnread('m1')).toBe(1);
+  });
+
+  it('vide le centre d’un destinataire, lues comprises, et le sien seulement', async () => {
+    await dépôts.notifications.save(notification('n1', '2026-01-01T00:00:00.000Z'));
+    await dépôts.notifications.save(notification('n2', '2026-01-02T00:00:00.000Z'));
+    await dépôts.notifications.save(notification('n3', '2026-01-03T00:00:00.000Z', 'm2'));
+    await dépôts.notifications.markRead('n2');
+
+    await dépôts.notifications.deleteAll('m1');
+
+    expect(await dépôts.notifications.findByRecipient('m1')).toEqual([]);
+    expect(await dépôts.notifications.countUnread('m1')).toBe(0);
+    expect((await dépôts.notifications.findByRecipient('m2')).map((n) => n.id)).toEqual(['n3']);
   });
 });

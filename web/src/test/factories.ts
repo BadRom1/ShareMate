@@ -17,6 +17,7 @@ import type {
   Reservation,
   SettlementTransaction,
   SubEquipment,
+  NotificationPreference,
   ThreadSummary,
   UsageRecord,
 } from '../api';
@@ -186,6 +187,19 @@ export function aMaintenanceStatus(over: Partial<MaintenanceStatus> = {}): Maint
   };
 }
 
+export function aNotification(over: Partial<AppNotification> = {}): AppNotification {
+  return {
+    id: 'n1',
+    type: 'MESSAGE_POSTED',
+    title: 'Nouveau message',
+    body: 'Alice a écrit sur « Tracteur ».',
+    link: '/?tab=discussions&equipment=e1',
+    createdAt: '2026-03-01T08:00:00.000Z',
+    readAt: null,
+    ...over,
+  };
+}
+
 export type ApiStub = ReturnType<typeof createApiStub>;
 
 /**
@@ -263,5 +277,11 @@ export function createApiStub() {
 
     unreadCount: vi.fn(async () => ({ count: 0 })),
     listNotifications: vi.fn(async () => [] as AppNotification[]),
+    markNotificationRead: vi.fn(async (_id: string) => {}),
+    markAllNotificationsRead: vi.fn(async () => {}),
+    dismissNotification: vi.fn(async (_id: string) => {}),
+    dismissAllNotifications: vi.fn(async () => {}),
+    notificationPreferences: vi.fn(async () => [] as NotificationPreference[]),
+    updateNotificationPreferences: vi.fn(async (preferences: NotificationPreference[]) => preferences),
   };
 }

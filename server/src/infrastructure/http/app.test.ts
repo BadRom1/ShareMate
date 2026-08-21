@@ -2671,6 +2671,80 @@ describe('API — notifications', () => {
     expect(((await get('/api/notifications/unread-count', bruno.cookies)).json() as { count: number }).count).toBe(1);
   });
 
+  it('efface une notification, puis vide le centre', async () => {
+    const { equipment, alice, bruno } = await setupMembersAndEquipment();
+    const threadId = await openThread(equipment.id, alice.cookies);
+    await post('/api/messages', { threadId, body: 'Salut' }, alice.cookies);
+
+    const [première, seconde] = (await get('/api/notifications', bruno.cookies)).json() as { id: string }[];
+    const effacée = await app.inject({
+      method: 'DELETE',
+      url: `/api/notifications/${première!.id}`,
+      cookies: bruno.cookies,
+    });
+    expect(effacée.statusCode).toBe(204);
+    expect(((await get('/api/notifications', bruno.cookies)).json() as { id: string }[]).map((n) => n.id)).toEqual([
+      seconde!.id,
+    ]);
+    // Le badge suit : une non-lue effacée ne se compte plus.
+    expect(((await get('/api/notifications/unread-count', bruno.cookies)).json() as { count: number }).count).toBe(1);
+
+    // Deux fois le même identifiant : le second appel ne trouve plus rien à effacer.
+    const rejouée = await app.inject({
+      method: 'DELETE',
+      url: `/api/notifications/${première!.id}`,
+      cookies: bruno.cookies,
+    });
+    expect(rejouée.statusCode).toBe(404);
+
+    const vidé = await app.inject({ method: 'DELETE', url: '/api/notifications', cookies: bruno.cookies });
+    expect(vidé.statusCode).toBe(204);
+    expect((await get('/api/notifications', bruno.cookies)).json()).toEqual([]);
+    expect(((await get('/api/notifications/unread-count', bruno.cookies)).json() as { count: number }).count).toBe(0);
+    // Alice, autrice des deux événements, n'a jamais rien eu à ranger.
+    expect((await get('/api/notifications', alice.cookies)).json()).toEqual([]);
+  });
+
+  it('n’efface pas la notification d’un autre membre (traitée comme inexistante)', async () => {
+    const { equipment, alice, bruno, chloe } = await setupMembersAndEquipment();
+    await openThread(equipment.id, alice.cookies);
+    const notif = ((await get('/api/notifications', bruno.cookies)).json() as { id: string }[])[0]!;
+    const INCONNUE = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+
+    const surRéelle = await app.inject({
+      method: 'DELETE',
+      url: `/api/notifications/${notif.id}`,
+      cookies: chloe.cookies,
+    });
+    const surInexistante = await app.inject({
+      method: 'DELETE',
+      url: `/api/notifications/${INCONNUE}`,
+      cookies: chloe.cookies,
+    });
+    expect(surRéelle.statusCode).toBe(404);
+    expect(surRéelle.statusCode).toBe(surInexistante.statusCode);
+    expect((surRéelle.json() as { error: string }).error.replace(notif.id, '<id>')).toBe(
+      (surInexistante.json() as { error: string }).error.replace(INCONNUE, '<id>'),
+    );
+    // Elle est restée dans le centre de son destinataire.
+    expect(((await get('/api/notifications', bruno.cookies)).json() as unknown[]).length).toBe(1);
+  });
+
+  it('vider son centre ne touche pas celui des autres', async () => {
+    const { equipment, alice, bruno } = await setupMembersAndEquipment();
+    // Un fil ouvert par chacun : les deux membres du cercle ont une notification de l'autre.
+    await openThread(equipment.id, alice.cookies);
+    await openThread(equipment.id, bruno.cookies);
+    expect(((await get('/api/notifications', alice.cookies)).json() as unknown[]).length).toBe(1);
+
+    expect((await app.inject({ method: 'DELETE', url: '/api/notifications', cookies: bruno.cookies })).statusCode).toBe(
+      204,
+    );
+
+    expect((await get('/api/notifications', bruno.cookies)).json()).toEqual([]);
+    expect(((await get('/api/notifications', alice.cookies)).json() as unknown[]).length).toBe(1);
+  });
+
   it('respecte les préférences (in-app désactivé ⇒ pas de notification)', async () => {
     const { equipment, alice, bruno } = await setupMembersAndEquipment();
 

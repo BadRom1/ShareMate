@@ -3,7 +3,9 @@ import { api } from '../api';
 import type { AppNotification, NotificationPreference } from '../api';
 import { NOTIFICATION_LABELS, formatRelative } from '../format';
 import { enableWebPush, webPushPermission } from '../notifications';
-import { IconBell } from './icons';
+import { errorMessage } from '../useApiResource';
+import { ConfirmDialog } from './ConfirmDialog';
+import { IconBell, IconClose } from './icons';
 
 interface Props {
   /** Navigation demandée au clic sur une notification (lien `/?tab=...`). */
@@ -20,6 +22,9 @@ export function NotificationBell({ onNavigate }: Props) {
   const [showPrefs, setShowPrefs] = useState(false);
   const [prefs, setPrefs] = useState<NotificationPreference[]>([]);
   const [pushMsg, setPushMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
 
   const refreshCount = useCallback(async () => {
@@ -30,32 +35,42 @@ export function NotificationBell({ onNavigate }: Props) {
     }
   }, []);
 
+  /** Recharge la liste depuis le serveur : seule version qui fasse foi après un échec d'écriture. */
+  const reload = useCallback(async () => {
+    try {
+      setItems(await api.listNotifications());
+    } catch {
+      /* hors-ligne : la liste affichée reste celle du dernier chargement */
+    }
+  }, []);
+
   useEffect(() => {
     void refreshCount();
     const timer = setInterval(() => void refreshCount(), POLL_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [refreshCount]);
 
-  // Ferme le panneau au clic extérieur.
+  /*
+   * Ferme le panneau au clic extérieur — sauf pendant la confirmation d'un vidage : la boîte vit
+   * dans un portail hors du panneau, et sans cette garde le clic sur « Annuler » comme sur
+   * « Tout effacer » refermait le panneau derrière elle, faisant disparaître la boîte elle-même.
+   */
   useEffect(() => {
-    if (!open) return;
+    if (!open || confirmClear) return;
     function onClick(e: MouseEvent) {
       if (panelRef.current && !panelRef.current.contains(e.target as Node)) setOpen(false);
     }
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
-  }, [open]);
+  }, [open, confirmClear]);
 
   async function toggleOpen() {
     const next = !open;
     setOpen(next);
     if (next) {
       setShowPrefs(false);
-      try {
-        setItems(await api.listNotifications());
-      } catch {
-        /* ignoré */
-      }
+      setError(null);
+      await reload();
     }
   }
 
@@ -75,7 +90,40 @@ export function NotificationBell({ onNavigate }: Props) {
   async function markAll() {
     await api.markAllNotificationsRead();
     await refreshCount();
-    setItems(await api.listNotifications());
+    await reload();
+  }
+
+  /**
+   * Écarte une notification. Le retrait est immédiat, sans attendre le serveur : le geste est un
+   * rangement, et une liste qui ne bouge pas se relit comme un clic manqué. Si l'appel échoue, la
+   * liste du serveur reprend la main — la ligne réapparaît plutôt que de mentir sur son sort.
+   */
+  async function dismiss(n: AppNotification) {
+    setError(null);
+    setItems((prev) => prev.filter((item) => item.id !== n.id));
+    try {
+      await api.dismissNotification(n.id);
+      if (!n.readAt) await refreshCount();
+    } catch (e) {
+      setError(errorMessage(e));
+      await reload();
+    }
+  }
+
+  async function clearAll() {
+    setClearing(true);
+    setError(null);
+    try {
+      await api.dismissAllNotifications();
+      setItems([]);
+      await refreshCount();
+    } catch (e) {
+      setError(errorMessage(e));
+      await reload();
+    } finally {
+      setClearing(false);
+      setConfirmClear(false);
+    }
   }
 
   async function openPrefs() {
@@ -165,11 +213,21 @@ export function NotificationBell({ onNavigate }: Props) {
                       Tout lire
                     </button>
                   )}
-                  <button className="link" onClick={() => void openPrefs()}>
+                  {items.length > 0 && (
+                    <button className="link link-danger" onClick={() => setConfirmClear(true)}>
+                      Tout effacer
+                    </button>
+                  )}
+                  <button className="link" onClick={() => void openPrefs()} aria-label="Préférences">
                     ⚙︎
                   </button>
                 </div>
               </div>
+              {error && (
+                <div className="alert" onClick={() => setError(null)}>
+                  {error}
+                </div>
+              )}
               {items.length === 0 ? (
                 <p className="empty">Aucune notification.</p>
               ) : (
@@ -181,9 +239,36 @@ export function NotificationBell({ onNavigate }: Props) {
                         <span className="notif-body">{n.body}</span>
                         <span className="muted notif-time">{formatRelative(n.createdAt)}</span>
                       </button>
+                      <button
+                        className="icon-btn notif-dismiss"
+                        onClick={() => void dismiss(n)}
+                        title="Effacer"
+                        aria-label={`Effacer la notification « ${n.title} »`}
+                      >
+                        <IconClose size={16} />
+                      </button>
                     </li>
                   ))}
                 </ul>
+              )}
+              {confirmClear && (
+                <ConfirmDialog
+                  title="Effacer toutes les notifications ?"
+                  confirmLabel="Tout effacer"
+                  busy={clearing}
+                  onConfirm={() => void clearAll()}
+                  onCancel={() => setConfirmClear(false)}
+                >
+                  <p style={{ margin: 0 }}>
+                    {items.length === 1
+                      ? 'La notification de votre centre disparaîtra.'
+                      : `Les ${items.length} notifications de votre centre disparaîtront, lues comme non lues.`}
+                  </p>
+                  <p className="muted" style={{ margin: 0 }}>
+                    Seul votre affichage est vidé : les messages, dépenses et réservations annoncés restent en place,
+                    comme les notifications des autres membres.
+                  </p>
+                </ConfirmDialog>
               )}
             </>
           )}

@@ -566,6 +566,8 @@ export const api = {
     request<void>(`/api/notifications/${id}/read`, { method: 'POST', body: JSON.stringify({}) }),
   markAllNotificationsRead: () =>
     request<void>('/api/notifications/read-all', { method: 'POST', body: JSON.stringify({}) }),
+  dismissNotification: (id: string) => request<void>(`/api/notifications/${id}`, { method: 'DELETE' }),
+  dismissAllNotifications: () => request<void>('/api/notifications', { method: 'DELETE' }),
   notificationPreferences: () => request<NotificationPreference[]>('/api/notifications/preferences'),
   updateNotificationPreferences: (preferences: NotificationPreference[]) =>
     request<NotificationPreference[]>('/api/notifications/preferences', {

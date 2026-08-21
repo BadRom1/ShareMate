@@ -950,14 +950,22 @@ th {
 }
 
 .notif {
+  display: flex;
+  align-items: center;
   border-bottom: 1px solid var(--border);
 }
 
+/*
+ * Le corps de la ligne prend toute la place laissée par le bouton d'effacement, et pas un pixel
+ * de plus : sans `min-width: 0`, un titre long refuse de se replier et pousse la croix hors du
+ * panneau (largeur minimale par défaut d'un élément flex = son contenu).
+ */
 .notif-item {
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   text-align: left;
   border: none;
   background: none;
@@ -966,8 +974,17 @@ th {
   font: inherit;
 }
 
-.notif-unread .notif-item {
+/* Le fond marque la ligne entière, croix comprise, et non le seul corps cliquable. */
+.notif-unread {
   background: var(--green-light);
+}
+
+.notif-dismiss {
+  flex: 0 0 auto;
+}
+
+.notif-dismiss:hover {
+  color: var(--danger);
 }
 
 .notif-title {

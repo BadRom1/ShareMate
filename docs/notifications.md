@@ -4,7 +4,7 @@ ShareMate a un système de notifications à trois canaux, **découplé** des fon
 déclenchent (discussions, dépenses, réservations, entretien, composition des cercles) :
 
 1. **Centre in-app** (cloche 🔔) — toujours actif, aucune configuration. Badge de non-lus,
-   liste, marquage lu, préférences par type d'événement.
+   liste, marquage lu, effacement, préférences par type d'événement.
 2. **Web Push (PWA)** — notifications navigateur même app fermée. Nécessite des clés VAPID.
 3. **Push natif Android (FCM)** — notifications système sur l'app Capacitor. Nécessite Firebase.
 
@@ -26,9 +26,30 @@ Sans les variables d'environnement ci-dessous, le push est **désactivé proprem
 `EQUIPMENT_CIRCLE_CHANGED` prévient les trois populations d'un changement de composition, avec un
 message distinct pour chacune : ceux qui sont retirés (sans lien — l'équipement ne leur est plus
 accessible), ceux qui sont ajoutés, et ceux qui restent. Ces derniers sont prévenus pour qu'une
-éviction ne se découvre pas par l'absence d'un nom dans une liste. Une notification se marque lue et
-s'efface : le même geste laisse aussi une entrée dans le journal du serveur, hors de portée des
-membres concernés (port `AuditLogger`).
+éviction ne se découvre pas par l'absence d'un nom dans une liste. Le changement laisse aussi une
+entrée dans le journal du serveur, hors de portée des membres concernés (port `AuditLogger`) : elle
+survit à l'effacement de la notification.
+
+## Gestes du centre in-app
+
+Une notification est une **copie par destinataire** : chacun range la sienne, et ce rangement ne
+touche ni les copies des autres, ni ce que la notification annonçait.
+
+| Geste        | Route                              | Effet                                         |
+| ------------ | ---------------------------------- | --------------------------------------------- |
+| Marquer lu   | `POST /api/notifications/:id/read` | Retire du badge, la ligne reste dans la liste |
+| Tout lire    | `POST /api/notifications/read-all` | Idem pour toutes les non-lues                 |
+| Effacer      | `DELETE /api/notifications/:id`    | Retire la notification du centre, sans retour |
+| Tout effacer | `DELETE /api/notifications`        | Vide le centre du membre, lues comprises      |
+
+L'effacement est définitif côté membre, mais il n'emporte que l'avis : le message, la dépense ou la
+réservation annoncés restent en place, comme la trace du journal du serveur pour les changements de
+cercle (port `AuditLogger`). Effacer la notification d'un autre membre est refusé comme un
+identifiant inconnu — même code, même message : la distinction permettrait de les énumérer.
+Réeffacer une notification déjà partie répond donc `404`, et vider un centre déjà vide, `204`.
+
+Côté cloche, chaque ligne porte une croix (retrait immédiat, la liste du serveur reprend la main si
+l'appel échoue) et l'en-tête un « Tout effacer » sous confirmation.
 
 Chaque membre règle, par type, la réception in-app et push (`GET/PUT /api/notifications/preferences`).
 Par défaut tout est activé. Un type absent de la liste ci-dessus est refusé (`400`) : une préférence
