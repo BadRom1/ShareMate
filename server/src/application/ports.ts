@@ -186,8 +186,16 @@ export interface NotificationRepository {
   save(notification: Notification): Promise<void>;
   markRead(id: string): Promise<void>;
   markAllRead(recipientId: string): Promise<void>;
-  /** Efface la notification. Idempotent : un identifiant déjà supprimé n'est pas une erreur. */
-  delete(id: string): Promise<void>;
+  /**
+   * Efface la notification, à condition qu'elle soit bien celle de ce destinataire — comme la
+   * coupure d'un canal push (`deleteByEndpoint`), et pour la même raison : un identifiant seul
+   * ne dit pas qui a le droit d'effacer. Le service refuse déjà le geste en amont, avec le
+   * message qu'il faut ; le port refuse en dernier ressort, sans distinguer les cas.
+   *
+   * Ne rend rien : un identifiant inconnu, ou celui d'un autre membre, n'est pas une erreur à
+   * ce niveau — c'est au service qu'il revient de répondre « introuvable ».
+   */
+  delete(id: string, recipientId: string): Promise<void>;
   /** Efface toutes les notifications du destinataire. */
   deleteAll(recipientId: string): Promise<void>;
 }

@@ -46,10 +46,17 @@ L'effacement est définitif côté membre, mais il n'emporte que l'avis : le mes
 réservation annoncés restent en place, comme la trace du journal du serveur pour les changements de
 cercle (port `AuditLogger`). Effacer la notification d'un autre membre est refusé comme un
 identifiant inconnu — même code, même message : la distinction permettrait de les énumérer.
-Réeffacer une notification déjà partie répond donc `404`, et vider un centre déjà vide, `204`.
+Réeffacer une notification déjà partie répond donc `404`, et vider un centre déjà vide, `204`. Le
+destinataire fait partie de la condition d'effacement jusque dans la requête SQL, comme pour la
+coupure d'un canal push : un identifiant seul ne dit pas qui a le droit d'effacer.
 
-Côté cloche, chaque ligne porte une croix (retrait immédiat, la liste du serveur reprend la main si
-l'appel échoue) et l'en-tête un « Tout effacer » sous confirmation.
+`GET /api/notifications` ne rend qu'une **page** de 100 au plus (`NOTIFICATION_PAGE_SIZE`), alors que
+`DELETE /api/notifications` vide le centre entier. La confirmation côté cloche ne cite donc aucun
+décompte : elle annoncerait le nombre de lignes affichées, pas celui des lignes supprimées.
+
+Côté cloche, chaque ligne porte une croix et l'en-tête un « Tout effacer » sous confirmation. Le
+retrait est immédiat ; si le serveur refuse, la ligne revient — celle du serveur quand il répond,
+sinon celle qui était affichée, la même panne coupant en général les deux appels.
 
 Chaque membre règle, par type, la réception in-app et push (`GET/PUT /api/notifications/preferences`).
 Par défaut tout est activé. Un type absent de la liste ci-dessus est refusé (`400`) : une préférence
