@@ -31,10 +31,11 @@ interface Props {
  * en boucle dans la boîte, revient à son point de départ à la fermeture, et le fond
  * ne défile plus sous le doigt (la boîte occupe tout l'écran en dessous de 720 px).
  *
- * Le rendu passe par un portail vers `document.body` : depuis la coque, la modale
- * naîtrait dans le volet qui défile, borné en hauteur et rogné à ses bords — elle
- * défilerait avec le contenu au lieu de couvrir l'écran. Depuis la racine, `position:
- * fixed` et `z-index: 50` valent de nouveau ce qu'ils annoncent.
+ * Le rendu passe par un portail vers `document.body` : une modale ouverte depuis un
+ * ancêtre qui crée un contexte d'empilement — la barre d'app, `relative` avec un
+ * `z-index`, d'où s'ouvre la feuille du sélecteur d'équipement — y serait plafonnée à
+ * *son* niveau et passerait sous le reste de la coque. Depuis la racine, `z-index: 50`
+ * vaut de nouveau ce qu'il annonce.
  */
 export function Modal({ title, children, role = 'dialog', variant = 'dialog', initialFocusRef, onClose }: Props) {
   const boxRef = useRef<HTMLDivElement>(null);
