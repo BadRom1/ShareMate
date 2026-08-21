@@ -518,9 +518,11 @@ th {
   overflow: hidden;
   margin-bottom: 0.6rem;
   /*
-   * Hauteur de départ, et plancher de lisibilité : une grille de flexbox ne descend jamais sous
-   * la hauteur qu'elle se donne, alors même qu'elle s'étire volontiers au-dessus. Sur une fenêtre
-   * trop courte pour ces 18 rem, la carte reste entière et c'est le volet qui défile.
+   * Hauteur de départ, et plancher de lisibilité. Un élément de flexbox ne se laisse pas
+   * comprimer sous le plus petit de sa hauteur déclarée et de son contenu (CSS Flexbox § 4.5,
+   * « automatic minimum size ») : ces 18 rem font donc le plancher tant que la grille est plus
+   * haute que cela — ce qu'elle est dès qu'elle porte ses six semaines. En dessous, la carte
+   * reste entière et c'est le volet qui défile.
    */
   height: 18rem;
 }
@@ -1203,7 +1205,8 @@ th {
   border-radius: var(--radius);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
   width: min(32rem, 100%);
-  max-height: 90vh;
+  /* `dvh` comme la coque : sur mobile, `vh` déborderait sous la barre d'adresse. */
+  max-height: 90dvh;
   overflow-y: auto;
   padding: 1.25rem;
 }
@@ -1892,9 +1895,11 @@ th {
 
 /*
  * La coque occupe exactement la hauteur visible et ne défile pas : c'est son contenu qui défile,
- * entre une barre d'app posée en haut et une barre basse posée en bas. Rien n'est plus `fixed` —
- * la barre basse est en bas parce qu'elle est le dernier élément d'une colonne de la hauteur de
- * l'écran, et non parce qu'on l'a collée à un bord que la barre d'adresse mobile fait glisser.
+ * entre une barre d'app posée en haut et une barre basse posée en bas. Les deux barres ont quitté
+ * `position: fixed` — la barre basse est en bas parce qu'elle est le dernier élément d'une colonne
+ * de la hauteur de l'écran, et non parce qu'on l'a collée à un bord que la barre d'adresse mobile
+ * fait glisser. Restent `fixed` ce qui doit couvrir l'écran ou flotter dessus : les modales et le
+ * bouton d'action, qui s'adossent à la barre basse par `--tabbar-height`.
  * `dvh` suit justement cette barre d'adresse ; `vh` reste en secours pour les moteurs sans `dvh`.
  */
 .app-shell {
@@ -1907,9 +1912,13 @@ th {
 /*
  * Le nom de l'équipement courant est le seul repère qui dit de quoi parle l'écran : il ne doit
  * jamais disparaître. Il n'y a plus besoin de `sticky` pour cela — la barre est hors du volet
- * qui défile, donc immobile par construction.
+ * qui défile, donc immobile par construction. Elle reste pourtant positionnée, pour deux raisons
+ * qui n'ont rien à voir avec le défilement : le panneau de la cloche s'accroche à elle (voir
+ * `.bell`, qui reste `static` exprès) et son contexte d'empilement la met à l'abri du contenu.
  */
 .appbar {
+  position: relative;
+  z-index: 20;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -2097,7 +2106,10 @@ th {
   padding-bottom: env(safe-area-inset-bottom);
   /*
    * Elle seule touche les deux bords de l'écran, alors que la coque reste centrée et gouttiérée :
-   * son filet de séparation court d'un bord à l'autre, comme lorsqu'elle était `fixed`.
+   * son filet de séparation court d'un bord à l'autre, comme lorsqu'elle était `fixed`. Le calcul
+   * suppose que le document ne défile pas — `vw` compterait sinon la largeur de sa barre de
+   * défilement, et la barre basse dépasserait d'autant. Sous la coque, c'est garanti : rien n'y
+   * déborde en hauteur (voir `.app-main`).
    */
   margin-inline: calc(50% - 50vw);
 }
@@ -2145,7 +2157,15 @@ th {
  * contenu : sans lui, un élément de flexbox refuse de descendre sous sa hauteur naturelle et
  * c'est la barre basse qui serait poussée hors de l'écran.
  */
+/*
+ * `position: relative` n'est pas décoratif : un descendant `position: absolute` sans ancêtre
+ * positionné prend le bloc conteneur initial, et sa position statique — celle qu'il aurait eue
+ * dans le flux, donc n'importe où dans un contenu plus long que l'écran — s'ajoute au
+ * débordement défilable du *document*. C'est ce qui faisait défiler la coque entière, barres
+ * comprises, à cause du seul libellé de lecture d'écran de l'agenda. Le volet les contient.
+ */
 .app-main {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;

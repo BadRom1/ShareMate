@@ -245,22 +245,41 @@ describe('clé de lecture de la grille', () => {
 });
 
 describe('cadrage en hauteur des grilles', () => {
-  // Les deux grilles se cadrent sur la hauteur visible : sans `cal-card`, la carte reprend sa
-  // hauteur naturelle et la grille redevient plus haute que l'écran, colonnes étirées comprises.
-  // La vue liste, elle, n'a rien à étirer — la classe doit disparaître avec elle.
-  it('marque la carte des grilles, pas celle de la liste', async () => {
+  /*
+   * Le cadrage se joue dans la feuille de style, sur une chaîne de sélecteurs d'enfant direct :
+   * `.cal-page > .cal-card > .cal-grid`. Aucune mesure n'est possible ici (jsdom ne met pas en
+   * page), mais la chaîne, elle, se vérifie — et c'est elle qu'un remaniement casse en silence :
+   * une balise intercalée suffit à rendre la règle inopérante sans qu'aucun test ne bronche.
+   * L'ancrage lui-même et les hauteurs obtenues, eux, ne se vérifient qu'en navigateur.
+   */
+  it('emboîte la grille du mois dans la carte cadrée, elle-même dans la page', async () => {
+    renderPage();
+    await screen.findByRole('button', { name: 'Réserver un créneau' });
+
+    expect(document.querySelector('.cal-page > .cal-card > .cal-grid')).not.toBeNull();
+  });
+
+  it('emboîte de même la grille de la semaine', async () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole('button', { name: 'Réserver un créneau' });
 
-    const carte = () => document.querySelector('.cal-page > .card') as HTMLElement;
-    expect(carte().classList.contains('cal-card')).toBe(true);
-
     await user.click(screen.getByRole('button', { name: 'Semaine' }));
-    expect(carte().classList.contains('cal-card')).toBe(true);
+
+    expect(document.querySelector('.cal-page > .cal-card > .week-grid')).not.toBeNull();
+  });
+
+  // La vue liste n'a rien à étirer : la carte doit y reprendre sa hauteur naturelle, sinon une
+  // liste de deux créneaux occupe tout l'écran.
+  it('ne cadre pas la carte de la vue liste', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole('button', { name: 'Réserver un créneau' });
 
     await user.click(screen.getByRole('button', { name: 'Liste' }));
-    expect(carte().classList.contains('cal-card')).toBe(false);
+
+    expect(document.querySelector('.cal-page > .card')).not.toBeNull();
+    expect(document.querySelector('.cal-page > .cal-card')).toBeNull();
   });
 });
 
