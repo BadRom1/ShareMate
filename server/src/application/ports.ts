@@ -186,6 +186,10 @@ export interface NotificationRepository {
   save(notification: Notification): Promise<void>;
   markRead(id: string): Promise<void>;
   markAllRead(recipientId: string): Promise<void>;
+  /** Efface la notification. Idempotent : un identifiant déjà supprimé n'est pas une erreur. */
+  delete(id: string): Promise<void>;
+  /** Efface toutes les notifications du destinataire. */
+  deleteAll(recipientId: string): Promise<void>;
 }
 
 export interface NotificationPreferenceRepository {

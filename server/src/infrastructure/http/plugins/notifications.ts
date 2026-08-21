@@ -50,6 +50,26 @@ export const notificationRoutes: FastifyPluginAsync<NotificationRoutesOptions> =
     return reply.status(204).send();
   });
 
+  /*
+   * Écarter une notification, c'est la retirer du centre de son destinataire — un geste de
+   * rangement, pas une suppression de donnée métier : l'événement annoncé reste où il est.
+   * Le chemin littéral `/subscriptions` et `/device-tokens` (canaux push, plus bas) l'emporte
+   * sur ce paramètre : le routeur préfère toujours un segment statique.
+   */
+  app.delete<{ Params: { id: string } }>(
+    '/api/notifications/:id',
+    { schema: { params: idParams } },
+    async (request, reply) => {
+      await notificationService.dismiss(request.params.id, request.authMember.id);
+      return reply.status(204).send();
+    },
+  );
+
+  app.delete('/api/notifications', async (request, reply) => {
+    await notificationService.dismissAll(request.authMember.id);
+    return reply.status(204).send();
+  });
+
   app.get('/api/notifications/preferences', async (request) => {
     const prefs = await notificationService.getPreferences(request.authMember.id);
     return prefs.map(preferenceDto);

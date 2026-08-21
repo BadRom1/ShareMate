@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { NotificationService } from './notification-service.js';
 import { NotificationPreference } from '../domain/notification/preference.js';
-import { ForbiddenError } from '../domain/shared/domain-error.js';
+import { ForbiddenError, NotFoundError } from '../domain/shared/domain-error.js';
 import type { DeviceToken, FailedTarget, PushPayload, PushSender, WebPushSubscription } from './ports.js';
 import {
   FixedClock,
@@ -71,6 +71,42 @@ describe('NotificationService', () => {
     await expect(ctx.service.markRead(notif!.id, 'm2')).rejects.toThrow(ForbiddenError);
     await ctx.service.markRead(notif!.id, 'm1');
     expect(await ctx.service.unreadCount('m1')).toBe(0);
+  });
+
+  it('efface une notification du centre de son destinataire', async () => {
+    await ctx.service.notify({ type: 'EXPENSE_ADDED', recipientIds: ['m1', 'm2'], title: 'T', body: 'B' });
+    const [notif] = await ctx.service.list('m1');
+
+    await ctx.service.dismiss(notif!.id, 'm1');
+
+    expect(await ctx.service.list('m1')).toHaveLength(0);
+    expect(await ctx.service.unreadCount('m1')).toBe(0);
+    // La copie du second destinataire n'a pas bougé : chacun range la sienne.
+    expect(await ctx.service.unreadCount('m2')).toBe(1);
+  });
+
+  it('refuse d’effacer la notification d’un autre membre, et l’inexistante', async () => {
+    await ctx.service.notify({ type: 'EXPENSE_ADDED', recipientIds: ['m1'], title: 'T', body: 'B' });
+    const [notif] = await ctx.service.list('m1');
+
+    await expect(ctx.service.dismiss(notif!.id, 'm2')).rejects.toThrow(ForbiddenError);
+    await expect(ctx.service.dismiss('inconnue', 'm1')).rejects.toThrow(NotFoundError);
+    // Rien n'a été effacé au passage.
+    expect(await ctx.service.list('m1')).toHaveLength(1);
+  });
+
+  it('vide le centre du membre, lues comprises, et lui seul', async () => {
+    await ctx.service.notify({ type: 'EXPENSE_ADDED', recipientIds: ['m1', 'm2'], title: 'T', body: 'B' });
+    await ctx.service.notify({ type: 'MESSAGE_POSTED', recipientIds: ['m1'], title: 'T2', body: 'B2' });
+    const [lue] = await ctx.service.list('m1');
+    await ctx.service.markRead(lue!.id, 'm1');
+
+    await ctx.service.dismissAll('m1');
+
+    expect(await ctx.service.list('m1')).toHaveLength(0);
+    expect(await ctx.service.list('m2')).toHaveLength(1);
+    // Vider un centre déjà vide n'est pas une erreur.
+    await expect(ctx.service.dismissAll('m1')).resolves.toBeUndefined();
   });
 
   it('pousse en Web Push et purge les abonnements morts', async () => {

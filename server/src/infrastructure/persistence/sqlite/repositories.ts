@@ -1014,6 +1014,14 @@ export class SqliteNotificationRepository implements NotificationRepository {
       .prepare('UPDATE notifications SET read_at = ? WHERE recipient_id = ? AND read_at IS NULL')
       .run(new Date().toISOString(), recipientId);
   }
+
+  async delete(id: string): Promise<void> {
+    this.db.prepare('DELETE FROM notifications WHERE id = ?').run(id);
+  }
+
+  async deleteAll(recipientId: string): Promise<void> {
+    this.db.prepare('DELETE FROM notifications WHERE recipient_id = ?').run(recipientId);
+  }
 }
 
 interface PreferenceRow {

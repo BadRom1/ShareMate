@@ -85,9 +85,12 @@ export class NotificationService implements Notifier {
     return this.notifications.countUnread(memberId);
   }
 
-  async markRead(id: string, memberId: string): Promise<void> {
-    // La notification d'un autre membre est traitée comme inexistante : même réponse
-    // qu'un identifiant inconnu, sinon la distinction permettrait de les énumérer.
+  /**
+   * Refuse le geste si la notification n'existe pas ou n'appartient pas au membre.
+   * Celle d'un autre membre est traitée comme inexistante : même réponse qu'un identifiant
+   * inconnu, sinon la distinction permettrait de les énumérer.
+   */
+  private async requireOwn(id: string, memberId: string): Promise<void> {
     const absent = `Notification introuvable : ${id}`;
     const existing = await this.notifications.findById(id);
     if (!existing) {
@@ -96,11 +99,31 @@ export class NotificationService implements Notifier {
     if (existing.recipientId !== memberId) {
       throw new ForbiddenError(absent);
     }
+  }
+
+  async markRead(id: string, memberId: string): Promise<void> {
+    await this.requireOwn(id, memberId);
     await this.notifications.markRead(id);
   }
 
   async markAllRead(memberId: string): Promise<void> {
     await this.notifications.markAllRead(memberId);
+  }
+
+  /**
+   * Écarte définitivement une notification du centre du membre. Le geste est sans retour, mais
+   * il n'emporte que l'avis : l'événement annoncé reste là où il vit (message, dépense, journal
+   * du serveur). Chaque destinataire range le sien — supprimer la copie d'un membre laisse
+   * intactes celles des autres.
+   */
+  async dismiss(id: string, memberId: string): Promise<void> {
+    await this.requireOwn(id, memberId);
+    await this.notifications.delete(id);
+  }
+
+  /** Vide le centre du membre. Sans effet s'il l'est déjà. */
+  async dismissAll(memberId: string): Promise<void> {
+    await this.notifications.deleteAll(memberId);
   }
 
   /** Préférences complètes du membre (défauts fusionnés avec les valeurs stockées), un item par type. */

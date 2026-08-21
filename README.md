@@ -50,7 +50,9 @@ partage des frais façon Tricount.
   texte. Le fil et le message se renomment, s'éditent et se suppriment **par leur auteur seul** ;
   tout le cercle lit et répond.
 - **Notifications** : centre in-app (cloche), Web Push (PWA) et push natif Android, réglables par
-  type d'événement et par membre. Détail et configuration dans [docs/notifications.md](docs/notifications.md).
+  type d'événement et par membre. Chaque notification se marque lue et **s'efface** — une par une ou
+  tout le centre d'un coup, sans toucher à celles des autres membres. Détail et configuration dans
+  [docs/notifications.md](docs/notifications.md).
 
 ## Architecture
 

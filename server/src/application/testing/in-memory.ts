@@ -331,6 +331,14 @@ export class InMemoryNotificationRepository implements NotificationRepository {
       if (n.recipientId === recipientId && !n.isRead) this.items.set(id, n.markRead(new Date()));
     }
   }
+  async delete(id: string) {
+    this.items.delete(id);
+  }
+  async deleteAll(recipientId: string) {
+    for (const [id, n] of this.items) {
+      if (n.recipientId === recipientId) this.items.delete(id);
+    }
+  }
 }
 
 export class InMemoryNotificationPreferenceRepository implements NotificationPreferenceRepository {
