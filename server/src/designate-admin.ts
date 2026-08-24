@@ -15,6 +15,11 @@ import { openDatabase } from './infrastructure/persistence/sqlite/database.js';
  *     npm run admin:designate            # liste les comptes et propose un candidat
  *     npm run admin:designate -- <id>    # désigne ce compte, et lui seul
  *
+ * Cette forme est celle du dépôt. Dans l'image de production, ni `tsx` ni les sources ne sont
+ * là — seul `dist` l'est —, et le script s'appelle alors `node server/dist/designate-admin.js`.
+ * C'est justement là qu'il sert le plus : la base d'une instance en service vit sur son volume.
+ * Voir `docs/runbook.md`.
+ *
  * L'ordre affiché est celui des insertions (`rowid`) : sur une base qui n'a jamais vu de fusion
  * ni de reprise à la main, le premier compte ouvert est le premier de la liste.
  */
@@ -23,6 +28,16 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR ?? path.resolve(here, '../../data');
 const databasePath = process.env.DATABASE_PATH ?? path.join(dataDir, 'sharemate.sqlite');
 const cible = process.argv.slice(2).find((arg) => !arg.startsWith('-'));
+
+/**
+ * Comment se relancer, dans le contexte où l'on tourne. Un script qui s'annonce sous une forme
+ * inutilisable là où il s'exécute envoie son lecteur droit dans le mur : `npm run` n'existe pas
+ * dans le conteneur de production, où le rôle se désigne pourtant. Compilé, `import.meta.url`
+ * porte l'extension `.js` ; lancé par `tsx` depuis les sources, il porte encore `.ts`.
+ */
+const INVOCATION = import.meta.url.endsWith('.js')
+  ? 'node server/dist/designate-admin.js <identifiant>'
+  : 'npm run admin:designate -- <identifiant>';
 
 interface Compte {
   rowid: number;
@@ -79,8 +94,7 @@ if (!cible) {
     }
   }
   console.log(
-    '\nRien n’a été écrit. Pour désigner un compte (le rôle est retiré à tout autre) :\n' +
-      '  npm run admin:designate -- <identifiant>',
+    '\nRien n’a été écrit. Pour désigner un compte (le rôle est retiré à tout autre) :\n' + `  ${INVOCATION}`,
   );
   db.close();
   process.exit(0);

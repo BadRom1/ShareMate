@@ -234,10 +234,14 @@ Reste à retirer du volume les fichiers qui y dorment encore. **Le volume, lui, 
 il porte la base SQLite.** Le transfert ne fait que lui enlever ce qui n'a plus à y être.
 
 ```bash
-# Depuis un shell sur le service, variables S3_* et DATA_DIR en place :
+# Depuis le dépôt, variables S3_* et DATA_DIR en place :
 npm run migrate:receipts -- --dry   # dit ce qu'il ferait, sans rien écrire
 npm run migrate:receipts            # transfère
 ```
+
+Sur l'instance en service, la base est sur le volume et l'image ne contient ni les sources ni
+`tsx` : le script s'y appelle `node server/dist/migrate-receipts.js`. Procédure complète dans le
+[runbook](docs/runbook.md).
 
 Le script copie, ne supprime rien, et se rejoue sans dommage : ce qui est déjà dans le bucket est
 laissé tel quel. Il signale à part les fichiers qu'aucune dépense ne nomme (orphelins d'anciennes
@@ -392,6 +396,11 @@ Le service est connecté au dépôt GitHub (`BadRom1/ShareMate`, branche `main`)
 `main` déclenche automatiquement un déploiement. Un déploiement manuel ponctuel reste possible avec
 `railway up` depuis la racine.
 
+Une fois l'instance en service, les gestes d'exploitation — ouvrir un shell, désigner
+l'administrateur, consulter la base, sauvegarder, restaurer — sont rassemblés dans le
+**[runbook](docs/runbook.md)**. Les commandes y diffèrent de celles du dépôt : l'image de
+production ne contient ni les sources, ni `tsx`, ni le client `sqlite3`.
+
 ### Migrations de schéma
 
 Le schéma est versionné par `PRAGMA user_version`, en face d'une liste ordonnée de migrations
@@ -426,31 +435,34 @@ administrateur, et signale le candidat le plus probable — le premier compte in
 de passe. Le choix reste à l'opérateur. Un compte jamais ouvert est refusé : il ne pourrait pas se
 connecter pour exercer le rôle. Le changement est immédiat, sans redémarrage.
 
+C'est aussi la seule façon de savoir **qui** est administrateur sans l'être soi-même : l'écran
+d'administration n'est visible que par son titulaire.
+
+Sur l'instance en service, où la base vit sur le volume, le script s'appelle
+`node server/dist/designate-admin.js` — voir le [runbook](docs/runbook.md), qui donne les deux
+formes de chaque geste d'exploitation.
+
 ### Sauvegarder le volume
 
 La base et les justificatifs vivent sur le volume Railway, qu'aucune sauvegarde ne couvre par
 défaut. **Avant toute migration de schéma, toute suppression manuelle de table et toute
 restauration**, prendre une copie.
 
-`sqlite3 .backup` est la seule façon correcte de copier une base SQLite ouverte : `cp` d'un fichier
-en mode WAL peut produire une copie incohérente (le WAL n'est pas repris).
+L'API de sauvegarde de SQLite est la seule façon correcte de copier une base ouverte : `cp` d'un
+fichier en mode WAL peut produire une copie incohérente (le WAL n'est pas repris). L'image de
+production ne contient pas le client `sqlite3`, mais `better-sqlite3` y est :
 
 ```bash
-# Depuis un shell sur le service, ou en local sur le fichier de DATABASE_PATH :
-sqlite3 /data/sharemate.sqlite ".backup '/data/sauvegarde-$(date +%F).sqlite'"
+# Depuis un shell sur le service (railway ssh) :
+node -e "require('better-sqlite3')('/data/sharemate.sqlite').backup('/data/sauvegarde-'+new Date().toISOString().slice(0,10)+'.sqlite').then(r=>console.log(r.totalPages,'pages'))"
 ```
 
 Le fichier produit est cohérent et autonome : il se rapatrie ensuite par n'importe quel moyen.
-Vérifier la copie avant de s'y fier — une sauvegarde jamais relue n'est pas une sauvegarde :
+Vérifier la copie avant de s'y fier — une sauvegarde jamais relue n'est pas une sauvegarde.
 
-```bash
-sqlite3 sauvegarde.sqlite "PRAGMA integrity_check; PRAGMA user_version;"
-```
-
-Restaurer, c'est arrêter le service, remettre le fichier en place sous le nom attendu par
-`DATABASE_PATH`, et redémarrer : les migrations manquantes seront rejouées à l'ouverture. Les
-justificatifs (`$DATA_DIR/uploads`) sont à sauvegarder séparément — la base n'en contient que les
-chemins.
+La procédure complète — vérification de la copie, restauration, fichiers `-wal`/`-shm` à écarter —
+est dans le [runbook](docs/runbook.md). Les justificatifs (`$DATA_DIR/uploads`) sont à sauvegarder
+séparément : la base n'en contient que les chemins.
 
 ## CI
 
