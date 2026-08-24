@@ -20,6 +20,7 @@ import {
   SqliteSubEquipmentRepository,
   SqliteUsageRecordRepository,
 } from './infrastructure/persistence/sqlite/repositories.js';
+import { SqliteMemberMerger } from './infrastructure/persistence/sqlite/member-merge.js';
 import {
   CryptoTokenGenerator,
   ScryptPasswordHasher,
@@ -72,6 +73,7 @@ const app = await buildApp({
   pushSubscriptions: new SqlitePushSubscriptionRepository(db),
   credentials: new SqliteCredentialRepository(db),
   sessions: new SqliteSessionRepository(db),
+  memberMerger: new SqliteMemberMerger(db),
   passwordHasher: new ScryptPasswordHasher(),
   tokenGenerator: new CryptoTokenGenerator(),
   idGenerator: new UuidGenerator(),

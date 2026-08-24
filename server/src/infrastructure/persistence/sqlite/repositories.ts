@@ -54,13 +54,20 @@ interface MemberRow {
   name: string;
   email: string | null;
   invited_by: string | null;
+  is_admin: number;
 }
 
 export class SqliteMemberRepository implements MemberRepository {
   constructor(private readonly db: SqliteDb) {}
 
   private toEntity(row: MemberRow): Member {
-    return Member.create({ id: row.id, name: row.name, email: row.email, invitedById: row.invited_by });
+    return Member.create({
+      id: row.id,
+      name: row.name,
+      email: row.email,
+      invitedById: row.invited_by,
+      isAdmin: row.is_admin === 1,
+    });
   }
 
   async findById(id: string): Promise<Member | null> {
@@ -83,6 +90,11 @@ export class SqliteMemberRepository implements MemberRepository {
     return rows.map((r) => this.toEntity(r));
   }
 
+  async findAll(): Promise<Member[]> {
+    const rows = this.db.prepare('SELECT * FROM members ORDER BY name').all() as MemberRow[];
+    return rows.map((r) => this.toEntity(r));
+  }
+
   async findByNameOrEmail(identifier: string): Promise<Member[]> {
     // `minuscule` (déclarée à l'ouverture de la base) et non `lower` : cette dernière ne replie
     // que l'ASCII et écarterait « JOSÉ » de « josé ».
@@ -96,10 +108,11 @@ export class SqliteMemberRepository implements MemberRepository {
   async save(member: Member): Promise<void> {
     this.db
       .prepare(
-        `INSERT INTO members (id, name, email, invited_by) VALUES (?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET name = excluded.name, email = excluded.email, invited_by = excluded.invited_by`,
+        `INSERT INTO members (id, name, email, invited_by, is_admin) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, email = excluded.email,
+           invited_by = excluded.invited_by, is_admin = excluded.is_admin`,
       )
-      .run(member.id, member.name, member.email, member.invitedById);
+      .run(member.id, member.name, member.email, member.invitedById, member.isAdmin ? 1 : 0);
   }
 }
 
@@ -530,12 +543,17 @@ interface ExpenseRow {
 }
 
 /** Sérialisation JSON de la règle de répartition (Money → centimes). */
-type SplitJson =
+/**
+ * Forme persistée d'une répartition. Exportée pour la fusion de comptes, qui réécrit `split_json`
+ * hors de ce dépôt : les identifiants y sont des entrées de tableau et des clés d'objet, qu'aucune
+ * clé étrangère ne suit.
+ */
+export type SplitJson =
   | { type: 'EQUAL'; memberIds: string[] }
   | { type: 'USAGE_PRORATED'; weights: Record<string, number> }
   | { type: 'CUSTOM'; amountsCents: Record<string, number> };
 
-function splitToJson(split: SplitRule): SplitJson {
+export function splitToJson(split: SplitRule): SplitJson {
   if (split.type === 'CUSTOM') {
     return {
       type: 'CUSTOM',
@@ -545,7 +563,7 @@ function splitToJson(split: SplitRule): SplitJson {
   return split;
 }
 
-function splitFromJson(json: SplitJson): SplitRule {
+export function splitFromJson(json: SplitJson): SplitRule {
   if (json.type === 'CUSTOM') {
     return {
       type: 'CUSTOM',

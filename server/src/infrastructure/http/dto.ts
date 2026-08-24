@@ -19,8 +19,14 @@ import type { NotificationPreference } from '../../domain/notification/preferenc
 
 /** Mappers entité → JSON de l'API. */
 
+/**
+ * `isAdmin` accompagne tout membre rendu : c'est ce qui fait apparaître l'écran d'administration
+ * chez son titulaire, et ce qui empêche l'écran de fusion de proposer d'absorber le seul compte
+ * qui l'autorise. Rien de secret — dans un cercle de trois voisins, savoir qui a ouvert
+ * l'instance ne renseigne personne sur ce qu'il peut faire de plus.
+ */
 export function memberDto(m: Member) {
-  return { id: m.id, name: m.name, email: m.email };
+  return { id: m.id, name: m.name, email: m.email, isAdmin: m.isAdmin };
 }
 
 /** Annuaire : `hasPassword` dit au front à qui un lien de première connexion peut encore servir. */

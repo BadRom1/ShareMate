@@ -463,6 +463,22 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // Administrateur de l'instance, seul habilité à fusionner deux comptes en un. Sur une base
+    // neuve, `AuthService.bootstrap` marque le compte qu'il crée.
+    //
+    // Sur une base existante, la colonne reste à 0 partout, et c'est voulu : aucun repère n'y
+    // désigne le premier compte — `invited_by` vaut NULL sur tous les membres antérieurs à cette
+    // colonne. Deviner ici, c'est donner à un inconnu le pouvoir d'absorber n'importe quel
+    // compte. L'opérateur tranche, à froid, avec `npm run admin:designate` : tant qu'il ne l'a pas
+    // fait, l'instance n'a pas d'administrateur et le geste n'est ouvert à personne.
+    description: 'members.is_admin',
+    apply(db) {
+      if (!columns(db, 'members').includes('is_admin')) {
+        db.exec(`ALTER TABLE members ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0;`);
+      }
+    },
+  },
 ];
 
 /** Version de schéma attendue par ce code : rank de la dernière migration connue. */

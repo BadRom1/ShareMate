@@ -80,6 +80,29 @@ describe('AuthService — bootstrap', () => {
   it('refuse un mot de passe trop court', async () => {
     await expect(service.bootstrap({ name: 'Romain', password: 'court' })).rejects.toThrow(DomainError);
   });
+
+  it('fait du premier compte l’administrateur de l’instance', async () => {
+    const { member } = await service.bootstrap({ name: 'Romain', password: 'motdepasse' });
+    expect(member.isAdmin).toBe(true);
+    expect((await fixture.members.findById(member.id))?.isAdmin).toBe(true);
+
+    // Les comptes suivants ne le sont pas : le rôle n'est pas héréditaire.
+    const { member: invité } = await service.createMemberWithInvite({ name: 'Bruno' }, member.id);
+    expect((await fixture.members.findById(invité.id))?.isAdmin).toBe(false);
+  });
+
+  it('ne laisse pas le rôle au perdant d’un bootstrap concurrent', async () => {
+    // Le compte du perdant reste en base sans accès. Marqué administrateur, il porterait le droit
+    // d'absorber n'importe quel compte le jour où un accès lui serait rendu.
+    await Promise.allSettled([
+      service.bootstrap({ name: 'Romain', password: 'motdepasse' }),
+      service.bootstrap({ name: 'Intrus', password: 'motdepasse' }),
+    ]);
+    const administrateurs = (await fixture.members.findAll()).filter((m) => m.isAdmin);
+    expect(administrateurs).toHaveLength(1);
+    // C'est bien celui qui peut se connecter.
+    await expect(service.login(administrateurs[0]!.name, 'motdepasse')).resolves.toBeDefined();
+  });
 });
 
 describe('AuthService — invitations', () => {

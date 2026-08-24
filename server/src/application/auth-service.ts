@@ -91,7 +91,19 @@ export class AuthService {
     if (!claimed) {
       throw new ConflictError('Le premier compte existe déjà : connectez-vous.');
     }
-    return { member, session: await this.openSession(member.id) };
+    // Le rôle d'administrateur n'est posé qu'une fois le premier accès emporté, et jamais avant :
+    // écrit à la création du membre, il resterait sur le perdant d'un bootstrap concurrent — un
+    // compte sans accès, que personne ne peut ouvrir, mais qui porterait le droit d'en absorber
+    // d'autres si un accès lui était rendu plus tard.
+    const admin = Member.create({
+      id: member.id,
+      name: member.name,
+      email: member.email,
+      invitedById: member.invitedById,
+      isAdmin: true,
+    });
+    await this.members.save(admin);
+    return { member: admin, session: await this.openSession(admin.id) };
   }
 
   /** Crée un membre et son invitation ; le code est à transmettre hors application. */
