@@ -40,6 +40,13 @@ export interface MemberRepository {
   /** Membres créés par cet invitant, triés par nom. */
   findInvitedBy(inviterId: string): Promise<Member[]>;
   /**
+   * Tous les membres de l'instance, triés par nom. Réservé à l'administrateur : c'est la seule
+   * vue qui ignore le périmètre relationnel, et c'est ce qu'il lui faut pour réunir deux comptes
+   * que plus aucun cercle ne relie — la situation même qui produit un doublon. Aucun écran de
+   * membre ordinaire ne doit l'appeler : `listVisibleMembers` reste la porte de l'annuaire.
+   */
+  findAll(): Promise<Member[]>;
+  /**
    * Membres dont le nom ou l'email vaut `identifier`, à la casse près (et aux espaces de bord),
    * triés par nom. Le port doit répondre sans charger l'annuaire : une tentative de connexion ne
    * se paie pas la table entière. Renvoie une liste — rien n'impose l'unicité des noms.
@@ -240,6 +247,61 @@ export interface CredentialRepository {
    * concurrents créer chacun leur « premier compte ».
    */
   saveFirst(credential: MemberCredential): Promise<boolean>;
+}
+
+/**
+ * Ce qu'une fusion de comptes déplace, table par table. Sert deux fois : à l'annoncer avant
+ * (« 12 dépenses, 3 réservations… »), et à en garder trace au journal après.
+ */
+export interface MergeCounts {
+  /** Cercles d'équipement où l'absorbé est repointé sur le conservé. */
+  circles: number;
+  /** Cercles où les deux figuraient : une ligne disparaît, la personne n'y compte qu'une fois. */
+  circlesMerged: number;
+  reservations: number;
+  usageRecords: number;
+  /** Dépenses payées par l'absorbé. */
+  expensesPaid: number;
+  /** Dépenses dont la répartition nommait l'absorbé (`split_json`, hors clés étrangères). */
+  expenseSplits: number;
+  reimbursements: number;
+  /** Remboursements devenus « de soi à soi », supprimés : neutres au solde, illisibles à l'écran. */
+  reimbursementsRemoved: number;
+  threads: number;
+  messages: number;
+  checklists: number;
+  /** Points de contrôle cochés par l'absorbé. */
+  checklistItems: number;
+  documents: number;
+  notifications: number;
+  notificationPreferences: number;
+  /** Préférences de l'absorbé abandonnées : le conservé en avait déjà pour ce type d'événement. */
+  notificationPreferencesDropped: number;
+  pushSubscriptions: number;
+  /** Membres que l'absorbé avait invités, rattachés au conservé. */
+  invitedMembers: number;
+  /** Sessions de l'absorbé révoquées — c'est ce qui sort le téléphone resté connecté de sa boucle. */
+  sessionsRevoked: number;
+}
+
+/** Fusion demandée : qui absorbe qui, et sous quelle identité le compte conservé continue. */
+export interface MemberMergePlan {
+  absorbedId: string;
+  keptId: string;
+  name: string;
+  email: string | null;
+}
+
+/**
+ * Réunion de deux comptes du même membre. Le port porte le geste entier plutôt que ses morceaux :
+ * une fusion à moitié faite est pire que pas de fusion, et l'atomicité ne s'obtient qu'au niveau
+ * où la transaction existe — pas en enchaînant quinze écritures depuis la couche application.
+ */
+export interface MemberMerger {
+  /** Ce que la fusion déplacerait, sans rien laisser derrière elle. */
+  preview(absorbedId: string, keptId: string): Promise<MergeCounts>;
+  /** Fusionne. Tout ou rien : au moindre refus, la base est celle d'avant. */
+  merge(plan: MemberMergePlan): Promise<MergeCounts>;
 }
 
 export interface SessionRepository {

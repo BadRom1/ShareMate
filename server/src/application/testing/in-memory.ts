@@ -9,7 +9,10 @@ import type {
   EquipmentRepository,
   ExpenseRepository,
   IdGenerator,
+  MemberMergePlan,
+  MemberMerger,
   MemberRepository,
+  MergeCounts,
   MessageRepository,
   ThreadRepository,
   NotificationPreferenceRepository,
@@ -73,6 +76,9 @@ export class InMemoryMemberRepository implements MemberRepository {
     return [...this.items.values()]
       .filter((m) => m.invitedById === inviterId)
       .sort((a, b) => byCodePoint(a.name, b.name));
+  }
+  async findAll() {
+    return [...this.items.values()].sort((a, b) => byCodePoint(a.name, b.name));
   }
   async findByNameOrEmail(identifier: string) {
     const wanted = identifier.trim().toLowerCase();
@@ -411,6 +417,50 @@ export class RecordingAuditLogger implements AuditLogger {
   readonly entries: AuditEntry[] = [];
   record(entry: AuditEntry) {
     this.entries.push(entry);
+  }
+}
+
+/** Compteurs de fusion tous à zéro, à compléter par ce que le test veut affirmer. */
+export const NO_MERGE_COUNTS: MergeCounts = {
+  circles: 0,
+  circlesMerged: 0,
+  reservations: 0,
+  usageRecords: 0,
+  expensesPaid: 0,
+  expenseSplits: 0,
+  reimbursements: 0,
+  reimbursementsRemoved: 0,
+  threads: 0,
+  messages: 0,
+  checklists: 0,
+  checklistItems: 0,
+  documents: 0,
+  notifications: 0,
+  notificationPreferences: 0,
+  notificationPreferencesDropped: 0,
+  pushSubscriptions: 0,
+  invitedMembers: 0,
+  sessionsRevoked: 0,
+};
+
+/**
+ * Fusion simulée : retient les plans reçus et rend des compteurs fixes. Volontairement pas une
+ * seconde implémentation — la fusion est une transaction sur quinze tables, et un double qui la
+ * rejouerait en mémoire attesterait de son propre comportement, pas de celui de la production.
+ * C'est `member-merge.test.ts`, sur SQLite, qui l'éprouve ; ici on ne vérifie que ce que la
+ * couche application décide autour d'elle (le refus, l'identité retenue, le journal).
+ */
+export class RecordingMemberMerger implements MemberMerger {
+  readonly previewed: { absorbedId: string; keptId: string }[] = [];
+  readonly merged: MemberMergePlan[] = [];
+  constructor(private readonly counts: MergeCounts = NO_MERGE_COUNTS) {}
+  async preview(absorbedId: string, keptId: string) {
+    this.previewed.push({ absorbedId, keptId });
+    return this.counts;
+  }
+  async merge(plan: MemberMergePlan) {
+    this.merged.push(plan);
+    return this.counts;
   }
 }
 

@@ -77,6 +77,18 @@ describe('Migration du schéma', () => {
     db.close();
   });
 
+  it('n’attribue le rôle d’administrateur à personne sur une base existante', () => {
+    // Sur une base antérieure, aucun repère ne désigne le premier compte : `invited_by` vaut NULL
+    // partout. Deviner ici donnerait à un inconnu le droit d'absorber n'importe quel compte —
+    // l'opérateur tranche à froid, avec `npm run admin:designate`.
+    baseAntérieure();
+    const db = openDatabase(fichier);
+    const colonnes = (db.prepare(`PRAGMA table_info(members)`).all() as { name: string }[]).map((c) => c.name);
+    expect(colonnes).toContain('is_admin');
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM members WHERE is_admin = 1`).get()).toEqual({ n: 0 });
+    db.close();
+  });
+
   it('est rejouable : une base déjà migrée traverse `migrate` sans dommage', () => {
     baseAntérieure();
     openDatabase(fichier).close();

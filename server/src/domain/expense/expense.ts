@@ -11,6 +11,41 @@ export type SplitRule =
   | { type: 'USAGE_PRORATED'; weights: Record<string, number> }
   | { type: 'CUSTOM'; amounts: Record<string, Money> };
 
+/**
+ * Parts figées, celles de l'absorbé versées à celles du conservé. La somme est inchangée : on
+ * déplace des montants déjà calculés, on n'en recalcule aucun.
+ */
+function mergedShares(shares: ReadonlyMap<string, Money>, absorbedId: string, keptId: string): Record<string, Money> {
+  const amounts: Record<string, Money> = {};
+  for (const [memberId, share] of shares) {
+    if (memberId === absorbedId) continue;
+    amounts[memberId] = memberId === keptId ? share.add(shares.get(absorbedId) ?? Money.zero()) : share;
+  }
+  return amounts;
+}
+
+/**
+ * Identifiant remplacé dans une répartition, à sa place. L'appelant a vérifié que le conservé n'y
+ * figure pas déjà : sans cela, renommer écraserait une entrée au lieu de l'additionner.
+ */
+function renameInSplit(split: SplitRule, absorbedId: string, keptId: string): SplitRule {
+  const rename = (memberId: string) => (memberId === absorbedId ? keptId : memberId);
+  switch (split.type) {
+    case 'EQUAL':
+      return { type: 'EQUAL', memberIds: split.memberIds.map(rename) };
+    case 'USAGE_PRORATED':
+      return {
+        type: 'USAGE_PRORATED',
+        weights: Object.fromEntries(Object.entries(split.weights).map(([id, w]) => [rename(id), w])),
+      };
+    case 'CUSTOM':
+      return {
+        type: 'CUSTOM',
+        amounts: Object.fromEntries(Object.entries(split.amounts).map(([id, m]) => [rename(id), m])),
+      };
+  }
+}
+
 export interface ExpenseProps {
   id: string;
   equipmentId: string;
@@ -88,6 +123,46 @@ export class Expense {
         break;
       }
     }
+  }
+
+  /**
+   * Même dépense, deux comptes du même membre réunis en un seul (voir la fusion de comptes).
+   *
+   * Le payeur se renomme. La répartition, elle, dépend de ce qu'elle contient :
+   *
+   * - l'absorbé seul y figure : son identifiant est remplacé, **la règle est conservée**. Les
+   *   parts ne bougent pas d'un centime, et une dépense « en parts égales » le reste ;
+   * - les deux y figurent : les renommer laisserait une clé unique là où il y avait deux entrées,
+   *   et **la part du membre changerait** — trois parts égales de 30 € deviendraient deux parts de
+   *   45 €, alors que la personne devait bien 60 €. La règle est donc figée en montants
+   *   personnalisés, calculés avant la fusion et **additionnés** pour le compte conservé. C'est le
+   *   seul cas où une fusion change la nature d'une répartition : c'est le prix des soldes
+   *   inchangés, et `shares()` couvrant exactement le montant, la somme reste valide.
+   */
+  mergeMembers(absorbedId: string, keptId: string): Expense {
+    const parts = this.shares();
+    const payerId = this.payerId === absorbedId ? keptId : this.payerId;
+    if (!parts.has(absorbedId)) {
+      return payerId === this.payerId ? this : this.withPayerAndSplit(payerId, this.split);
+    }
+    const split: SplitRule = parts.has(keptId)
+      ? { type: 'CUSTOM', amounts: mergedShares(parts, absorbedId, keptId) }
+      : renameInSplit(this.split, absorbedId, keptId);
+    return this.withPayerAndSplit(payerId, split);
+  }
+
+  private withPayerAndSplit(payerId: string, split: SplitRule): Expense {
+    return Expense.create({
+      id: this.id,
+      equipmentId: this.equipmentId,
+      label: this.label,
+      amount: this.amount,
+      payerId,
+      date: this.date,
+      category: this.category,
+      split,
+      receiptPath: this.receiptPath,
+    });
   }
 
   /** Part due par chaque membre pour cette dépense. */

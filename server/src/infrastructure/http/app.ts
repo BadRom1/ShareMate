@@ -17,6 +17,7 @@ import {
 } from '../../domain/shared/domain-error.js';
 import type { Member } from '../../domain/member/member.js';
 import { MemberService } from '../../application/member-service.js';
+import { MemberMergeService } from '../../application/member-merge-service.js';
 import { AuthService } from '../../application/auth-service.js';
 import { EquipmentService } from '../../application/equipment-service.js';
 import { SubEquipmentService } from '../../application/sub-equipment-service.js';
@@ -37,6 +38,7 @@ import type {
   EquipmentRepository,
   ExpenseRepository,
   IdGenerator,
+  MemberMerger,
   MemberRepository,
   MessageRepository,
   ThreadRepository,
@@ -58,6 +60,7 @@ import { DEFAULT_RATE_LIMITS, RATE_WINDOW, keyPerRoute, tooManyRequests } from '
 import type { RateLimits } from './rate-limit.js';
 import { authRoutes } from './plugins/auth.js';
 import { memberRoutes } from './plugins/members.js';
+import { adminRoutes } from './plugins/admin.js';
 import { equipmentRoutes } from './plugins/equipments.js';
 import { subEquipmentRoutes } from './plugins/sub-equipments.js';
 import { reservationRoutes } from './plugins/reservations.js';
@@ -95,6 +98,8 @@ export interface AppDependencies {
   pushSubscriptions: PushSubscriptionRepository;
   credentials: CredentialRepository;
   sessions: SessionRepository;
+  /** Fusion de deux comptes en un : geste transactionnel, réservé à l'administrateur. */
+  memberMerger: MemberMerger;
   passwordHasher: PasswordHasher;
   tokenGenerator: TokenGenerator;
   idGenerator: IdGenerator;
@@ -266,6 +271,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   const auditLogger: AuditLogger = {
     record: (entry) => app.log.info(entry, 'geste sensible'),
   };
+  const mergeService = new MemberMergeService(deps.members, deps.credentials, deps.memberMerger, auditLogger);
   const equipmentService = new EquipmentService(
     deps.equipments,
     deps.members,
@@ -428,6 +434,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     // Composition : chaque plugin reçoit explicitement les services dont il a besoin.
     await protectedScope.register(authRoutes, { authService, cookieSecure: deps.cookieSecure ?? false, rateLimits });
     await protectedScope.register(memberRoutes, { authService, memberService, rateLimits });
+    await protectedScope.register(adminRoutes, { mergeService, rateLimits });
     await protectedScope.register(equipmentRoutes, { equipmentService });
     await protectedScope.register(subEquipmentRoutes, { subEquipmentService });
     await protectedScope.register(reservationRoutes, { reservationService });

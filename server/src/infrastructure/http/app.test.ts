@@ -20,6 +20,7 @@ import {
   SqliteSubEquipmentRepository,
   SqliteUsageRecordRepository,
 } from '../persistence/sqlite/repositories.js';
+import { SqliteMemberMerger } from '../persistence/sqlite/member-merge.js';
 import { CryptoTokenGenerator, ScryptPasswordHasher, SystemClock, UuidGenerator } from '../tech/adapters.js';
 import { FixedClock } from '../../application/testing/in-memory.js';
 import { buildApp } from './app.js';
@@ -61,6 +62,7 @@ async function buildTestApp(overrides: Partial<AppDependencies> = {}): Promise<F
     pushSubscriptions: new SqlitePushSubscriptionRepository(db),
     credentials: new SqliteCredentialRepository(db),
     sessions: new SqliteSessionRepository(db),
+    memberMerger: new SqliteMemberMerger(db),
     // Coût de dérivation réduit : ces parcours ouvrent des dizaines de sessions, et au coût de
     // production (N = 2¹⁷, ~0,3 s par hachage) la suite se paierait plusieurs minutes de scrypt.
     // Le coût réel est testé pour lui-même dans tech/adapters.test.ts.
@@ -2942,6 +2944,198 @@ describe('API — un membre qui n’a pas encore ouvert son compte', () => {
     });
     expect(ajout.statusCode, ajout.body).toBe(200);
     expect((ajout.json() as { memberIds: string[] }).memberIds).toEqual([alice.id, bruno.id]);
+  });
+});
+
+describe('API — administration : fusionner deux comptes du même membre', () => {
+  /**
+   * Le doublon naît d'une perte de lien : Alice partage un équipement avec Damien, le supprime,
+   * et Damien sort de son annuaire — plus aucun cercle ne les relie. Elle ne peut plus l'ajouter
+   * et le recrée. Il reste alors deux comptes : l'ancien porte l'historique et la session du
+   * téléphone, le nouveau porte l'accès qui fonctionne.
+   */
+  async function deuxDamien() {
+    const alice = await bootstrapAlice();
+    // Chloé est le tiers de l'histoire : c'est elle qui a fait entrer Damien, et elle qui les
+    // réunit dans un cercle. Alice et Damien n'ont donc que ce cercle comme lien.
+    const chloe = await inviteAndRedeem('Chloé', alice.cookies);
+    const ancien = await inviteAndRedeem('Damien', chloe.cookies);
+    const éphémère = (await createEquipment('Bétonnière', [chloe.id, alice.id, ancien.id], chloe.cookies)).json() as {
+      id: string;
+    };
+    const suppression = await app.inject({
+      method: 'DELETE',
+      url: `/api/equipments/${éphémère.id}`,
+      cookies: alice.cookies,
+    });
+    expect(suppression.statusCode).toBe(204);
+    // Le cercle commun a disparu : Damien n'est plus dans le périmètre d'Alice, qui le recrée.
+    const annuaire = (await get('/api/members', alice.cookies)).json() as { id: string }[];
+    expect(annuaire.map((m) => m.id)).not.toContain(ancien.id);
+    const nouveau = await inviteAndRedeem('Damien', alice.cookies);
+    return { alice, chloe, ancien, nouveau };
+  }
+
+  it('dit qui est administrateur, et personne d’autre ne l’est', async () => {
+    const alice = await bootstrapAlice();
+    const bruno = await inviteAndRedeem('Bruno', alice.cookies);
+    expect((await get('/api/auth/me', alice.cookies)).json()).toMatchObject({ member: { isAdmin: true } });
+    expect((await get('/api/auth/me', bruno.cookies)).json()).toMatchObject({ member: { isAdmin: false } });
+  });
+
+  it('refuse le geste à un non-administrateur, sans rien dire des comptes visés', async () => {
+    const { alice, ancien, nouveau } = await deuxDamien();
+
+    const liste = await get('/api/admin/members', nouveau.cookies);
+    expect(liste.statusCode).toBe(403);
+    const aperçu = await get(
+      `/api/admin/members/merge-preview?absorbedId=${ancien.id}&keptId=${nouveau.id}`,
+      nouveau.cookies,
+    );
+    expect(aperçu.statusCode).toBe(403);
+    const fusion = await post('/api/admin/members/merge', { absorbedId: ancien.id, keptId: alice.id }, nouveau.cookies);
+    expect(fusion.statusCode).toBe(403);
+    // Le refus parle du geste, jamais des identifiants : rien n'y confirme qu'ils existent.
+    for (const refus of [liste, aperçu, fusion]) {
+      expect((refus.json() as { error: string }).error).not.toContain(ancien.id);
+      expect((refus.json() as { error: string }).error).toContain('administrateur');
+    }
+  });
+
+  it('montre à l’administrateur les comptes que l’annuaire ne montre plus', async () => {
+    const { alice, chloe, ancien, nouveau } = await deuxDamien();
+
+    const cadré = (await get('/api/members', alice.cookies)).json() as { id: string }[];
+    expect(cadré.map((m) => m.id)).not.toContain(ancien.id);
+
+    const complet = (await get('/api/admin/members', alice.cookies)).json() as {
+      id: string;
+      name: string;
+      hasPassword: boolean;
+      isAdmin: boolean;
+    }[];
+    expect(complet.map((m) => m.id).sort()).toEqual([alice.id, chloe.id, ancien.id, nouveau.id].sort());
+    expect(complet.find((m) => m.id === alice.id)?.isAdmin).toBe(true);
+    expect(complet.find((m) => m.id === ancien.id)?.hasPassword).toBe(true);
+  });
+
+  it('annonce ce que la fusion déplacera avant de la faire', async () => {
+    const { alice, chloe, ancien, nouveau } = await deuxDamien();
+    // Alice ne peut pas inscrire l'ancien compte dans un cercle : il est hors de son périmètre —
+    // c'est exactement ce qui l'a poussée à le recréer. Chloé, elle, le voit encore.
+    const minipelle = (await createEquipment('Minipelle', [chloe.id, ancien.id], chloe.cookies)).json() as {
+      id: string;
+    };
+    await post(
+      '/api/expenses',
+      {
+        equipmentId: minipelle.id,
+        label: 'Gasoil',
+        amountEuros: 60,
+        payerId: ancien.id,
+        date: '2026-07-01',
+        category: 'FUEL',
+        split: { type: 'EQUAL' },
+      },
+      chloe.cookies,
+    );
+
+    const aperçu = await get(
+      `/api/admin/members/merge-preview?absorbedId=${ancien.id}&keptId=${nouveau.id}`,
+      alice.cookies,
+    );
+    expect(aperçu.statusCode, aperçu.body).toBe(200);
+    expect(aperçu.json()).toMatchObject({ circles: 1, expensesPaid: 1, expenseSplits: 1, sessionsRevoked: 1 });
+
+    // Rien n'a été écrit : le compte absorbé et sa session sont intacts.
+    expect((await get('/api/auth/me', ancien.cookies)).json()).toMatchObject({ member: { id: ancien.id } });
+  });
+
+  it('réunit les deux comptes : l’historique reste, l’accès fantôme tombe, les soldes tiennent', async () => {
+    const { alice, chloe, ancien, nouveau } = await deuxDamien();
+    // Le cercle où l'ancien compte porte son historique est celui de Chloé ; Alice y ajoute
+    // ensuite le nouveau compte, qui est de son périmètre. Les deux Damien s'y retrouvent.
+    const minipelle = (await createEquipment('Minipelle', [chloe.id, alice.id, ancien.id], chloe.cookies)).json() as {
+      id: string;
+    };
+    const ajout = await app.inject({
+      method: 'PUT',
+      url: `/api/equipments/${minipelle.id}`,
+      payload: { memberIds: [chloe.id, alice.id, ancien.id, nouveau.id] },
+      cookies: alice.cookies,
+    });
+    expect(ajout.statusCode, ajout.body).toBe(200);
+
+    // Une dépense où les deux comptes figurent dans la répartition : le cas le plus tranchant.
+    const dépense = await post(
+      '/api/expenses',
+      {
+        equipmentId: minipelle.id,
+        label: 'Gasoil',
+        amountEuros: 120,
+        payerId: alice.id,
+        date: '2026-07-01',
+        category: 'FUEL',
+        split: { type: 'EQUAL' },
+      },
+      alice.cookies,
+    );
+    expect(dépense.statusCode, dépense.body).toBe(201);
+
+    const fusion = await post(
+      '/api/admin/members/merge',
+      { absorbedId: ancien.id, keptId: nouveau.id, name: 'Damien', email: 'damien@example.org' },
+      alice.cookies,
+    );
+    expect(fusion.statusCode, fusion.body).toBe(200);
+    const { member, counts } = fusion.json() as {
+      member: { id: string; name: string; email: string | null };
+      counts: { circlesMerged: number; sessionsRevoked: number };
+    };
+    expect(member).toMatchObject({ id: nouveau.id, name: 'Damien', email: 'damien@example.org' });
+    expect(counts.circlesMerged).toBe(1);
+
+    // Le téléphone resté connecté sur le compte fantôme est sorti de sa boucle.
+    expect((await get('/api/members', ancien.cookies)).statusCode).toBe(401);
+    // Le compte conservé, lui, travaille comme avant.
+    expect((await get('/api/auth/me', nouveau.cookies)).json()).toMatchObject({ member: { id: nouveau.id } });
+
+    // Plus qu'un seul Damien, et le cercle ne le compte qu'une fois.
+    const complet = (await get('/api/admin/members', alice.cookies)).json() as { id: string }[];
+    expect(complet.map((m) => m.id).sort()).toEqual([alice.id, chloe.id, nouveau.id].sort());
+    const équipement = (await get('/api/equipments', alice.cookies)).json() as { id: string; memberIds: string[] }[];
+    expect(équipement[0].memberIds).toEqual([chloe.id, alice.id, nouveau.id]);
+
+    // La dépense se recharge, parts additionnées, somme toujours égale au montant.
+    const dépenses = (await get(`/api/equipments/${minipelle.id}/expenses`, alice.cookies)).json() as {
+      sharesEuros: Record<string, number>;
+    }[];
+    // 30 € + 30 € pour Damien, et non les 40 € qu'un partage à trois aurait produits.
+    expect(dépenses[0].sharesEuros).toEqual({ [chloe.id]: 30, [alice.id]: 30, [nouveau.id]: 60 });
+    const soldes = (await get(`/api/equipments/${minipelle.id}/balances`, alice.cookies)).json() as {
+      memberId: string;
+      balanceEuros: number;
+    }[];
+    expect(soldes.reduce((s, b) => s + b.balanceEuros, 0)).toBe(0);
+    expect(soldes.find((b) => b.memberId === nouveau.id)?.balanceEuros).toBe(-60);
+    expect(soldes.find((b) => b.memberId === ancien.id)).toBeUndefined();
+  });
+
+  it('refuse d’absorber l’administrateur, ou de fusionner un compte avec lui-même', async () => {
+    const { alice, ancien, nouveau } = await deuxDamien();
+
+    const admin = await post('/api/admin/members/merge', { absorbedId: alice.id, keptId: nouveau.id }, alice.cookies);
+    expect(admin.statusCode).toBe(409);
+
+    const soi = await post('/api/admin/members/merge', { absorbedId: ancien.id, keptId: ancien.id }, alice.cookies);
+    expect(soi.statusCode).toBe(400);
+
+    const inconnu = await post(
+      '/api/admin/members/merge',
+      { absorbedId: 'inexistant', keptId: nouveau.id },
+      alice.cookies,
+    );
+    expect(inconnu.statusCode).toBe(404);
   });
 });
 

@@ -5,6 +5,7 @@ export interface MemberProps {
   name: string;
   email?: string | null;
   invitedById?: string | null;
+  isAdmin?: boolean;
 }
 
 /**
@@ -31,6 +32,13 @@ export class Member {
      * première connexion, avant que le cercle n'existe.
      */
     readonly invitedById: string | null,
+    /**
+     * Administrateur de l'instance : le premier compte ouvert (`AuthService.bootstrap`), ou celui
+     * que l'opérateur a désigné après coup sur une base antérieure à ce rôle (`admin:designate`).
+     * Un seul geste en dépend — fusionner deux comptes en un —, et c'est précisément parce qu'il
+     * absorbe une identité entière qu'il ne peut pas rester ouvert à tous.
+     */
+    readonly isAdmin: boolean,
   ) {}
 
   static create(props: MemberProps): Member {
@@ -43,6 +51,21 @@ export class Member {
     if (email !== null && !isValidEmail(email)) {
       throw new DomainError(`Adresse email invalide : ${email}`);
     }
-    return new Member(props.id, name, email, props.invitedById ?? null);
+    return new Member(props.id, name, email, props.invitedById ?? null, props.isAdmin ?? false);
+  }
+
+  /**
+   * Même compte, sous une autre identité. Sert à la fusion, où l'administrateur retient un nom et
+   * un email parmi ceux des deux comptes : la validation est celle de la création, l'identifiant
+   * et le rôle restent ceux du compte conservé.
+   */
+  withIdentity(name: string, email: string | null): Member {
+    return Member.create({
+      id: this.id,
+      name,
+      email,
+      invitedById: this.invitedById,
+      isAdmin: this.isAdmin,
+    });
   }
 }

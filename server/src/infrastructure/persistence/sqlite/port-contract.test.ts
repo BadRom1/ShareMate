@@ -230,6 +230,20 @@ describe.each(IMPLÉMENTATIONS)('Contrat des ports — $nom', ({ ouvrir }) => {
     expect((await dépôts.members.findByIds(['m3', 'm2', 'm1'])).map((m) => m.name)).toEqual(['Alice', 'Zoé', 'Émile']);
   });
 
+  it('range par nom l’annuaire complet de l’instance', async () => {
+    // Vue de l'administrateur : elle ignore le périmètre relationnel, pas l'ordre du port.
+    expect((await dépôts.members.findAll()).map((m) => m.name)).toEqual(['Alice', 'Zoé', 'Émile']);
+  });
+
+  it('rend le rôle d’administrateur tel qu’il a été écrit', async () => {
+    await dépôts.members.save(Member.create({ id: 'm4', name: 'Bea', isAdmin: true }));
+    expect((await dépôts.members.findById('m4'))?.isAdmin).toBe(true);
+    expect((await dépôts.members.findById('m1'))?.isAdmin).toBe(false);
+    // Le rôle se retire comme il s'est posé : la même écriture, à l'envers.
+    await dépôts.members.save(Member.create({ id: 'm4', name: 'Bea' }));
+    expect((await dépôts.members.findById('m4'))?.isAdmin).toBe(false);
+  });
+
   it('range par nom les membres créés par un invitant', async () => {
     await dépôts.members.save(Member.create({ id: 'm4', name: 'Zoé', invitedById: 'm1' }));
     await dépôts.members.save(Member.create({ id: 'm5', name: 'Émile', invitedById: 'm1' }));
