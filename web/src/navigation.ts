@@ -24,7 +24,9 @@ export type Route =
   | { view: 'equipment'; equipmentId: string | null; tab: Tab; section: MaintenanceSection; threadId: string | null }
   | { view: 'overview' }
   /** Gestion du parc : créer, modifier, quitter ou supprimer un équipement. */
-  | { view: 'equipments' };
+  | { view: 'equipments' }
+  /** Administration de l'instance : réunir deux comptes du même membre. Réservé à un seul compte. */
+  | { view: 'admin' };
 
 /** Route d'équipement seule, pour les fonctions qui n'ont pas à traiter la vue d'ensemble. */
 type EquipmentRoute = Extract<Route, { view: 'equipment' }>;
@@ -83,6 +85,7 @@ export function parseRoute(url: string): Route | null {
   // parc, pas un formulaire à remplir. Seule la coque ouvre l'écran de gestion.
   if (view === 'overview' || (tab && OVERVIEW_TABS.includes(tab))) return { view: 'overview' };
   if (view === 'equipments') return { view: 'equipments' };
+  if (view === 'admin') return { view: 'admin' };
   if (!tab) return null;
   const alias = TAB_ALIASES[tab];
   // Onglet inconnu : mieux vaut ignorer le lien que vider l'écran du membre.

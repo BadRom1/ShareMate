@@ -58,6 +58,13 @@ describe('parseRoute', () => {
     expect(parseRoute('/?view=equipments')).toEqual({ view: 'equipments' });
   });
 
+  // L'écran d'administration s'ouvre par son nom seul : aucun lien de notification n'y mène, et
+  // seul l'administrateur en trouve l'entrée — la garde, elle, est au serveur.
+  it('ouvre l’administration sur ?view=admin', () => {
+    expect(parseRoute('/?view=admin')).toEqual({ view: 'admin' });
+    expect(routeToSearch({ view: 'admin' })).toBe('?view=admin');
+  });
+
   it('retient le fil désigné par un lien de notification', () => {
     expect(parseRoute('/?tab=discussions&equipment=e1&thread=t1')).toEqual(aRoute({ tab: 'forum', threadId: 't1' }));
   });

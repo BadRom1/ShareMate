@@ -1,0 +1,324 @@
+import { useCallback, useEffect, useState } from 'react';
+import { api } from '../api';
+import type { DirectoryMember, MergeCounts } from '../api';
+import { errorMessage, useApiResource } from '../useApiResource';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+
+/**
+ * Administration de l'instance : réunir deux comptes du même membre.
+ *
+ * Un doublon naît d'une perte de lien — le dernier équipement qui reliait deux personnes
+ * disparaît, elles sortent du champ de vision l'une de l'autre, et l'une recrée l'autre. Cet
+ * écran est le seul endroit où l'annuaire n'est pas cadré sur un périmètre : sans cela, les deux
+ * comptes à réunir ne s'afficheraient pas ensemble.
+ *
+ * Qui absorbe qui ne se devine pas : l'ancien compte porte l'historique, le nouveau porte l'accès
+ * qui fonctionne. On choisit donc les deux rôles, puis champ par champ le nom et l'email qui
+ * survivent — et l'on voit ce qui sera déplacé avant de confirmer, comme pour la suppression d'un
+ * équipement, qui annonce ce qu'elle emporte.
+ */
+
+interface Props {
+  currentMemberId: string;
+}
+
+/** Champ d'identité : de quel compte on retient la valeur. */
+type Origine = 'kept' | 'absorbed';
+
+/** Ce que chaque compteur désigne, au singulier et au pluriel. */
+const DÉPLACÉ: { clé: keyof MergeCounts; un: string; plusieurs: string }[] = [
+  { clé: 'circles', un: 'cercle d’équipement', plusieurs: 'cercles d’équipement' },
+  {
+    clé: 'circlesMerged',
+    un: 'cercle où les deux comptes figuraient : une inscription en double disparaît',
+    plusieurs: 'cercles où les deux comptes figuraient : autant d’inscriptions en double disparaissent',
+  },
+  { clé: 'reservations', un: 'réservation', plusieurs: 'réservations' },
+  { clé: 'usageRecords', un: 'relevé d’usage', plusieurs: 'relevés d’usage' },
+  { clé: 'expensesPaid', un: 'dépense payée', plusieurs: 'dépenses payées' },
+  { clé: 'expenseSplits', un: 'répartition de dépense', plusieurs: 'répartitions de dépense' },
+  { clé: 'reimbursements', un: 'remboursement', plusieurs: 'remboursements' },
+  {
+    clé: 'reimbursementsRemoved',
+    un: 'remboursement d’un compte à l’autre, supprimé : il ne pèse rien dans les soldes',
+    plusieurs: 'remboursements d’un compte à l’autre, supprimés : ils ne pèsent rien dans les soldes',
+  },
+  { clé: 'threads', un: 'fil de discussion', plusieurs: 'fils de discussion' },
+  { clé: 'messages', un: 'message', plusieurs: 'messages' },
+  { clé: 'checklists', un: 'checklist', plusieurs: 'checklists' },
+  { clé: 'checklistItems', un: 'point de contrôle coché', plusieurs: 'points de contrôle cochés' },
+  { clé: 'documents', un: 'document', plusieurs: 'documents' },
+  { clé: 'notifications', un: 'notification', plusieurs: 'notifications' },
+  { clé: 'notificationPreferences', un: 'préférence de notification', plusieurs: 'préférences de notification' },
+  {
+    clé: 'notificationPreferencesDropped',
+    un: 'préférence abandonnée : celle du compte conservé l’emporte',
+    plusieurs: 'préférences abandonnées : celles du compte conservé l’emportent',
+  },
+  {
+    clé: 'invitedMembers',
+    un: 'membre invité par le compte absorbé',
+    plusieurs: 'membres invités par le compte absorbé',
+  },
+  {
+    clé: 'pushSubscriptions',
+    un: 'abonnement aux notifications push',
+    plusieurs: 'abonnements aux notifications push',
+  },
+  {
+    clé: 'sessionsRevoked',
+    un: 'session révoquée : l’appareil resté connecté sur ce compte devra se reconnecter',
+    plusieurs: 'sessions révoquées : les appareils restés connectés sur ce compte devront se reconnecter',
+  },
+];
+
+/** Lignes à afficher : ce qui vaut zéro n'apprend rien. */
+function lignes(counts: MergeCounts): string[] {
+  return DÉPLACÉ.filter((d) => counts[d.clé] > 0).map(
+    (d) => `${counts[d.clé]} ${counts[d.clé] > 1 ? d.plusieurs : d.un}`,
+  );
+}
+
+/** Un compte tel qu'on le reconnaît dans une liste où deux homonymes se ressemblent. */
+function étiquette(membre: DirectoryMember): string {
+  const marques = [
+    membre.isAdmin ? 'administrateur' : null,
+    membre.hasPassword ? null : 'jamais connecté',
+    membre.email,
+  ].filter(Boolean);
+  return `${membre.name}${marques.length > 0 ? ` — ${marques.join(', ')}` : ''}`;
+}
+
+export function AdminPage({ currentMemberId }: Props) {
+  const membersResource = useApiResource(useCallback(() => api.adminMembers(), []));
+  const members = membersResource.data;
+
+  const [absorbedId, setAbsorbedId] = useState('');
+  const [keptId, setKeptId] = useState('');
+  const [nameFrom, setNameFrom] = useState<Origine>('kept');
+  const [emailFrom, setEmailFrom] = useState<Origine>('kept');
+  const [counts, setCounts] = useState<MergeCounts | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fait, setFait] = useState<{ name: string; counts: MergeCounts } | null>(null);
+
+  const absorbed = members?.find((m) => m.id === absorbedId) ?? null;
+  const kept = members?.find((m) => m.id === keptId) ?? null;
+  const paire = absorbed && kept && absorbed.id !== kept.id ? { absorbed, kept } : null;
+
+  // Identité retenue, champ par champ. Calculée à chaque rendu plutôt que mémoïsée : deux
+  // lectures dans un objet de trois champs ne valent pas une dépendance de plus.
+  const identité = paire
+    ? {
+        name: (nameFrom === 'kept' ? paire.kept : paire.absorbed).name,
+        email: (emailFrom === 'kept' ? paire.kept : paire.absorbed).email,
+      }
+    : null;
+
+  // Aperçu chiffré, recalculé à chaque changement de couple : c'est ce qui rend la confirmation
+  // autre chose qu'un pari. Les réponses hors séquence sont écartées — deux choix rapprochés
+  // afficheraient sinon le décompte du précédent.
+  useEffect(() => {
+    if (absorbedId === '' || keptId === '' || absorbedId === keptId) {
+      setCounts(null);
+      return;
+    }
+    let courant = true;
+    setCounts(null);
+    setError(null);
+    api
+      .mergePreview(absorbedId, keptId)
+      .then((résultat) => courant && setCounts(résultat))
+      .catch((e) => courant && setError(errorMessage(e)));
+    return () => {
+      courant = false;
+    };
+  }, [absorbedId, keptId]);
+
+  async function fusionner() {
+    if (!paire || !identité) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const { counts: déplacés } = await api.mergeMembers({
+        absorbedId: paire.absorbed.id,
+        keptId: paire.kept.id,
+        name: identité.name,
+        email: identité.email,
+      });
+      setFait({ name: identité.name, counts: déplacés });
+      setConfirming(false);
+      setAbsorbedId('');
+      setKeptId('');
+      await membersResource.reload();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (members === null) {
+    return membersResource.error ? (
+      <div className="alert">{membersResource.error}</div>
+    ) : (
+      <p className="empty">Chargement…</p>
+    );
+  }
+
+  // L'administrateur peut absorber, jamais être absorbé : l'instance perdrait le seul compte qui
+  // autorise le geste, et le rôle ne se redonne qu'avec un script, base en main.
+  const absorbables = members.filter((m) => !m.isAdmin);
+  const conservables = members.filter((m) => m.id !== absorbedId);
+
+  return (
+    <>
+      {error && (
+        <div className="alert" onClick={() => setError(null)}>
+          {error}
+        </div>
+      )}
+
+      {fait && (
+        <div className="card">
+          <h3>Comptes réunis sous « {fait.name} »</h3>
+          {lignes(fait.counts).length === 0 ? (
+            <p className="muted">Le compte absorbé ne portait rien : il a simplement disparu.</p>
+          ) : (
+            <ul className="modal-loss">
+              {lignes(fait.counts).map((ligne) => (
+                <li key={ligne}>{ligne}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      <div className="card">
+        <h3>Réunir deux comptes</h3>
+        <p className="muted">
+          Quand la même personne existe deux fois, tout ce que portait le compte absorbé passe au compte conservé —
+          cercles, réservations, dépenses, messages — et le compte absorbé disparaît, avec son mot de passe et ses
+          sessions. Le geste ne se défait pas.
+        </p>
+
+        <form
+          className="stack"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setConfirming(true);
+          }}
+        >
+          <div className="row">
+            <label className="field">
+              Compte absorbé (il disparaît)
+              <select value={absorbedId} onChange={(e) => setAbsorbedId(e.target.value)} required>
+                <option value="">Choisir…</option>
+                {absorbables.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {étiquette(m)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              Compte conservé (il continue)
+              <select value={keptId} onChange={(e) => setKeptId(e.target.value)} required>
+                <option value="">Choisir…</option>
+                {conservables.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {étiquette(m)}
+                    {m.id === currentMemberId ? ' — vous' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {paire && (
+            <>
+              <div>
+                <strong>Identité du compte conservé</strong>
+                <div className="row" style={{ marginTop: '0.5rem' }}>
+                  <label className="field">
+                    Nom
+                    <select value={nameFrom} onChange={(e) => setNameFrom(e.target.value as Origine)}>
+                      <option value="kept">{paire.kept.name} (compte conservé)</option>
+                      <option value="absorbed">{paire.absorbed.name} (compte absorbé)</option>
+                    </select>
+                  </label>
+                  <label className="field">
+                    Email
+                    <select value={emailFrom} onChange={(e) => setEmailFrom(e.target.value as Origine)}>
+                      <option value="kept">{paire.kept.email ?? 'aucun'} (compte conservé)</option>
+                      <option value="absorbed">{paire.absorbed.email ?? 'aucun'} (compte absorbé)</option>
+                    </select>
+                  </label>
+                </div>
+                <p className="muted">
+                  L’email sert d’identifiant de connexion : c’est avec celui-là que la personne se connectera.
+                </p>
+              </div>
+
+              <div>
+                <strong>Ce qui sera déplacé</strong>
+                {counts === null ? (
+                  <p className="empty">Décompte en cours…</p>
+                ) : lignes(counts).length === 0 ? (
+                  <p className="muted">Le compte absorbé ne porte rien : il disparaîtra simplement.</p>
+                ) : (
+                  <ul className="modal-loss">
+                    {lignes(counts).map((ligne) => (
+                      <li key={ligne}>{ligne}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </>
+          )}
+
+          <button className="danger" disabled={!paire || busy}>
+            Réunir ces deux comptes…
+          </button>
+        </form>
+      </div>
+
+      <div className="card">
+        <h3>Tous les comptes ({members.length})</h3>
+        <p className="muted">
+          Cette liste ignore les cercles : elle montre aussi les comptes que votre annuaire ne vous montre plus.
+        </p>
+        <ul className="modal-loss">
+          {members.map((m) => (
+            <li key={m.id}>{étiquette(m)}</li>
+          ))}
+        </ul>
+      </div>
+
+      {confirming && paire && identité && (
+        <ConfirmDialog
+          title={`Absorber « ${paire.absorbed.name} » dans « ${paire.kept.name} » ?`}
+          confirmLabel="Réunir définitivement"
+          busy={busy}
+          onConfirm={() => void fusionner()}
+          onCancel={() => setConfirming(false)}
+        >
+          <p style={{ margin: 0 }}>
+            Le compte absorbé disparaît, avec son mot de passe et ses sessions : l’appareil qui y est resté connecté
+            sera déconnecté. Tout ce qu’il portait passe au compte conservé :
+          </p>
+          <ul className="modal-loss">
+            {(counts ? lignes(counts) : []).map((ligne) => (
+              <li key={ligne}>{ligne}</li>
+            ))}
+          </ul>
+          <p className="muted" style={{ margin: 0 }}>
+            Le compte conservé continuera sous le nom « {identité.name} »
+            {identité.email ? ` et l’adresse ${identité.email}` : ', sans adresse email'}. Rien ne défait ce geste.
+          </p>
+        </ConfirmDialog>
+      )}
+    </>
+  );
+}

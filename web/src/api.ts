@@ -41,6 +41,12 @@ export interface Member {
   id: string;
   name: string;
   email: string | null;
+  /**
+   * Administrateur de l'instance : le premier compte ouvert, ou celui que l'opérateur a désigné.
+   * Un seul geste en dépend — réunir deux comptes du même membre — et c'est ce drapeau qui fait
+   * apparaître l'écran d'administration chez son titulaire.
+   */
+  isAdmin: boolean;
 }
 
 /**
@@ -50,6 +56,32 @@ export interface Member {
  */
 export interface DirectoryMember extends Member {
   hasPassword: boolean;
+}
+
+/**
+ * Ce qu'une fusion de comptes déplacerait, table par table : de quoi l'annoncer avant de la
+ * confirmer, sur un geste qu'aucune route ne défait.
+ */
+export interface MergeCounts {
+  circles: number;
+  circlesMerged: number;
+  reservations: number;
+  usageRecords: number;
+  expensesPaid: number;
+  expenseSplits: number;
+  reimbursements: number;
+  reimbursementsRemoved: number;
+  threads: number;
+  messages: number;
+  checklists: number;
+  checklistItems: number;
+  documents: number;
+  notifications: number;
+  notificationPreferences: number;
+  notificationPreferencesDropped: number;
+  pushSubscriptions: number;
+  invitedMembers: number;
+  sessionsRevoked: number;
 }
 
 export type MeterUnit = 'HOURS' | 'KILOMETERS';
@@ -389,6 +421,21 @@ export const api = {
     }),
   regenerateInvite: (memberId: string) =>
     request<{ inviteCode: string }>(`/api/members/${memberId}/invite`, { method: 'POST', body: JSON.stringify({}) }),
+
+  /**
+   * Annuaire complet de l'instance, réservé à l'administrateur : un doublon naît justement de la
+   * perte du dernier cercle commun, que l'annuaire cadré ne montre donc plus.
+   */
+  adminMembers: () => request<DirectoryMember[]>('/api/admin/members'),
+  mergePreview: (absorbedId: string, keptId: string) =>
+    request<MergeCounts>(
+      `/api/admin/members/merge-preview?absorbedId=${encodeURIComponent(absorbedId)}&keptId=${encodeURIComponent(keptId)}`,
+    ),
+  mergeMembers: (input: { absorbedId: string; keptId: string; name?: string; email?: string | null }) =>
+    request<{ member: Member; counts: MergeCounts }>('/api/admin/members/merge', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
 
   listEquipments: () => request<Equipment[]>('/api/equipments'),
   createEquipment: (input: Omit<Equipment, 'id'>) =>
