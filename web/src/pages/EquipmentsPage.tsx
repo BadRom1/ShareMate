@@ -9,8 +9,13 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 interface Props {
   members: DirectoryMember[];
   currentMemberId: string;
-  /** À rappeler quand un nouvel utilisateur est créé depuis cette page. */
-  onMembersChanged: () => void;
+  /**
+   * À rappeler quand un nouvel utilisateur est créé depuis cette page. Le membre est passé pour
+   * que la coque l'ajoute à son annuaire sans attendre la relecture : sur un réseau lent (ou
+   * servi depuis le cache du service worker), celle-ci peut rendre une liste antérieure, et son
+   * nom s'afficherait alors comme un identifiant brut dans le cercle qu'il vient de rejoindre.
+   */
+  onMemberCreated: (member: DirectoryMember) => void;
 }
 
 const EMPTY_FORM = {
@@ -23,7 +28,7 @@ const EMPTY_FORM = {
   maintenanceThreshold: '',
 };
 
-export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: Props) {
+export function EquipmentsPage({ members, currentMemberId, onMemberCreated }: Props) {
   const [editing, setEditing] = useState<Equipment | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -57,9 +62,9 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
     setEditing(e);
     setForm({
       name: e.name,
-      category: e.category,
+      category: e.category ?? '',
       acquisitionDate: e.acquisitionDate.slice(0, 10),
-      purchaseValueEuros: String(e.purchaseValueEuros),
+      purchaseValueEuros: e.purchaseValueEuros === null ? '' : String(e.purchaseValueEuros),
       meterUnit: e.meterUnit,
       memberIds: [...e.memberIds],
       maintenanceThreshold: e.maintenanceThreshold === null ? '' : String(e.maintenanceThreshold),
@@ -70,11 +75,13 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setActionError(null);
+    // Champ facultatif laissé vide : une absence (`null`), et surtout pas une valeur d'achat
+    // de 0 € — le serveur les distingue, l'affichage aussi.
     const payload = {
       name: form.name,
-      category: form.category,
+      category: form.category.trim() || null,
       acquisitionDate: form.acquisitionDate,
-      purchaseValueEuros: Number(form.purchaseValueEuros || 0),
+      purchaseValueEuros: form.purchaseValueEuros.trim() === '' ? null : Number(form.purchaseValueEuros),
       meterUnit: form.meterUnit,
       memberIds: form.memberIds,
       maintenanceThreshold: form.maintenanceThreshold === '' ? null : Number(form.maintenanceThreshold),
@@ -101,12 +108,12 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
     if (!name) return;
     setActionError(null);
     try {
-      const created = await api.createMember({ name });
+      const { inviteCode, ...created } = await api.createMember({ name });
       setNewMemberName('');
       // Le nouvel utilisateur rejoint le cercle en cours d'édition.
       setForm((f) => ({ ...f, memberIds: [...f.memberIds, created.id] }));
-      setInvite({ memberName: created.name, url: inviteUrl(created.inviteCode) });
-      onMembersChanged();
+      setInvite({ memberName: created.name, url: inviteUrl(inviteCode) });
+      onMemberCreated(created);
     } catch (e) {
       setActionError(errorMessage(e));
     }
@@ -154,7 +161,10 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
   }
 
   function memberName(id: string) {
-    return members.find((m) => m.id === id)?.name ?? id;
+    // Un identifiant sans nom n'arrive qu'à un annuaire momentanément en retard (réseau lent,
+    // réponse servie par le cache du service worker) : une ellipse se lit comme le chargement
+    // qu'elle est, là où un UUID brut passe pour un membre inconnu du cercle.
+    return members.find((m) => m.id === id)?.name ?? '…';
   }
 
   /** Comptes jamais ouverts : les seuls à qui un lien de première connexion peut encore servir. */
@@ -180,12 +190,11 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
                 <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
               </label>
               <label className="field">
-                Catégorie
+                Catégorie <span className="muted">(facultatif)</span>
                 <input
                   value={form.category}
                   onChange={(e) => setForm({ ...form, category: e.target.value })}
                   placeholder="BTP, véhicule, jardin…"
-                  required
                 />
               </label>
             </div>
@@ -200,14 +209,14 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
                 />
               </label>
               <label className="field">
-                Valeur d'achat (€)
+                Valeur d'achat (€) <span className="muted">(facultatif)</span>
                 <input
                   type="number"
                   min="0"
                   step="0.01"
                   value={form.purchaseValueEuros}
                   onChange={(e) => setForm({ ...form, purchaseValueEuros: e.target.value })}
-                  required
+                  placeholder="vide = non renseignée"
                 />
               </label>
             </div>
@@ -236,6 +245,10 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
             <span className="muted">Cercle de partage : qui utilise cet équipement ?</span>
             <div className="row">
               {members.map((m) => {
+                // Une personne qui n'a pas encore ouvert son compte fait partie du cercle comme
+                // les autres : elle compte dans les parts et les soldes. Seule sa connexion
+                // attend son lien — il n'y a donc rien à attendre pour l'inscrire ici.
+                const enAttente = !m.hasPassword;
                 // Le demandeur ne se retire jamais d'ici : à la création l'équipement lui serait
                 // invisible, en modification le serveur l'exige (geste dédié « quitter le cercle »).
                 const locked = m.id === currentMemberId;
@@ -262,10 +275,20 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
                       }
                     />
                     {m.name}
+                    {enAttente && (
+                      <span className="muted" title="Compte créé, lien de première connexion pas encore utilisé.">
+                        {' '}
+                        (en attente)
+                      </span>
+                    )}
                   </label>
                 );
               })}
             </div>
+            <span className="muted">
+              Une personne « en attente » n'a pas encore ouvert son compte : elle partage l'équipement, ses dépenses et
+              ses soldes dès maintenant.
+            </span>
             <div className="row" style={{ alignItems: 'flex-end' }}>
               <label className="field">
                 Ajouter une personne au cercle
@@ -273,6 +296,15 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
                   value={newMemberName}
                   onChange={(e) => setNewMemberName(e.target.value)}
                   placeholder="Prénom du nouvel utilisateur"
+                  // Entrée dans ce champ soumettait le formulaire de l'équipement — donc sans
+                  // la personne qu'on venait d'y taper. Elle fait désormais ce que fait le
+                  // bouton voisin : la créer.
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void addMember();
+                    }
+                  }}
                 />
               </label>
               <button type="button" className="ghost" onClick={() => void addMember()}>
@@ -344,7 +376,13 @@ export function EquipmentsPage({ members, currentMemberId, onMembersChanged }: P
             <div className="card" key={e.id}>
               <h3>{e.name}</h3>
               <p className="muted">
-                {e.category} · acquis le {formatDate(e.acquisitionDate)} · {formatEuros(e.purchaseValueEuros)}
+                {[
+                  e.category,
+                  `acquis le ${formatDate(e.acquisitionDate)}`,
+                  e.purchaseValueEuros === null ? null : formatEuros(e.purchaseValueEuros),
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
               </p>
               <p>
                 {status?.alert ? (

@@ -1,34 +1,38 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { EquipmentService } from '../../../application/equipment-service.js';
 import { equipmentDto } from '../dto.js';
-import { arrayOf, enumOf, id, idParams, isoDate, nullableNumber, number, object, text } from '../schema.js';
+import { arrayOf, enumOf, id, idParams, isoDate, nullableNumber, nullableText, object, text } from '../schema.js';
 import '../session.js'; // augmentation de type : request.authMember
 
 export interface EquipmentRoutesOptions {
   equipmentService: EquipmentService;
 }
 
-/** Champs d'un équipement : tous obligatoires à la création, tous facultatifs à la mise à jour. */
+/**
+ * Champs d'un équipement. Seuls ceux dont dépend une autre partie de l'application (agenda,
+ * relevés, soldes) sont exigés à la création ; la catégorie et la valeur d'achat ne décrivent
+ * que la fiche, et s'omettent ou s'effacent (`null`). Tout est facultatif à la mise à jour.
+ */
 const FIELDS = {
   name: text(120),
-  category: text(80),
+  category: nullableText(80),
   acquisitionDate: isoDate,
-  purchaseValueEuros: number(),
+  purchaseValueEuros: nullableNumber(),
   meterUnit: enumOf(['HOURS', 'KILOMETERS']),
   // Cercle borné : chaque membre ajoute une part à calculer sur chaque dépense de l'équipement.
   memberIds: arrayOf(id, 50, 1),
   maintenanceThreshold: nullableNumber(),
 };
 
-const REQUIRED = ['name', 'category', 'acquisitionDate', 'purchaseValueEuros', 'meterUnit', 'memberIds'];
+const REQUIRED = ['name', 'acquisitionDate', 'meterUnit', 'memberIds'];
 
 export const equipmentRoutes: FastifyPluginAsync<EquipmentRoutesOptions> = async (app, { equipmentService }) => {
   app.post<{
     Body: {
       name: string;
-      category: string;
+      category?: string | null;
       acquisitionDate: string;
-      purchaseValueEuros: number;
+      purchaseValueEuros?: number | null;
       meterUnit: 'HOURS' | 'KILOMETERS';
       memberIds: string[];
       maintenanceThreshold?: number | null;
@@ -54,9 +58,9 @@ export const equipmentRoutes: FastifyPluginAsync<EquipmentRoutesOptions> = async
     Params: { id: string };
     Body: Partial<{
       name: string;
-      category: string;
+      category: string | null;
       acquisitionDate: string;
-      purchaseValueEuros: number;
+      purchaseValueEuros: number | null;
       meterUnit: 'HOURS' | 'KILOMETERS';
       memberIds: string[];
       maintenanceThreshold: number | null;

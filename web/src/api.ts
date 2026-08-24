@@ -54,13 +54,16 @@ export interface DirectoryMember extends Member {
 
 export type MeterUnit = 'HOURS' | 'KILOMETERS';
 
-/** Un équipement porte son cercle d'utilisateurs (`memberIds`). */
+/**
+ * Un équipement porte son cercle d'utilisateurs (`memberIds`). Catégorie et valeur d'achat ne
+ * servent qu'à décrire la fiche : elles peuvent rester vides (`null`).
+ */
 export interface Equipment {
   id: string;
   name: string;
-  category: string;
+  category: string | null;
   acquisitionDate: string;
-  purchaseValueEuros: number;
+  purchaseValueEuros: number | null;
   meterUnit: MeterUnit;
   memberIds: string[];
   maintenanceThreshold: number | null;

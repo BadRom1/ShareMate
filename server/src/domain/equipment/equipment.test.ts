@@ -19,8 +19,28 @@ describe('Equipment', () => {
     const e = Equipment.create(base);
     expect(e.name).toBe('Minipelle');
     expect(e.meterUnit).toBe('HOURS');
-    expect(e.purchaseValue.toEuros()).toBe(15000);
+    expect(e.purchaseValue?.toEuros()).toBe(15000);
     expect(e.memberIds).toEqual(['m1', 'm2']);
+  });
+
+  it('accepte une catégorie et une valeur d’achat absentes : elles ne servent qu’à décrire', () => {
+    const e = Equipment.create({ ...base, category: null, purchaseValue: null });
+    expect(e.category).toBeNull();
+    expect(e.purchaseValue).toBeNull();
+  });
+
+  it('traite une catégorie vide ou blanche comme une absence', () => {
+    expect(Equipment.create({ ...base, category: '   ' }).category).toBeNull();
+    expect(Equipment.create({ ...base, category: undefined }).category).toBeNull();
+  });
+
+  it('efface une catégorie et une valeur d’achat par une mise à jour à null', () => {
+    const e = Equipment.create(base).update({ category: null, purchaseValue: null });
+    expect(e.category).toBeNull();
+    expect(e.purchaseValue).toBeNull();
+    // Un champ absent de la mise à jour reste, lui, intact.
+    expect(e.update({ name: 'Autre' }).category).toBeNull();
+    expect(Equipment.create(base).update({ name: 'Autre' }).category).toBe('BTP');
   });
 
   it('rejette un nom vide', () => {

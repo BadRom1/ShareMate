@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, setUnauthorizedHandler } from './api';
 import type { DirectoryMember, Member } from './api';
 import { EquipmentsPage } from './pages/EquipmentsPage';
@@ -84,12 +84,12 @@ export function App() {
 function EquipmentsScreen({
   members,
   currentMemberId,
-  onMembersChanged,
+  onMemberCreated,
   onClose,
 }: {
   members: DirectoryMember[];
   currentMemberId: string;
-  onMembersChanged: () => void;
+  onMemberCreated: (member: DirectoryMember) => void;
   onClose: () => void;
 }) {
   useEscape(onClose);
@@ -103,7 +103,7 @@ function EquipmentsScreen({
             <IconClose size={22} />
           </button>
         </header>
-        <EquipmentsPage members={members} currentMemberId={currentMemberId} onMembersChanged={onMembersChanged} />
+        <EquipmentsPage members={members} currentMemberId={currentMemberId} onMemberCreated={onMemberCreated} />
       </div>
     </section>
   );
@@ -119,8 +119,30 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
   const membersResource = useApiResource(useCallback(() => api.listMembers(), []));
   const equipmentsResource = useApiResource(useCallback(() => api.listEquipments(), []));
 
-  const members = membersResource.data;
+  /**
+   * Membres créés depuis cette session, tenus à part le temps que l'annuaire les rende. La
+   * relecture peut être lente, voire servie par le cache du service worker (réseau d'abord,
+   * cache de secours) : sans ce complément, une personne qu'on vient de créer et d'inscrire au
+   * cercle s'y afficherait sous son identifiant brut. Le doublon se résorbe tout seul dès que
+   * l'annuaire la porte.
+   */
+  const [membresCréés, setMembresCréés] = useState<DirectoryMember[]>([]);
+  const chargés = membersResource.data;
+  const members = useMemo(() => {
+    if (chargés === null) return null;
+    const connus = new Set(chargés.map((m) => m.id));
+    return [...chargés, ...membresCréés.filter((m) => !connus.has(m.id))];
+  }, [chargés, membresCréés]);
   const equipments = equipmentsResource.data;
+
+  const reloadMembers = membersResource.reload;
+  const onMemberCreated = useCallback(
+    (member: DirectoryMember) => {
+      setMembresCréés((liste) => [...liste, member]);
+      void reloadMembers();
+    },
+    [reloadMembers],
+  );
 
   /**
    * Équipement de l'espace de travail courant. Le lien n'en désigne pas toujours un
@@ -195,7 +217,7 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
       <EquipmentsScreen
         members={members}
         currentMemberId={member.id}
-        onMembersChanged={() => void membersResource.reload()}
+        onMemberCreated={onMemberCreated}
         onClose={() => go({ view: 'equipment' })}
       />
     );

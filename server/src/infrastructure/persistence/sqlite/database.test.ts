@@ -89,6 +89,82 @@ describe('Migration du schéma', () => {
   });
 });
 
+describe('Migration « catégorie et valeur d’achat facultatives »', () => {
+  /**
+   * Base au schéma précédent, peuplée : la table `equipments` s'y reconstruit, et tout ce qui la
+   * référence (cercle, réservations, dépenses, remboursements, relevés) doit y survivre — une
+   * reconstruction naïve les emporterait par cascade.
+   */
+  function baseAvecHistorique(): void {
+    const db = openDatabase(fichier);
+    db.exec(`
+      INSERT INTO members (id, name) VALUES ('m1', 'Alice'), ('m2', 'Bruno');
+      INSERT INTO equipments (id, name, category, acquisition_date, purchase_value_cents, meter_unit, maintenance_threshold)
+        VALUES ('e1', 'Minipelle', 'BTP', '2025-03-01T00:00:00.000Z', 1500000, 'HOURS', 50);
+      INSERT INTO equipment_members VALUES ('e1', 'm1', 0), ('e1', 'm2', 1);
+      INSERT INTO reservations (id, equipment_id, member_id, start_at, end_at, status, created_at)
+        VALUES ('r1', 'e1', 'm1', '2026-01-01T08:00:00.000Z', '2026-01-01T10:00:00.000Z', 'PLANNED', '2025-12-01T00:00:00.000Z');
+      INSERT INTO usage_records (id, equipment_id, member_id, recorded_at, meter_reading)
+        VALUES ('u1', 'e1', 'm1', '2026-01-01T10:00:00.000Z', 120);
+      INSERT INTO expenses (id, equipment_id, label, amount_cents, payer_id, date, category, split_json)
+        VALUES ('d1', 'e1', 'Gasoil', 5000, 'm1', '2026-01-02T00:00:00.000Z', 'FUEL', '{"type":"EQUAL"}');
+      INSERT INTO reimbursements (id, equipment_id, from_member_id, to_member_id, amount_cents, date)
+        VALUES ('rb1', 'e1', 'm2', 'm1', 2500, '2026-01-03T00:00:00.000Z');
+    `);
+    // Version ramenée à l'étape précédente : la reconstruction reste à jouer.
+    db.pragma(`user_version = ${SCHEMA_VERSION - 1}`);
+    db.close();
+  }
+
+  /** Colonnes acceptant NULL, telles que déclarées par le schéma. */
+  function facultatives(db: Database.Database, table: string): string[] {
+    return (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string; notnull: number }[])
+      .filter((c) => c.notnull === 0)
+      .map((c) => c.name);
+  }
+
+  it('rend les deux colonnes facultatives sans rien perdre de l’historique de l’équipement', () => {
+    baseAvecHistorique();
+    const db = openDatabase(fichier);
+
+    expect(facultatives(db, 'equipments')).toEqual(
+      expect.arrayContaining(['category', 'purchase_value_cents', 'maintenance_threshold']),
+    );
+    // La reconstruction a conservé la ligne, ses valeurs, et tout ce qui pend à l'équipement.
+    expect(db.prepare(`SELECT name, category, purchase_value_cents FROM equipments`).all()).toEqual([
+      { name: 'Minipelle', category: 'BTP', purchase_value_cents: 1500000 },
+    ]);
+    for (const [table, attendu] of [
+      ['equipment_members', 2],
+      ['reservations', 1],
+      ['usage_records', 1],
+      ['expenses', 1],
+      ['reimbursements', 1],
+    ] as const) {
+      expect({ table, n: (db.prepare(`SELECT COUNT(*) n FROM ${table}`).get() as { n: number }).n }).toEqual({
+        table,
+        n: attendu,
+      });
+    }
+    expect(db.pragma('foreign_key_check')).toEqual([]);
+    // Une fiche peut désormais s'écrire sans catégorie ni valeur d'achat.
+    db.prepare(
+      `INSERT INTO equipments (id, name, category, acquisition_date, purchase_value_cents, meter_unit, maintenance_threshold)
+       VALUES ('e2', 'Bétonnière', NULL, '2025-04-01T00:00:00.000Z', NULL, 'HOURS', NULL)`,
+    ).run();
+    expect(version()).toBe(SCHEMA_VERSION);
+    db.close();
+  });
+
+  it('est sans effet sur une base déjà reconstruite', () => {
+    baseAvecHistorique();
+    openDatabase(fichier).close();
+    const db = openDatabase(fichier);
+    expect(db.prepare(`SELECT COUNT(*) n FROM equipment_members`).get()).toEqual({ n: 2 });
+    db.close();
+  });
+});
+
 describe('Migration des emails de membres', () => {
   /** Base portant les emails que les versions antérieures acceptaient sans les valider. */
   function baseAvecEmailsLibres(): void {

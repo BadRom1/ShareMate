@@ -36,6 +36,12 @@ function declareFunctions(db: SqliteDb): void {
  */
 interface Migration {
   readonly description: string;
+  /**
+   * Reconstruction de table : l'étape s'exécute clés étrangères désarmées (voir `migrate`).
+   * Réservé aux étapes qui recréent une table référencée — elles doivent alors vérifier
+   * elles-mêmes l'intégrité (`PRAGMA foreign_key_check`) avant de rendre la main.
+   */
+  readonly withoutForeignKeys?: boolean;
   apply(db: SqliteDb): void;
 }
 
@@ -401,6 +407,62 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    // La catégorie et la valeur d'achat d'un équipement ne servent qu'à décrire sa fiche : rien
+    // dans l'agenda, les relevés ou les soldes n'en dépend. Les exiger n'obtenait qu'une saisie
+    // de complaisance avant de pouvoir partager un équipement, d'où leur passage en facultatif.
+    //
+    // SQLite ne sait pas retirer un NOT NULL : la table se reconstruit (renommer, recréer,
+    // recopier, supprimer). Deux réglages rendent l'opération sûre, et sont tous les deux
+    // nécessaires :
+    // - clés étrangères désarmées (`withoutForeignKeys`), sans quoi le `DROP` final exécute un
+    //   effacement implicite qui emporterait par cascade tout ce qui pend aux équipements —
+    //   cercle, réservations, relevés, dépenses, remboursements ;
+    // - `legacy_alter_table = ON`, sans quoi le renommage réécrit les clauses `REFERENCES` des
+    //   tables filles pour les faire pointer vers `equipments_ancien`, qui n'existera plus.
+    // L'intégrité est revérifiée avant de rendre la main, dans la transaction de l'étape.
+    description: 'catégorie et valeur d’achat facultatives',
+    withoutForeignKeys: true,
+    apply(db) {
+      const colonnes = ['category', 'purchase_value_cents'] as const;
+      // Rien à relâcher : colonnes déjà facultatives (étape rejouée), ou table qui ne les porte
+      // pas — une base de test réduite n'a pas à passer par une reconstruction.
+      const présentes = columns(db, 'equipments');
+      if (!colonnes.every((c) => présentes.includes(c)) || colonnes.every((c) => nullable(db, 'equipments', c))) {
+        return;
+      }
+      db.pragma('legacy_alter_table = ON');
+      try {
+        db.exec(`
+          ALTER TABLE equipments RENAME TO equipments_ancien;
+          CREATE TABLE equipments (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            category TEXT,
+            acquisition_date TEXT NOT NULL,
+            purchase_value_cents INTEGER,
+            meter_unit TEXT NOT NULL CHECK (meter_unit IN ('HOURS', 'KILOMETERS')),
+            maintenance_threshold REAL
+          );
+          INSERT INTO equipments
+              (id, name, category, acquisition_date, purchase_value_cents, meter_unit, maintenance_threshold)
+            SELECT id, name, category, acquisition_date, purchase_value_cents, meter_unit, maintenance_threshold
+              FROM equipments_ancien;
+          DROP TABLE equipments_ancien;
+        `);
+      } finally {
+        db.pragma('legacy_alter_table = OFF');
+      }
+      // Filet : une reconstruction qui aurait laissé une fille orpheline se voit ici, dans la
+      // transaction de l'étape, donc avant que la version de schéma n'avance.
+      const orphelines = db.pragma('foreign_key_check') as unknown[];
+      if (orphelines.length > 0) {
+        throw new Error(
+          `Reconstruction de la table « equipments » incohérente : ${orphelines.length} ligne(s) orpheline(s). ${BACKUP_FIRST}`,
+        );
+      }
+    },
+  },
 ];
 
 /** Version de schéma attendue par ce code : rank de la dernière migration connue. */
@@ -418,11 +480,24 @@ function migrate(db: SqliteDb): void {
   for (let rank = applied; rank < MIGRATIONS.length; rank += 1) {
     const migration = MIGRATIONS[rank]!;
     const version = rank + 1;
-    db.transaction(() => {
+    const étape = db.transaction(() => {
       migration.apply(db);
       // PRAGMA n'accepte pas de paramètre lié ; `version` est un entier issu de MIGRATIONS.
       db.pragma(`user_version = ${version}`);
-    })();
+    });
+    if (!migration.withoutForeignKeys) {
+      étape();
+      continue;
+    }
+    // `PRAGMA foreign_keys` est sans effet à l'intérieur d'une transaction : le désarmement doit
+    // encadrer celle-ci. La transaction reste entière — une étape qui échoue ne laisse rien
+    // derrière elle — et les clés sont réarmées quoi qu'il arrive.
+    db.pragma('foreign_keys = OFF');
+    try {
+      étape();
+    } finally {
+      db.pragma('foreign_keys = ON');
+    }
   }
 }
 
@@ -450,6 +525,12 @@ function rejectIncompatibleSchema(db: SqliteDb): void {
 
 function tableExists(db: SqliteDb, name: string): boolean {
   return db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name) !== undefined;
+}
+
+/** Vrai si la colonne existe et accepte NULL — de quoi rendre une reconstruction idempotente. */
+function nullable(db: SqliteDb, table: string, column: string): boolean {
+  const info = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string; notnull: number }[];
+  return info.some((c) => c.name === column && c.notnull === 0);
 }
 
 function columns(db: SqliteDb, table: string): string[] {

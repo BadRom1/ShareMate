@@ -22,9 +22,11 @@ import type {
 
 export interface CreateEquipmentInput {
   name: string;
-  category: string;
+  /** Facultative : une étiquette d'affichage n'a pas à barrer le partage d'un équipement. */
+  category?: string | null;
   acquisitionDate: string;
-  purchaseValueEuros: number;
+  /** Facultative, pour la même raison. `null` n'est pas 0 € : la valeur est simplement inconnue. */
+  purchaseValueEuros?: number | null;
   meterUnit: MeterUnit;
   memberIds: string[];
   maintenanceThreshold: number | null;
@@ -32,12 +34,17 @@ export interface CreateEquipmentInput {
 
 export interface UpdateEquipmentInput {
   name?: string;
-  category?: string;
+  category?: string | null;
   acquisitionDate?: string;
-  purchaseValueEuros?: number;
+  purchaseValueEuros?: number | null;
   meterUnit?: MeterUnit;
   memberIds?: string[];
   maintenanceThreshold?: number | null;
+}
+
+/** Montant facultatif reçu de l'API : `null` (ou absent) reste une absence, il ne devient pas 0 €. */
+function money(euros: number | null | undefined): Money | null {
+  return euros === null || euros === undefined ? null : Money.fromEuros(euros);
 }
 
 /** Résumé du changement de composition, pour le corps de la notification aux membres restants. */
@@ -94,9 +101,9 @@ export class EquipmentService {
     const equipment = Equipment.create({
       id: this.idGenerator.next(),
       name: input.name,
-      category: input.category,
+      category: input.category ?? null,
       acquisitionDate: parseIsoDate(input.acquisitionDate, "La date d'acquisition"),
-      purchaseValue: Money.fromEuros(input.purchaseValueEuros),
+      purchaseValue: money(input.purchaseValueEuros),
       meterUnit: input.meterUnit,
       memberIds: input.memberIds,
       maintenanceThreshold: input.maintenanceThreshold,
@@ -125,7 +132,7 @@ export class EquipmentService {
       ...(input.acquisitionDate !== undefined && {
         acquisitionDate: parseIsoDate(input.acquisitionDate, "La date d'acquisition"),
       }),
-      ...(input.purchaseValueEuros !== undefined && { purchaseValue: Money.fromEuros(input.purchaseValueEuros) }),
+      ...(input.purchaseValueEuros !== undefined && { purchaseValue: money(input.purchaseValueEuros) }),
       ...(input.meterUnit !== undefined && { meterUnit: input.meterUnit }),
       ...(input.memberIds !== undefined && { memberIds: input.memberIds }),
       ...(input.maintenanceThreshold !== undefined && { maintenanceThreshold: input.maintenanceThreshold }),

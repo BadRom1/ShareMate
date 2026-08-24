@@ -11,9 +11,12 @@ partage des frais façon Tricount.
   n'importe quel membre peut émettre et transmettre hors application. Il n'y a pas de « groupe »
   au sens d'une entité : le cercle d'un équipement est **la liste de ses membres**, et un membre
   peut appartenir à plusieurs cercles sans qu'ils se voient entre eux.
-- **Équipements** : CRUD complet (nom, catégorie, date d'acquisition, valeur d'achat, membres du
-  cercle, type de compteur heures/km). Un équipement appartient à son cercle, pas à un propriétaire
-  unique. Tout changement de composition notifie les entrants, les sortants et ceux qui restent ;
+- **Équipements** : CRUD complet (nom, date d'acquisition, membres du cercle, type de compteur
+  heures/km, et — facultatives — catégorie et valeur d'achat, qui ne décrivent que la fiche).
+  Un équipement appartient à son cercle, pas à un propriétaire unique. Une personne entre dans un
+  cercle **dès sa création**, sans attendre qu'elle ait consommé son lien de première connexion :
+  elle y porte ses parts de dépense et pèse dans les soldes ; seule sa propre connexion attend.
+  Tout changement de composition notifie les entrants, les sortants et ceux qui restent ;
   se retirer soi-même est un geste dédié (« quitter le cercle »).
 - **Réservations** : calendrier de créneaux par équipement, détection de conflit (409 en cas de
   chevauchement), vue calendrier commune à tous les cercles du membre, récurrences plafonnées à
