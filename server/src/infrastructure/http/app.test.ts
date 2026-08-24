@@ -2810,6 +2810,141 @@ describe('API — composition du cercle d’un équipement', () => {
   });
 });
 
+describe('API — fiche d’équipement : ce qui est vraiment exigé', () => {
+  /**
+   * Catégorie et valeur d'achat n'ont d'effet que sur l'affichage de la fiche : rien dans
+   * l'agenda, les relevés ou les soldes n'en dépend. Les exiger n'obtenait qu'une saisie de
+   * complaisance avant de pouvoir partager un équipement.
+   */
+  it('crée un équipement sans catégorie ni valeur d’achat', async () => {
+    const alice = await bootstrapAlice();
+    const res = await post(
+      '/api/equipments',
+      { name: 'Bétonnière', acquisitionDate: '2025-01-01', meterUnit: 'HOURS', memberIds: [alice.id] },
+      alice.cookies,
+    );
+    expect(res.statusCode, res.body).toBe(201);
+    const créé = res.json() as { id: string; category: string | null; purchaseValueEuros: number | null };
+    expect(créé.category).toBeNull();
+    expect(créé.purchaseValueEuros).toBeNull();
+
+    // Et l'absence se relit telle quelle : ce n'est pas une valeur d'achat de 0 €.
+    const relu = (await get(`/api/equipments/${créé.id}`, alice.cookies)).json() as {
+      category: string | null;
+      purchaseValueEuros: number | null;
+    };
+    expect(relu).toMatchObject({ category: null, purchaseValueEuros: null });
+  });
+
+  it('traite une catégorie vide comme une absence, et sait effacer les deux champs', async () => {
+    const alice = await bootstrapAlice();
+    const vide = await post(
+      '/api/equipments',
+      {
+        name: 'Remorque',
+        category: '   ',
+        acquisitionDate: '2025-01-01',
+        purchaseValueEuros: 800,
+        meterUnit: 'KILOMETERS',
+        memberIds: [alice.id],
+      },
+      alice.cookies,
+    );
+    expect(vide.statusCode, vide.body).toBe(201);
+    const remorque = vide.json() as { id: string; category: string | null };
+    expect(remorque.category).toBeNull();
+
+    const effacé = await app.inject({
+      method: 'PUT',
+      url: `/api/equipments/${remorque.id}`,
+      payload: { category: null, purchaseValueEuros: null },
+      cookies: alice.cookies,
+    });
+    expect(effacé.statusCode, effacé.body).toBe(200);
+    expect(effacé.json()).toMatchObject({ category: null, purchaseValueEuros: null, name: 'Remorque' });
+
+    // Une mise à jour qui ne les mentionne pas les laisse tels quels.
+    const renommé = await app.inject({
+      method: 'PUT',
+      url: `/api/equipments/${remorque.id}`,
+      payload: { name: 'Remorque 750 kg' },
+      cookies: alice.cookies,
+    });
+    expect(renommé.json()).toMatchObject({ name: 'Remorque 750 kg', category: null, purchaseValueEuros: null });
+  });
+
+  it('exige encore le nom, la date, le compteur et un cercle', async () => {
+    const alice = await bootstrapAlice();
+    const res = await post('/api/equipments', { name: 'Sans rien' }, alice.cookies);
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('API — un membre qui n’a pas encore ouvert son compte', () => {
+  /**
+   * Un lien de première connexion circule hors bande (SMS, WhatsApp) et peut rester des jours
+   * sans être consommé. Rien ne doit attendre ce moment : le membre existe dès sa création, il
+   * entre dans les cercles, porte ses parts de dépense et pèse dans les soldes. L'attente
+   * ne concerne que sa propre connexion.
+   */
+  it('entre dans un cercle dès sa création, et porte ses parts de dépense', async () => {
+    const alice = await bootstrapAlice();
+    const créé = await post('/api/members', { name: 'Bruno' }, alice.cookies);
+    expect(créé.statusCode).toBe(201);
+    const bruno = créé.json() as { id: string; hasPassword: boolean };
+    expect(bruno.hasPassword).toBe(false);
+
+    // Annuaire : le nom est là, donc affichable — jamais un identifiant brut à la place.
+    const annuaire = (await get('/api/members', alice.cookies)).json() as { id: string; name: string }[];
+    expect(annuaire.find((m) => m.id === bruno.id)?.name).toBe('Bruno');
+
+    const equipement = await createEquipment('Minipelle', [alice.id, bruno.id], alice.cookies);
+    expect(equipement.statusCode, equipement.body).toBe(201);
+    const minipelle = equipement.json() as { id: string; memberIds: string[] };
+    expect(minipelle.memberIds).toEqual([alice.id, bruno.id]);
+
+    const dépense = await post(
+      '/api/expenses',
+      {
+        equipmentId: minipelle.id,
+        label: 'Gasoil',
+        amountEuros: 50,
+        payerId: alice.id,
+        date: '2026-07-01',
+        category: 'FUEL',
+        split: { type: 'EQUAL' },
+      },
+      alice.cookies,
+    );
+    expect(dépense.statusCode, dépense.body).toBe(201);
+    const soldes = (await get(`/api/equipments/${minipelle.id}/balances`, alice.cookies)).json() as {
+      memberId: string;
+      balanceEuros: number;
+    }[];
+    expect(soldes).toEqual(
+      expect.arrayContaining([
+        { memberId: bruno.id, balanceEuros: -25 },
+        { memberId: alice.id, balanceEuros: 25 },
+      ]),
+    );
+  });
+
+  it('rejoint un cercle existant par une mise à jour, comme n’importe quel membre', async () => {
+    const alice = await bootstrapAlice();
+    const seul = (await createEquipment('Broyeur', [alice.id], alice.cookies)).json() as { id: string };
+    const bruno = (await post('/api/members', { name: 'Bruno' }, alice.cookies)).json() as { id: string };
+
+    const ajout = await app.inject({
+      method: 'PUT',
+      url: `/api/equipments/${seul.id}`,
+      payload: { memberIds: [alice.id, bruno.id] },
+      cookies: alice.cookies,
+    });
+    expect(ajout.statusCode, ajout.body).toBe(200);
+    expect((ajout.json() as { memberIds: string[] }).memberIds).toEqual([alice.id, bruno.id]);
+  });
+});
+
 describe('API — validation des requêtes (schémas)', () => {
   /** Message d'erreur d'une réponse, tel que le front l'affiche à l'utilisateur. */
   function erreur(res: { json: () => unknown }): string {
@@ -2867,7 +3002,7 @@ describe('API — validation des requêtes (schémas)', () => {
 
     const incomplet = await post('/api/equipments', { name: 'Tracteur' }, alice.cookies);
     expect(incomplet.statusCode).toBe(400);
-    expect(erreur(incomplet)).toBe('Corps de requête invalide : le champ « category » est obligatoire.');
+    expect(erreur(incomplet)).toBe('Corps de requête invalide : le champ « acquisitionDate » est obligatoire.');
 
     const unitéInconnue = await post(
       '/api/equipments',
@@ -3016,14 +3151,23 @@ describe('API — validation des requêtes (schémas)', () => {
   it('n’accepte pas `null` là où un nombre est déclaré', async () => {
     const { equipment, alice } = await setupMembersAndEquipment();
 
-    // La coercition Ajv promouvait `null` en `0` : un champ obligatoire oublié par le front
-    // devenait une valeur d'achat de 0 €, ou un montant nul dans un calcul de soldes.
+    // La coercition Ajv promouvait `null` en `0` : un montant obligatoire oublié par le front
+    // devenait un montant nul dans un calcul de soldes. Là où le champ est facultatif (valeur
+    // d'achat d'un équipement), `null` reste une absence — et surtout pas 0 €.
     const sansValeur = await post(
       '/api/equipments',
       equipmentPayload({ memberIds: [alice.id], purchaseValueEuros: null }),
       alice.cookies,
     );
-    expect(sansValeur.statusCode, sansValeur.body).toBe(400);
+    expect(sansValeur.statusCode, sansValeur.body).toBe(201);
+    expect((sansValeur.json() as { purchaseValueEuros: number | null }).purchaseValueEuros).toBeNull();
+
+    const seuilNul = await post(
+      '/api/equipments',
+      equipmentPayload({ memberIds: [alice.id], maintenanceThreshold: 0 }),
+      alice.cookies,
+    );
+    expect(seuilNul.statusCode, seuilNul.body).toBe(400);
 
     const sansMontant = await post(
       '/api/expenses',

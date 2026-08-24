@@ -213,9 +213,9 @@ export class SqliteSessionRepository implements SessionRepository {
 interface EquipmentRow {
   id: string;
   name: string;
-  category: string;
+  category: string | null;
   acquisition_date: string;
-  purchase_value_cents: number;
+  purchase_value_cents: number | null;
   meter_unit: string;
   maintenance_threshold: number | null;
 }
@@ -252,7 +252,8 @@ export class SqliteEquipmentRepository implements EquipmentRepository {
         name: row.name,
         category: row.category,
         acquisitionDate: new Date(row.acquisition_date),
-        purchaseValue: Money.fromCents(row.purchase_value_cents),
+        // `null` en base est une valeur d'achat non renseignée, à ne pas rendre comme 0 €.
+        purchaseValue: row.purchase_value_cents === null ? null : Money.fromCents(row.purchase_value_cents),
         meterUnit: row.meter_unit as MeterUnit,
         memberIds: cercles.get(row.id) ?? [],
         maintenanceThreshold: row.maintenance_threshold,
@@ -293,7 +294,7 @@ export class SqliteEquipmentRepository implements EquipmentRepository {
           equipment.name,
           equipment.category,
           equipment.acquisitionDate.toISOString(),
-          equipment.purchaseValue.cents,
+          equipment.purchaseValue?.cents ?? null,
           equipment.meterUnit,
           equipment.maintenanceThreshold,
         );

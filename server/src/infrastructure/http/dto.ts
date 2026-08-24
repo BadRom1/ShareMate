@@ -34,7 +34,7 @@ export function equipmentDto(e: Equipment) {
     name: e.name,
     category: e.category,
     acquisitionDate: e.acquisitionDate.toISOString(),
-    purchaseValueEuros: e.purchaseValue.toEuros(),
+    purchaseValueEuros: e.purchaseValue?.toEuros() ?? null,
     meterUnit: e.meterUnit,
     memberIds: e.memberIds,
     maintenanceThreshold: e.maintenanceThreshold,

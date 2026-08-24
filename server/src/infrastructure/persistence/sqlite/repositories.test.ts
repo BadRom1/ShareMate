@@ -190,7 +190,7 @@ describe('SQLite — équipements', () => {
     const { equipments } = await seedBase();
     const e = await equipments.findById('e1');
     expect(e?.name).toBe('Minipelle');
-    expect(e?.purchaseValue.cents).toBe(1500000);
+    expect(e?.purchaseValue?.cents).toBe(1500000);
     expect(e?.memberIds).toEqual(['m1', 'm2']);
     expect(e?.maintenanceThreshold).toBe(50);
   });
