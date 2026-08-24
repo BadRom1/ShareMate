@@ -5,8 +5,6 @@ import type {
   ChecklistRepository,
   Clock,
   CredentialRepository,
-  DeviceToken,
-  DeviceTokenRepository,
   DocumentRepository,
   EquipmentRepository,
   ExpenseRepository,
@@ -369,21 +367,6 @@ export class InMemoryPushSubscriptionRepository implements PushSubscriptionRepos
   }
 }
 
-export class InMemoryDeviceTokenRepository implements DeviceTokenRepository {
-  private items = new Map<string, DeviceToken>();
-  async findByMember(memberId: string) {
-    return [...this.items.values()].filter((t) => t.memberId === memberId);
-  }
-  async save(token: DeviceToken) {
-    this.items.set(token.token, token);
-  }
-  async deleteByToken(memberId: string, token: string) {
-    if (this.items.get(token)?.memberId === memberId) {
-      this.items.delete(token);
-    }
-  }
-}
-
 /** Justificatifs sans disque : `paths` expose ce qui reste stocké. */
 export class InMemoryReceiptStorage implements ReceiptStorage {
   readonly paths = new Set<string>();
@@ -431,12 +414,9 @@ export class RecordingAuditLogger implements AuditLogger {
   }
 }
 
-/** N'envoie aucun push (tests et déploiement sans clés VAPID/FCM). */
+/** N'envoie aucun push (tests et déploiement sans clés VAPID). */
 export class NoopPushSender implements PushSender {
   async sendWebPush() {
-    return [];
-  }
-  async sendFcm() {
     return [];
   }
 }

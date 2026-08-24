@@ -53,8 +53,8 @@ export const notificationRoutes: FastifyPluginAsync<NotificationRoutesOptions> =
   /*
    * Écarter une notification, c'est la retirer du centre de son destinataire — un geste de
    * rangement, pas une suppression de donnée métier : l'événement annoncé reste où il est.
-   * Le chemin littéral `/subscriptions` et `/device-tokens` (canaux push, plus bas) l'emporte
-   * sur ce paramètre : le routeur préfère toujours un segment statique.
+   * Le chemin littéral `/subscriptions` (canal push, plus bas) l'emporte sur ce paramètre :
+   * le routeur préfère toujours un segment statique.
    */
   app.delete<{ Params: { id: string } }>(
     '/api/notifications/:id',
@@ -116,28 +116,6 @@ export const notificationRoutes: FastifyPluginAsync<NotificationRoutesOptions> =
     { schema: { body: object({ endpoint }, ['endpoint']) } },
     async (request, reply) => {
       await notificationService.unsubscribeWebPush(request.authMember.id, request.body.endpoint);
-      return reply.status(204).send();
-    },
-  );
-
-  app.post<{ Body: { token: string; platform?: string } }>(
-    '/api/notifications/device-tokens',
-    { schema: { body: object({ token: text(1024), platform: text(32) }, ['token']) } },
-    async (request, reply) => {
-      await notificationService.registerDeviceToken(
-        request.authMember.id,
-        request.body.token,
-        request.body.platform ?? 'android',
-      );
-      return reply.status(201).send({ status: 'ok' });
-    },
-  );
-
-  app.delete<{ Body: { token: string } }>(
-    '/api/notifications/device-tokens',
-    { schema: { body: object({ token: text(1024) }, ['token']) } },
-    async (request, reply) => {
-      await notificationService.unregisterDeviceToken(request.authMember.id, request.body.token);
       return reply.status(204).send();
     },
   );

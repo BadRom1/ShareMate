@@ -15,7 +15,6 @@ import { useRoute } from './navigation';
 import { useEscape } from './useEscape';
 import { pickInitialEquipmentId, setLastEquipmentId } from './lastEquipment';
 import { clearErrors, firstError, useApiResource } from './useApiResource';
-import { setupNativePush } from './notifications';
 
 type Auth =
   | { kind: 'loading' }
@@ -153,9 +152,8 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
     }
   }, [route.view, reloadEquipments]);
 
-  // Push natif (FCM) + clics de notification Web Push relayés par le service worker.
+  // Clics de notification Web Push relayés par le service worker.
   useEffect(() => {
-    void setupNativePush(follow);
     const sw = navigator.serviceWorker;
     if (!sw) return;
     const onMessage = (e: MessageEvent) => {

@@ -33,7 +33,6 @@ import type {
   ChecklistRepository,
   Clock,
   CredentialRepository,
-  DeviceTokenRepository,
   DocumentRepository,
   EquipmentRepository,
   ExpenseRepository,
@@ -53,7 +52,7 @@ import type {
   TokenGenerator,
   UsageRecordRepository,
 } from '../../application/ports.js';
-import { CLIENT_HEADER, SESSION_COOKIE, sessionToken, setSessionCookie } from './session.js';
+import { sessionToken, setSessionCookie } from './session.js';
 import { AJV_OPTIONS, schemaErrorFormatter } from './schema.js';
 import { DEFAULT_RATE_LIMITS, RATE_WINDOW, keyPerRoute, tooManyRequests } from './rate-limit.js';
 import type { RateLimits } from './rate-limit.js';
@@ -94,7 +93,6 @@ export interface AppDependencies {
   notifications: NotificationRepository;
   notificationPreferences: NotificationPreferenceRepository;
   pushSubscriptions: PushSubscriptionRepository;
-  deviceTokens: DeviceTokenRepository;
   credentials: CredentialRepository;
   sessions: SessionRepository;
   passwordHasher: PasswordHasher;
@@ -132,11 +130,11 @@ export interface AppDependencies {
   /** Répertoire des fichiers statiques du front (null = API seule). */
   webDistDir?: string | null;
   /**
-   * Origines autorisées en cross-origin (app native Capacitor). Vide = pas de CORS
-   * (le front web est servi en même-origine et n'en a pas besoin).
+   * Origines autorisées en cross-origin. Vide = pas de CORS (le front est servi en même-origine
+   * et n'en a pas besoin) ; à renseigner seulement s'il est déployé sur une autre origine.
    */
   corsOrigins?: string[];
-  /** Envoi de push (Web Push + FCM). Absent = push désactivé, seul le centre in-app fonctionne. */
+  /** Envoi de push (Web Push). Absent = push désactivé, seul le centre in-app fonctionne. */
   pushSender?: PushSender;
   /** Clé publique VAPID exposée au client pour l'abonnement Web Push (null si non configurée). */
   vapidPublicKey?: string | null;
@@ -177,8 +175,8 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   const corsEnabled = corsOrigins.length > 0;
 
   await app.register(helmet, {
-    // L'app native lit l'API en cross-origin : la politique par défaut (same-origin)
-    // bloquerait ces lectures. Relâché uniquement quand des origines CORS sont configurées.
+    // Une origine tierce autorisée lit aussi les fichiers servis ici : la politique par défaut
+    // (same-origin) bloquerait ces lectures. Relâché uniquement si des origines CORS sont configurées.
     crossOriginResourcePolicy: corsEnabled ? { policy: 'cross-origin' } : undefined,
     contentSecurityPolicy: {
       directives: {
@@ -198,11 +196,12 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   });
   await app.register(cookie);
   if (corsEnabled) {
-    // Auth par token Bearer côté natif : pas de cookie cross-origin, donc pas de `credentials`.
+    // Sans `credentials`, et le cookie de session étant `SameSite=Lax`, une origine tierce n'est
+    // pas authentifiée par ce biais : ces origines n'ouvrent que les routes publiques.
     await app.register(cors, {
       origin: corsOrigins,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', CLIENT_HEADER],
+      allowedHeaders: ['Content-Type'],
     });
   }
   // Chargé avant la déclaration des routes, sinon son hook onRoute ne s'applique pas.
@@ -232,15 +231,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     async sendWebPush() {
       return [];
     },
-    async sendFcm() {
-      return [];
-    },
   };
   const notificationService = new NotificationService(
     deps.notifications,
     deps.notificationPreferences,
     deps.pushSubscriptions,
-    deps.deviceTokens,
     deps.pushSender ?? noopPushSender,
     deps.idGenerator,
     deps.clock,
@@ -424,8 +419,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       }
       // Prolongation glissante rendue au navigateur : sans cette repose, le cookie garderait
       // l'échéance de la connexion et disparaîtrait pendant que la session serveur court encore.
-      // L'app native, elle, porte son jeton en Bearer et n'a pas de cookie à rafraîchir.
-      if (session.renewed && request.cookies[SESSION_COOKIE]) {
+      if (session.renewed) {
         setSessionCookie(reply, token!, session.expiresAt, deps.cookieSecure ?? false);
       }
       request.authMember = session.member;

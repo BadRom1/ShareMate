@@ -224,20 +224,6 @@ export interface PushSubscriptionRepository {
   deleteByEndpoint(memberId: string, endpoint: string): Promise<void>;
 }
 
-/** Jeton d'appareil FCM (app native). */
-export interface DeviceToken {
-  token: string;
-  memberId: string;
-  platform: string;
-}
-
-export interface DeviceTokenRepository {
-  findByMember(memberId: string): Promise<DeviceToken[]>;
-  save(token: DeviceToken): Promise<void>;
-  /** Supprime ce jeton s'il appartient à ce membre, sans effet sinon (cf. `deleteByEndpoint`). */
-  deleteByToken(memberId: string, token: string): Promise<void>;
-}
-
 export interface CredentialRepository {
   findByMemberId(memberId: string): Promise<MemberCredential | null>;
   findByInviteCode(code: string): Promise<MemberCredential | null>;
@@ -314,7 +300,7 @@ export interface TokenGenerator {
   hash(token: string): string;
 }
 
-/** Charge utile poussée vers un appareil (Web Push ou FCM). */
+/** Charge utile poussée vers un appareil (Web Push). */
 export interface PushPayload {
   title: string;
   body: string;
@@ -324,17 +310,16 @@ export interface PushPayload {
 
 /** Endpoint dont l'envoi a échoué de façon définitive (abonnement à purger). */
 export interface FailedTarget {
-  /** `endpoint` pour Web Push, `token` pour FCM. */
+  /** `endpoint` de l'abonnement Web Push. */
   id: string;
 }
 
 /**
- * Port technique d'envoi de push. Abstrait `web-push` (Web Push VAPID) et `firebase-admin` (FCM).
- * Retourne les cibles définitivement invalides pour que le service purge les abonnements morts.
+ * Port technique d'envoi de push. Abstrait `web-push` (Web Push VAPID). Retourne les cibles
+ * définitivement invalides pour que le service purge les abonnements morts.
  */
 export interface PushSender {
   sendWebPush(subscriptions: WebPushSubscription[], payload: PushPayload): Promise<FailedTarget[]>;
-  sendFcm(tokens: DeviceToken[], payload: PushPayload): Promise<FailedTarget[]>;
 }
 
 /** Événement à notifier, émis par les services producteurs. */

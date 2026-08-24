@@ -49,7 +49,7 @@ partage des frais façon Tricount.
   porter **un fichier joint** — la photo d'une panne, un devis — envoyé avec lui ou seul, sans
   texte. Le fil et le message se renomment, s'éditent et se suppriment **par leur auteur seul** ;
   tout le cercle lit et répond.
-- **Notifications** : centre in-app (cloche), Web Push (PWA) et push natif Android, réglables par
+- **Notifications** : centre in-app (cloche) et Web Push (PWA), réglables par
   type d'événement et par membre. Chaque notification se marque lue et **s'efface** — une par une ou
   tout le centre d'un coup, sans toucher à celles des autres membres. Détail et configuration dans
   [docs/notifications.md](docs/notifications.md).
@@ -82,7 +82,7 @@ server/src/
 └── infrastructure/   # Adapters
     ├── http/         # Fastify : app.ts (transverse) + plugins/ (un fichier par domaine)
     ├── persistence/  # SQLite (better-sqlite3), migrations versionnées par PRAGMA user_version
-    └── tech/         # scrypt, UUID, horloge, push (Web Push + FCM)
+    └── tech/         # scrypt, UUID, horloge, push (Web Push)
                       # object-store.ts : magasin d'objets brut (disque ou bucket S3/R2),
                       # partagé par les justificatifs et les documents
 web/src/              # Front React (Vite) — adapter de présentation
@@ -162,7 +162,7 @@ Variables d'environnement du serveur :
 | `WEB_DIST_DIR`    | `../web/dist`                | Front statique servi par le serveur                         |
 | `NODE_ENV`        | —                            | `production` : cookie `Secure`, `trustProxy`, logs JSON     |
 | `CORS_ORIGINS`    | — (vide : pas de CORS)       | Origines cross-origin autorisées, séparées par des virgules |
-| `VAPID_*`, `FCM`  | — (push désactivé)           | Push : voir [docs/notifications.md](docs/notifications.md)  |
+| `VAPID_*`         | — (push désactivé)           | Push : voir [docs/notifications.md](docs/notifications.md)  |
 
 ### Stockage des fichiers (Cloudflare R2 ou Amazon S3)
 
@@ -308,9 +308,9 @@ la confiance est totale et assumée. Le reste de cette section dit précisément
   `trustProxy` est activé en production pour lire la vraie IP derrière le proxy Railway.
 - **En-têtes** : `@fastify/helmet` — CSP `default-src 'self'`, `frame-ancestors 'none'`,
   `object-src 'none'`, `nosniff`, HSTS.
-- **Logs** : pino JSON en production ; `cookie`, `set-cookie` et `authorization` expurgés (le jeton
-  de l'app native transite en `Bearer`). Les changements de composition d'un cercle partent dans le
-  journal du serveur, hors de portée des membres concernés.
+- **Logs** : pino JSON en production ; `cookie`, `set-cookie` et `authorization` expurgés. Les
+  changements de composition d'un cercle partent dans le journal du serveur, hors de portée des
+  membres concernés.
 - **Conteneur** : image non-root (`USER node`), `HEALTHCHECK` intégré.
 - **Chaîne d'appro** : audit npm en CI (bloquant à partir de high), CodeQL hebdomadaire,
   Dependabot (npm, GitHub Actions, image Docker de base).
@@ -417,9 +417,9 @@ GitHub Actions :
    `vite-plugin-pwa` (autoUpdate), manifest + icônes générées depuis `web/public/logo.svg`
    (`npm run generate-pwa-assets`), shell préchargé (offline), API en `NetworkFirst`, justificatifs
    jamais mis en cache.
-2. ~~**Android** : encapsulation Capacitor du front existant.~~ ✅ Fait — voir
-   [Application mobile](#application-mobile-android). **iOS** reste à ajouter (`cap add ios`,
-   buildable via un Mac ou un build cloud type Codemagic).
+2. **Application mobile empaquetée** : une encapsulation Capacitor (Android) a existé puis a été
+   retirée, faute d'usage — la PWA installable couvre le besoin mobile aujourd'hui. À reprendre
+   depuis `cap add` le jour où un magasin d'applications devient nécessaire.
 3. ~~**Authentification**~~ ✅ Faite, mais pas sous la forme prévue : ni magic link ni email, un
    lien de première connexion transmis hors application (voir [Sécurité](#sécurité)).
 4. ~~**Notifications de rappel d'entretien**~~ ✅ Faites — `MAINTENANCE_ALERT`, in-app et push,
@@ -429,52 +429,3 @@ GitHub Actions :
 6. **Multi-cercles assumé** : le modèle le permet déjà (un membre, plusieurs équipements, des
    cercles disjoints) ; ce qui manque est l'interface — rien ne montre à un membre qu'il vit dans
    plusieurs cercles étanches.
-
-## Application mobile (Android)
-
-Le front web est empaqueté tel quel dans une app native via [Capacitor](https://capacitorjs.com)
-(projet dans `web/android`, `appId` `app.sharemate.mobile`). L'hexagone est intact : le serveur et
-l'API ne changent pas, l'app native tape simplement le backend distant.
-
-**Deux adaptations** rendent le web compatible du natif :
-
-- **Base d'API configurable** : en web les appels sont relatifs (`/api/...`, même-origine) ; en
-  natif ils visent `VITE_API_BASE_URL` (l'URL Railway), injectée au build.
-- **Auth par token** : les cookies cross-origin ne sont pas fiables en WebView. Le serveur accepte
-  donc le token de session aussi via `Authorization: Bearer` (le web reste sur cookie httpOnly), et
-  l'app le stocke dans le stockage natif (`@capacitor/preferences`). Activé par l'en-tête
-  `X-ShareMate-Client: native` que seul le client natif envoie.
-
-### Variables
-
-| Variable                 | Où          | Rôle                                                                       |
-| ------------------------ | ----------- | -------------------------------------------------------------------------- |
-| `VITE_API_BASE_URL`      | build web   | URL du backend pour l'app native (ex. `https://sharemate.up.railway.app`). |
-| `CORS_ORIGINS` (serveur) | env Railway | Origines autorisées, séparées par des virgules (ex. `https://localhost`).  |
-
-Côté Railway, ajouter la variable de service :
-
-```
-CORS_ORIGINS=https://localhost
-```
-
-(`https://localhost` est l'origine de la WebView Android ; ajouter `capacitor://localhost` le jour
-où iOS est ajouté.)
-
-### Construire l'APK / AAB
-
-**En CI (recommandé, aucun outil local)** : le workflow
-[`.github/workflows/android.yml`](.github/workflows/android.yml) build l'APK debug (et l'AAB release
-signé si un keystore est configuré) sur un runner Linux. Guide complet — clé de signature, secrets
-GitHub, publication Play Store — dans [docs/deploiement-android.md](docs/deploiement-android.md).
-
-**En local (alternative)** avec **Android Studio** (SDK + JDK), depuis `web/` :
-
-```bash
-VITE_API_BASE_URL=https://<ton-domaine-railway> npm run build --workspace web
-npm run cap --workspace web -- sync android
-npm run cap --workspace web -- open android   # puis Run / Build APK depuis l'IDE
-```
-
-Les icônes et le splash sont générés depuis `web/assets/` (sources vectorielles rasterisées) via
-`capacitor-assets generate --android`.

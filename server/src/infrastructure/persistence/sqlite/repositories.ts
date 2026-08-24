@@ -27,8 +27,6 @@ import type {
   ChecklistItemRepository,
   ChecklistRepository,
   CredentialRepository,
-  DeviceToken,
-  DeviceTokenRepository,
   DocumentRepository,
   EquipmentRepository,
   ExpenseRepository,
@@ -1090,32 +1088,6 @@ export class SqlitePushSubscriptionRepository implements PushSubscriptionReposit
 
   async deleteByEndpoint(memberId: string, endpoint: string): Promise<void> {
     this.db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ? AND member_id = ?').run(endpoint, memberId);
-  }
-}
-
-export class SqliteDeviceTokenRepository implements DeviceTokenRepository {
-  constructor(private readonly db: SqliteDb) {}
-
-  async findByMember(memberId: string): Promise<DeviceToken[]> {
-    const rows = this.db.prepare('SELECT * FROM device_tokens WHERE member_id = ?').all(memberId) as {
-      token: string;
-      member_id: string;
-      platform: string;
-    }[];
-    return rows.map((r) => ({ token: r.token, memberId: r.member_id, platform: r.platform }));
-  }
-
-  async save(token: DeviceToken): Promise<void> {
-    this.db
-      .prepare(
-        `INSERT INTO device_tokens (token, member_id, platform) VALUES (?, ?, ?)
-         ON CONFLICT(token) DO UPDATE SET member_id = excluded.member_id, platform = excluded.platform`,
-      )
-      .run(token.token, token.memberId, token.platform);
-  }
-
-  async deleteByToken(memberId: string, token: string): Promise<void> {
-    this.db.prepare('DELETE FROM device_tokens WHERE token = ? AND member_id = ?').run(token, memberId);
   }
 }
 

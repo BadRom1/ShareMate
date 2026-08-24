@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  /** Base URL de l'API pour l'app native (ex. "https://sharemate.up.railway.app"). Vide en web (même-origine). */
+  /** Base URL du backend si le front est servi depuis une autre origine. Vide par défaut (même-origine). */
   readonly VITE_API_BASE_URL?: string;
 }
 
