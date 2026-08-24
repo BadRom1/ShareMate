@@ -7,6 +7,7 @@ import { MaintenancePage } from './pages/MaintenancePage';
 import { ExpensesPage } from './pages/ExpensesPage';
 import { DiscussionsPage } from './pages/DiscussionsPage';
 import { DocumentsPage } from './pages/DocumentsPage';
+import { AdminPage } from './pages/AdminPage';
 import { BootstrapPage, InvitePage, LoginPage } from './pages/AuthPages';
 import { AppShell } from './components/AppShell';
 import { OverviewPanel } from './components/OverviewPanel';
@@ -104,6 +105,29 @@ function EquipmentsScreen({
           </button>
         </header>
         <EquipmentsPage members={members} currentMemberId={currentMemberId} onMemberCreated={onMemberCreated} />
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Administration de l'instance : même patron plein cadre que la gestion du parc, donc mêmes
+ * sorties — le bouton Fermer et la touche Échap. Un seul compte y accède, et le serveur le
+ * redit à chaque appel : l'écran n'est pas la garde, il en est la porte.
+ */
+function AdminScreen({ currentMemberId, onClose }: { currentMemberId: string; onClose: () => void }) {
+  useEscape(onClose);
+
+  return (
+    <section className="screen" aria-label="Administration">
+      <div className="screen-inner">
+        <header className="screen-head">
+          <h2>Administration</h2>
+          <button type="button" className="icon-btn" onClick={onClose} title="Fermer" aria-label="Fermer">
+            <IconClose size={22} />
+          </button>
+        </header>
+        <AdminPage currentMemberId={currentMemberId} />
       </div>
     </section>
   );
@@ -212,6 +236,10 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
     );
   }
 
+  if (route.view === 'admin') {
+    return <AdminScreen currentMemberId={member.id} onClose={() => go({ view: 'equipment' })} />;
+  }
+
   if (route.view === 'equipments') {
     return (
       <EquipmentsScreen
@@ -235,6 +263,7 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
       onSelectTab={(tab) => go({ tab })}
       onOpenOverview={() => go({ view: 'overview' })}
       onAddEquipment={() => go({ view: 'equipments' })}
+      onOpenAdmin={() => go({ view: 'admin' })}
       onNavigate={follow}
       onLogout={() => void logout()}
     >

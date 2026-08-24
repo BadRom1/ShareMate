@@ -12,6 +12,7 @@ import type {
   Expense,
   MaintenanceStatus,
   Member,
+  MergeCounts,
   Message,
   NotificationPreference,
   Reimbursement,
@@ -23,7 +24,33 @@ import type {
 } from '../api';
 
 export function aMember(over: Partial<DirectoryMember> = {}): DirectoryMember {
-  return { id: 'm1', name: 'Alice', email: null, hasPassword: true, ...over };
+  return { id: 'm1', name: 'Alice', email: null, hasPassword: true, isAdmin: false, ...over };
+}
+
+/** Compteurs de fusion tous à zéro : un test ne renseigne que ce qu'il veut voir affiché. */
+export function noMergeCounts(over: Partial<MergeCounts> = {}): MergeCounts {
+  return {
+    circles: 0,
+    circlesMerged: 0,
+    reservations: 0,
+    usageRecords: 0,
+    expensesPaid: 0,
+    expenseSplits: 0,
+    reimbursements: 0,
+    reimbursementsRemoved: 0,
+    threads: 0,
+    messages: 0,
+    checklists: 0,
+    checklistItems: 0,
+    documents: 0,
+    notifications: 0,
+    notificationPreferences: 0,
+    notificationPreferencesDropped: 0,
+    pushSubscriptions: 0,
+    invitedMembers: 0,
+    sessionsRevoked: 0,
+    ...over,
+  };
 }
 
 export function anEquipment(over: Partial<Equipment> = {}): Equipment {
@@ -223,6 +250,15 @@ export function createApiStub() {
       inviteCode: 'code-9',
     })),
     regenerateInvite: vi.fn(async (_memberId: string) => ({ inviteCode: 'code-9' })),
+
+    adminMembers: vi.fn(async () => [aMember()]),
+    mergePreview: vi.fn(async (_absorbedId: string, _keptId: string) => noMergeCounts()),
+    mergeMembers: vi.fn(
+      async (_input: { absorbedId: string; keptId: string; name?: string; email?: string | null }) => ({
+        member: aMember(),
+        counts: noMergeCounts(),
+      }),
+    ),
 
     listEquipments: vi.fn(async () => [anEquipment()]),
     createEquipment: vi.fn(async (_input: unknown) => anEquipment()),

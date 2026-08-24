@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import type { Member } from '../api';
-import { IconLock, IconLogout, IconMenu } from './icons';
+import { IconLock, IconLogout, IconMenu, IconUsers } from './icons';
 
 interface Props {
   member: Member;
+  /** Administration de l'instance, proposée au seul administrateur. */
+  onOpenAdmin: () => void;
   /** Déconnexion demandée depuis le menu. */
   onLogout: () => void;
 }
@@ -12,7 +14,7 @@ interface Props {
 type View = 'menu' | 'password';
 
 /** Menu hamburger : nom de l'utilisateur connecté, changement de mot de passe et déconnexion. */
-export function UserMenu({ member, onLogout }: Props) {
+export function UserMenu({ member, onOpenAdmin, onLogout }: Props) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<View>('menu');
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -52,6 +54,19 @@ export function UserMenu({ member, onLogout }: Props) {
                 <IconLock size={18} />
                 Changer le mot de passe
               </button>
+              {/* Un seul compte y a droit, et le serveur le redit : l'entrée ne s'affiche que pour lui. */}
+              {member.isAdmin && (
+                <button
+                  className="menu-item"
+                  onClick={() => {
+                    setOpen(false);
+                    onOpenAdmin();
+                  }}
+                >
+                  <IconUsers size={18} />
+                  Administration
+                </button>
+              )}
               <button className="menu-item menu-item-danger" onClick={onLogout}>
                 <IconLogout size={18} />
                 Déconnexion

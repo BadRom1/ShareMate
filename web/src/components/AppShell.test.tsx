@@ -35,6 +35,7 @@ function afficher(over: Partial<ComponentProps<typeof AppShell>> = {}) {
     onSelectTab: vi.fn(),
     onOpenOverview: vi.fn(),
     onAddEquipment: vi.fn(),
+    onOpenAdmin: vi.fn(),
     onNavigate: vi.fn(),
     onLogout: vi.fn(),
     children: <p>Contenu de l’onglet</p>,
@@ -87,6 +88,27 @@ describe('AppShell', () => {
     afficher();
 
     expect(screen.getByText('Contenu de l’onglet')).toBeTruthy();
+  });
+
+  it('ne propose pas l’administration à un membre ordinaire', async () => {
+    const user = userEvent.setup();
+    afficher();
+
+    await user.click(screen.getByRole('button', { name: 'Menu' }));
+
+    expect(screen.queryByRole('button', { name: 'Administration' })).toBeNull();
+  });
+
+  it('ouvre l’administration depuis le menu de l’administrateur', async () => {
+    const user = userEvent.setup();
+    const { onOpenAdmin } = afficher({ member: aMember({ isAdmin: true }) });
+
+    await user.click(screen.getByRole('button', { name: 'Menu' }));
+    await user.click(screen.getByRole('button', { name: 'Administration' }));
+
+    expect(onOpenAdmin).toHaveBeenCalled();
+    // Le menu se referme : l'écran demandé prend toute la place.
+    expect(screen.queryByRole('button', { name: 'Administration' })).toBeNull();
   });
 });
 

@@ -11,6 +11,16 @@ partage des frais façon Tricount.
   n'importe quel membre peut émettre et transmettre hors application. Il n'y a pas de « groupe »
   au sens d'une entité : le cercle d'un équipement est **la liste de ses membres**, et un membre
   peut appartenir à plusieurs cercles sans qu'ils se voient entre eux.
+- **Administration** : le premier compte ouvert est l'**administrateur** de l'instance, et il est
+  le seul à pouvoir **réunir deux comptes du même membre**. Le doublon arrive : quand le dernier
+  équipement qui reliait deux personnes disparaît, elles sortent du champ de vision l'une de
+  l'autre, et il ne reste qu'à recréer l'autre — un compte porte alors l'historique, l'autre
+  l'accès qui fonctionne. La fusion choisit lequel absorbe lequel, quel nom et quel email
+  survivent, annonce ce qu'elle déplacera, puis le fait d'un seul geste : cercles, réservations,
+  relevés, dépenses (parts **additionnées** là où les deux comptes figuraient dans une même
+  répartition), messages, documents, notifications et invitations passent au compte conservé, dont
+  les soldes restent inchangés. Le compte absorbé disparaît, avec son mot de passe et ses
+  sessions.
 - **Équipements** : CRUD complet (nom, date d'acquisition, membres du cercle, type de compteur
   heures/km, et — facultatives — catégorie et valeur d'achat, qui ne décrivent que la fiche).
   Un équipement appartient à son cercle, pas à un propriétaire unique. Une personne entre dans un
@@ -66,7 +76,7 @@ server/src/
 ├── domain/           # Entités, value objects, règles métier pures — AUCUNE dépendance externe
 │   ├── shared/       # Money (centimes entiers), TimeRange (fin exclusive), erreurs métier,
 │   │                 # StoredFile (référence d'un objet stocké, et ses bornes)
-│   ├── member/       # Member (email validé : il sert d'identifiant de connexion)
+│   ├── member/       # Member (email validé : il sert d'identifiant de connexion ; rôle admin)
 │   ├── auth/         # MemberCredential (mot de passe, invitation datée), Session
 │   ├── equipment/    # Equipment (cercle des membres, compteur heures/km, seuil d'entretien),
 │   │                 # SubEquipment (contenu du lot : remorque, godets, jerrican…)
@@ -118,6 +128,12 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 - Un chemin de justificatif (`/uploads/<uuid>.<ext>`) est **un identifiant, pas une adresse** : il
   n'a pas changé au passage dans le bucket, où il devient la clé `receipts/<uuid>.<ext>`. C'est ce
   qui permet de basculer sans réécrire une seule dépense, ni le schéma HTTP, ni le front.
+- La **fusion de deux comptes** est un geste du dépôt, pas de la couche application : elle touche
+  quinze tables dont plusieurs se refusent à un repointage naïf (clés primaires composées du
+  cercle et des préférences, remboursement devenu « de soi à soi », identifiants de
+  `expenses.split_json` que ne suit aucune clé étrangère), et une fusion à moitié faite serait
+  pire que pas de fusion — d'où la transaction unique. Son **aperçu est la fusion elle-même**,
+  défaite avant de rendre la main : ce qui est annoncé ne peut pas s'écarter de ce qui sera fait.
 - Toutes les entrées HTTP sont validées par un **schéma JSON** (Ajv, embarqué dans Fastify) :
   objets fermés, bornes de longueur, énumérations tirées du domaine. Les types TypeScript des
   handlers décrivent donc ce qui arrive réellement.
@@ -126,13 +142,15 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 
 ```bash
 npm install
-npm test              # 626 tests : 525 serveur (Node) + 101 front (jsdom)
+npm test              # 834 tests : 596 serveur (Node) + 238 front (jsdom)
 npm run test:coverage # Tests + seuils de couverture (90 % lignes/fonctions, 85 % branches)
 npm run lint          # ESLint (frontières hexagonales + règles React hooks)
 npm run format        # Prettier (format:check en CI)
 npm run typecheck     # tsc sur les deux workspaces
 npm run audit:prod    # npm audit des dépendances de production (high+)
 npm run migrate:receipts -- --dry  # transfert des justificatifs du volume vers le bucket
+npm run admin:designate            # liste les comptes et dit lequel est administrateur
+npm run admin:designate -- <id>    # désigne l'administrateur (base antérieure à ce rôle)
 npm run dev:server    # API sur http://localhost:3000
 npm run dev:web       # Front Vite sur http://localhost:5173 (proxy /api → 3000)
 npm run build         # Build de production (server/dist + web/dist)
@@ -244,9 +262,21 @@ la confiance est totale et assumée. Le reste de cette section dit précisément
   n'existe (`POST /api/auth/bootstrap`, insertion atomique : deux requêtes simultanées ne créent
   pas deux « premiers comptes »).
 - Ensuite, **tout membre authentifié peut créer un compte** et obtenir son lien de première
-  connexion, qu'il transmet hors application. C'est le choix du produit : pas d'administrateur, la
-  communauté se coopte. Le garde-fou est un plafond de 20 créations par minute et par IP, pas un
-  droit.
+  connexion, qu'il transmet hors application. C'est le choix du produit : la communauté se coopte,
+  personne n'ouvre les portes. Le garde-fou est un plafond de 20 créations par minute et par IP,
+  pas un droit.
+- Il existe **un** rôle d'administrateur, et il n'ouvre **qu'un seul geste** : réunir deux comptes
+  du même membre. Il ne donne aucun accès supplémentaire aux cercles, aux dépenses ni aux
+  discussions — l'administrateur reste cadré sur son périmètre comme tout le monde, à la seule
+  exception de la liste des comptes de l'instance (`GET /api/admin/members`), sans laquelle les
+  deux comptes à réunir ne s'afficheraient pas ensemble. Le rôle est porté par le premier compte
+  ouvert ; sur une base antérieure à ce rôle, il est **désigné par l'opérateur** (`npm run
+admin:designate`) et jamais deviné. À tout autre, `/api/admin/*` répond `403` en parlant du
+  geste, jamais des identifiants visés.
+- **La fusion ne se défait pas** : elle absorbe une identité entière, révoque ses sessions et
+  supprime son accès. Elle est donc annoncée chiffrée avant confirmation, journalisée
+  (`membre.fusionne`, acteur, comptes, compteurs par table), et refuse d'absorber l'administrateur
+  lui-même — l'instance perdrait le seul compte qui autorise le geste.
 - Un lien de première connexion **expire au bout de 7 jours**, ne sert qu'une fois, et **ne vaut
   que pour un compte qui n'a jamais eu de mot de passe**. Régénérer un lien n'est possible que
   pour soi-même, pour un membre d'un cercle partagé, ou pour quelqu'un qu'on a soi-même invité ;
@@ -377,6 +407,24 @@ Un schéma reconnu comme incompatible (tables du modèle « collectif » abandon
 plat antérieur aux fils) **fait échouer le démarrage** au lieu de supprimer les tables comme le
 faisaient les versions antérieures. Le message nomme la table en cause : c'est à l'opérateur de
 trancher, sauvegarde en main.
+
+### Désigner l'administrateur
+
+Sur une base créée par une version antérieure au rôle d'administrateur, **personne ne l'est** : la
+migration n'attribue rien, faute de repère fiable — `members.invited_by` vaut `NULL` sur tous les
+membres d'alors, et deviner donnerait à un inconnu le pouvoir d'absorber n'importe quel compte.
+Tant que la désignation n'a pas eu lieu, la fusion de comptes n'est ouverte à personne, et rien
+d'autre ne change.
+
+```bash
+npm run admin:designate            # liste les comptes dans l'ordre de création, propose un candidat
+npm run admin:designate -- <id>    # désigne ce compte (le rôle est retiré à tout autre)
+```
+
+Sans argument, le script n'écrit rien : il montre les comptes, marque celui qui est déjà
+administrateur, et signale le candidat le plus probable — le premier compte inséré qui porte un mot
+de passe. Le choix reste à l'opérateur. Un compte jamais ouvert est refusé : il ne pourrait pas se
+connecter pour exercer le rôle. Le changement est immédiat, sans redémarrage.
 
 ### Sauvegarder le volume
 

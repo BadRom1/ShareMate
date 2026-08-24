@@ -25,6 +25,8 @@ interface Props {
   onSelectTab: (tab: Tab) => void;
   onOpenOverview: () => void;
   onAddEquipment: () => void;
+  /** Administration de l'instance, atteinte depuis le menu (administrateur seul). */
+  onOpenAdmin: () => void;
   /** Navigation demandée par un lien de notification, passée telle quelle à la cloche. */
   onNavigate: (link: string) => void;
   onLogout: () => void;
@@ -48,6 +50,7 @@ export function AppShell({
   onSelectTab,
   onOpenOverview,
   onAddEquipment,
+  onOpenAdmin,
   onNavigate,
   onLogout,
   children,
@@ -64,7 +67,7 @@ export function AppShell({
         />
         <div className="appbar-actions">
           <NotificationBell onNavigate={onNavigate} />
-          <UserMenu member={member} onLogout={onLogout} />
+          <UserMenu member={member} onOpenAdmin={onOpenAdmin} onLogout={onLogout} />
         </div>
       </header>
 
