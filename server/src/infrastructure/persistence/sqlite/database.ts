@@ -390,6 +390,17 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    // L'app native Android est retirée : plus aucun client n'enregistre de jeton d'appareil, et
+    // le serveur n'envoie plus que du Web Push. La table ne portait que ces jetons FCM.
+    description: 'retrait des jetons d’appareil (app native)',
+    apply(db) {
+      db.exec(`
+        DROP INDEX IF EXISTS idx_device_tokens_member;
+        DROP TABLE IF EXISTS device_tokens;
+      `);
+    },
+  },
 ];
 
 /** Version de schéma attendue par ce code : rank de la dernière migration connue. */

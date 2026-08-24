@@ -2,10 +2,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { NotificationService } from './notification-service.js';
 import { NotificationPreference } from '../domain/notification/preference.js';
 import { ForbiddenError, NotFoundError } from '../domain/shared/domain-error.js';
-import type { DeviceToken, FailedTarget, PushPayload, PushSender, WebPushSubscription } from './ports.js';
+import type { FailedTarget, PushPayload, PushSender, WebPushSubscription } from './ports.js';
 import {
   FixedClock,
-  InMemoryDeviceTokenRepository,
   InMemoryNotificationPreferenceRepository,
   InMemoryNotificationRepository,
   InMemoryPushSubscriptionRepository,
@@ -16,15 +15,10 @@ import {
 /** PushSender qui enregistre les envois et peut simuler des cibles mortes. */
 class RecordingPushSender implements PushSender {
   webCalls: WebPushSubscription[][] = [];
-  fcmCalls: DeviceToken[][] = [];
   constructor(private readonly failWebEndpoints: string[] = []) {}
   async sendWebPush(subs: WebPushSubscription[], _payload: PushPayload): Promise<FailedTarget[]> {
     this.webCalls.push(subs);
     return subs.filter((s) => this.failWebEndpoints.includes(s.endpoint)).map((s) => ({ id: s.endpoint }));
-  }
-  async sendFcm(tokens: DeviceToken[], _payload: PushPayload): Promise<FailedTarget[]> {
-    this.fcmCalls.push(tokens);
-    return [];
   }
 }
 
@@ -32,17 +26,15 @@ function makeService(pushSender: PushSender = new NoopPushSender()) {
   const notifications = new InMemoryNotificationRepository();
   const preferences = new InMemoryNotificationPreferenceRepository();
   const subs = new InMemoryPushSubscriptionRepository();
-  const tokens = new InMemoryDeviceTokenRepository();
   const service = new NotificationService(
     notifications,
     preferences,
     subs,
-    tokens,
     pushSender,
     new SequentialIdGenerator('n'),
     new FixedClock(new Date('2026-07-02T10:00:00Z')),
   );
-  return { service, notifications, preferences, subs, tokens };
+  return { service, notifications, preferences, subs };
 }
 
 describe('NotificationService', () => {

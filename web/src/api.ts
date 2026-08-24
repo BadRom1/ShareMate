@@ -1,14 +1,12 @@
 /** Client HTTP de l'API ShareMate (adapter de présentation). */
 
-import { getToken, isNative, setToken } from './native';
-
 /**
- * Base de l'API. Vide en web (même-origine, chemins relatifs `/api/...`) ; l'URL du backend
- * distant en natif, injectée au build via `VITE_API_BASE_URL`.
+ * Base de l'API. Vide par défaut (même-origine, chemins relatifs `/api/...`) ; renseigner
+ * `VITE_API_BASE_URL` au build quand le front est servi depuis une autre origine que le backend.
  */
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
 
-/** Résout un chemin servi par le backend (ex. `/uploads/x.jpg`) en URL affichable (absolue en natif). */
+/** Résout un chemin servi par le backend (ex. `/uploads/x.jpg`) en URL affichable. */
 export function assetUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
@@ -301,16 +299,9 @@ export function setUnauthorizedHandler(handler: (() => void) | null) {
   onUnauthorized = handler;
 }
 
-/** En-têtes communs : JSON si corps, et sur natif l'auth par Bearer + l'annonce du client. */
+/** En-têtes communs : JSON si le corps en porte. L'auth repose sur le cookie de session. */
 function buildHeaders(hasBody: boolean): Record<string, string> {
-  const headers: Record<string, string> = {};
-  if (hasBody) headers['Content-Type'] = 'application/json';
-  if (isNative) {
-    headers['X-ShareMate-Client'] = 'native';
-    const token = getToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
-  }
-  return headers;
+  return hasBody ? { 'Content-Type': 'application/json' } : {};
 }
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
@@ -341,13 +332,6 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-/** Requête d'auth : sur natif, capture le token renvoyé pour authentifier les appels suivants. */
-async function authRequest(url: string, options: RequestInit): Promise<{ member: Member }> {
-  const res = await request<{ member: Member; token?: string }>(url, options);
-  if (isNative && res.token) await setToken(res.token);
-  return { member: res.member };
-}
-
 /**
  * Vide les caches du service worker (`sharemate-*`, voir web/vite.config.ts). Ils gardent hors
  * ligne les réponses de l'API du membre qui se déconnecte : sans cette purge, elles restent
@@ -360,37 +344,39 @@ async function purgeOfflineCaches(): Promise<void> {
   await Promise.all(keys.filter((k) => k.startsWith('sharemate-')).map((k) => caches.delete(k)));
 }
 
-/** Ne laisse plus rien de la session sur l'appareil : jeton natif et réponses d'API en cache. */
+/** Ne laisse plus rien de la session sur l'appareil : les réponses d'API gardées en cache. */
 async function forgetSession(): Promise<void> {
-  await setToken(null);
   await purgeOfflineCaches();
 }
 
 export const api = {
   me: () => request<AuthState>('/api/auth/me'),
   bootstrap: (input: { name: string; email?: string; password: string }) =>
-    authRequest('/api/auth/bootstrap', { method: 'POST', body: JSON.stringify(input) }),
+    request<{ member: Member }>('/api/auth/bootstrap', { method: 'POST', body: JSON.stringify(input) }),
   login: (identifier: string, password: string) =>
-    authRequest('/api/auth/login', { method: 'POST', body: JSON.stringify({ identifier, password }) }),
+    request<{ member: Member }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ identifier, password }) }),
   logout: async () => {
     try {
       await request<void>('/api/auth/logout', { method: 'POST', body: JSON.stringify({}) });
     } finally {
       // Même si la révocation côté serveur échoue (hors ligne), l'appareil se vide : l'écran
-      // retombe de toute façon sur la connexion (App.tsx), jeton et caches ne doivent pas rester.
+      // retombe de toute façon sur la connexion (App.tsx), les caches ne doivent pas rester.
       await forgetSession();
     }
   },
   inviteInfo: (code: string) => request<{ memberName: string }>(`/api/auth/invites/${encodeURIComponent(code)}`),
   redeemInvite: (code: string, password: string) =>
-    authRequest(`/api/auth/invites/${encodeURIComponent(code)}/redeem`, {
+    request<{ member: Member }>(`/api/auth/invites/${encodeURIComponent(code)}/redeem`, {
       method: 'POST',
       body: JSON.stringify({ password }),
     }),
   // Le changement de mot de passe révoque toutes les sessions du membre : la réponse en rouvre
-  // une, dont le jeton doit remplacer l'ancien côté natif.
+  // une, dont le cookie remplace l'ancien.
   changePassword: (currentPassword: string, newPassword: string) =>
-    authRequest('/api/auth/password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
+    request<{ member: Member }>('/api/auth/password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
 
   listMembers: () => request<DirectoryMember[]>('/api/members'),
   createMember: (input: { name: string; email?: string }) =>
@@ -498,7 +484,7 @@ export const api = {
     if (options.body) form.append('body', options.body);
     if (options.parentId) form.append('parentId', options.parentId);
     form.append('file', file);
-    // Pas de Content-Type manuel : le navigateur pose la frontière multipart. On garde l'auth native.
+    // Pas de Content-Type manuel : le navigateur pose la frontière multipart.
     const response = await fetch(`${API_BASE}/api/messages/file`, {
       method: 'POST',
       body: form,
@@ -546,7 +532,7 @@ export const api = {
     // Le fichier en dernier : la route lit les parties dans l'ordre reçu, et les champs d'abord
     // lui évitent de garder tout le corps en mémoire avant de savoir s'il l'accepte.
     form.append('file', file);
-    // Pas de Content-Type manuel : le navigateur pose la frontière multipart. On garde l'auth native.
+    // Pas de Content-Type manuel : le navigateur pose la frontière multipart.
     const response = await fetch(`${API_BASE}/api/documents/file`, {
       method: 'POST',
       body: form,
@@ -582,16 +568,11 @@ export const api = {
     }),
   unsubscribeWebPush: (endpoint: string) =>
     request<void>('/api/notifications/subscriptions', { method: 'DELETE', body: JSON.stringify({ endpoint }) }),
-  registerDeviceToken: (token: string, platform: string) =>
-    request<{ status: string }>('/api/notifications/device-tokens', {
-      method: 'POST',
-      body: JSON.stringify({ token, platform }),
-    }),
 
   uploadReceipt: async (file: File): Promise<string> => {
     const form = new FormData();
     form.append('file', file);
-    // Pas de Content-Type manuel : le navigateur pose la frontière multipart. On garde l'auth native.
+    // Pas de Content-Type manuel : le navigateur pose la frontière multipart.
     const response = await fetch(`${API_BASE}/api/uploads/receipts`, {
       method: 'POST',
       body: form,

@@ -5,7 +5,6 @@ import type { NotificationType } from '../domain/notification/notification-type.
 import { ForbiddenError, NotFoundError } from '../domain/shared/domain-error.js';
 import type {
   Clock,
-  DeviceTokenRepository,
   IdGenerator,
   Notifier,
   NotifyEvent,
@@ -30,7 +29,6 @@ export class NotificationService implements Notifier {
     private readonly notifications: NotificationRepository,
     private readonly preferences: NotificationPreferenceRepository,
     private readonly pushSubscriptions: PushSubscriptionRepository,
-    private readonly deviceTokens: DeviceTokenRepository,
     private readonly pushSender: PushSender,
     private readonly idGenerator: IdGenerator,
     private readonly clock: Clock,
@@ -58,18 +56,12 @@ export class NotificationService implements Notifier {
     }
   }
 
-  /** Pousse vers tous les canaux du membre et purge les abonnements définitivement invalides. */
+  /** Pousse vers les abonnements du membre et purge ceux qui sont définitivement invalides. */
   private async pushTo(memberId: string, payload: { title: string; body: string; link: string | null }): Promise<void> {
-    const [subs, tokens] = await Promise.all([
-      this.pushSubscriptions.findByMember(memberId),
-      this.deviceTokens.findByMember(memberId),
-    ]);
-    const [webFailures, fcmFailures] = await Promise.all([
-      subs.length ? this.pushSender.sendWebPush(subs, payload) : Promise.resolve([]),
-      tokens.length ? this.pushSender.sendFcm(tokens, payload) : Promise.resolve([]),
-    ]);
-    await Promise.all(webFailures.map((f) => this.pushSubscriptions.deleteByEndpoint(memberId, f.id)));
-    await Promise.all(fcmFailures.map((f) => this.deviceTokens.deleteByToken(memberId, f.id)));
+    const subs = await this.pushSubscriptions.findByMember(memberId);
+    if (!subs.length) return;
+    const failures = await this.pushSender.sendWebPush(subs, payload);
+    await Promise.all(failures.map((f) => this.pushSubscriptions.deleteByEndpoint(memberId, f.id)));
   }
 
   private async preferenceFor(memberId: string, type: NotificationType): Promise<NotificationPreference> {
@@ -156,13 +148,5 @@ export class NotificationService implements Notifier {
    */
   async unsubscribeWebPush(memberId: string, endpoint: string): Promise<void> {
     await this.pushSubscriptions.deleteByEndpoint(memberId, endpoint);
-  }
-
-  async registerDeviceToken(memberId: string, token: string, platform: string): Promise<void> {
-    await this.deviceTokens.save({ token, memberId, platform });
-  }
-
-  async unregisterDeviceToken(memberId: string, token: string): Promise<void> {
-    await this.deviceTokens.deleteByToken(memberId, token);
   }
 }

@@ -1,15 +1,12 @@
 /**
- * Notifications push côté client.
- * - Web (PWA) : Web Push via le service worker et une clé VAPID.
- * - Natif (Capacitor) : FCM via `@capacitor/push-notifications`.
- * Le centre in-app (cloche) fonctionne indépendamment de ces canaux.
+ * Notifications push côté client : Web Push (PWA) via le service worker et une clé VAPID.
+ * Le centre in-app (cloche) fonctionne indépendamment de ce canal.
  */
 import { api } from './api';
-import { isNative } from './native';
 
 /** Le navigateur supporte-t-il le Web Push ? */
 export function webPushSupported(): boolean {
-  return !isNative && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 }
 
 export function webPushPermission(): NotificationPermission | 'unsupported' {
@@ -63,27 +60,5 @@ export async function disableWebPush(): Promise<void> {
     const endpoint = subscription.endpoint;
     await subscription.unsubscribe();
     await api.unsubscribeWebPush(endpoint);
-  }
-}
-
-/**
- * Initialise le push natif (FCM) : permissions, enregistrement du jeton et navigation au clic.
- * No-op hors environnement natif.
- */
-export async function setupNativePush(onNavigate: (link: string) => void): Promise<void> {
-  if (!isNative) return;
-  const { PushNotifications } = await import('@capacitor/push-notifications');
-
-  PushNotifications.addListener('registration', (token) => {
-    void api.registerDeviceToken(token.value, 'android');
-  });
-  PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
-    const link = action.notification.data?.link as string | undefined;
-    if (link) onNavigate(link);
-  });
-
-  const permission = await PushNotifications.requestPermissions();
-  if (permission.receive === 'granted') {
-    await PushNotifications.register();
   }
 }

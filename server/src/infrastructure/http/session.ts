@@ -21,22 +21,9 @@ declare module 'fastify' {
 
 export const SESSION_COOKIE = 'sharemate_session';
 
-/** En-tête posé par l'app native pour recevoir le token de session dans le corps. */
-export const CLIENT_HEADER = 'x-sharemate-client';
-
-/**
- * Token de session, depuis le cookie (web) ou l'en-tête `Authorization: Bearer` (app native,
- * où les cookies cross-origin ne sont pas fiables en WebView).
- */
+/** Token de session, porté par le cookie httpOnly. */
 export function sessionToken(request: FastifyRequest): string | undefined {
-  const cookieToken = request.cookies[SESSION_COOKIE];
-  if (cookieToken) return cookieToken;
-  const header = request.headers.authorization;
-  if (header?.startsWith('Bearer ')) {
-    const token = header.slice('Bearer '.length).trim();
-    if (token) return token;
-  }
-  return undefined;
+  return request.cookies[SESSION_COOKIE];
 }
 
 /**
@@ -52,9 +39,4 @@ export function setSessionCookie(reply: FastifyReply, token: string, expiresAt: 
     secure,
     expires: expiresAt,
   });
-}
-
-/** L'app native s'annonce pour recevoir le token de session (le web reste sur cookie httpOnly). */
-export function isNativeClient(request: FastifyRequest): boolean {
-  return request.headers[CLIENT_HEADER] === 'native';
 }

@@ -5,7 +5,6 @@ import {
   SqliteChecklistItemRepository,
   SqliteChecklistRepository,
   SqliteCredentialRepository,
-  SqliteDeviceTokenRepository,
   SqliteDocumentRepository,
   SqliteEquipmentRepository,
   SqliteExpenseRepository,
@@ -44,7 +43,7 @@ const attachmentsDir = process.env.ATTACHMENTS_DIR ?? path.join(dataDir, 'attach
 const webDistDir = process.env.WEB_DIST_DIR ?? path.resolve(here, '../../web/dist');
 const port = Number(process.env.PORT ?? 3000);
 const isProduction = process.env.NODE_ENV === 'production';
-// Origines cross-origin de l'app native (ex. "https://localhost,capacitor://localhost").
+// Origines autorisées si le front est servi depuis une autre origine que ce backend.
 const corsOrigins = (process.env.CORS_ORIGINS ?? '')
   .split(',')
   .map((origin) => origin.trim())
@@ -52,7 +51,7 @@ const corsOrigins = (process.env.CORS_ORIGINS ?? '')
 
 const db = openDatabase(databasePath);
 
-// Push (Web Push + FCM) : activé si les clés VAPID et/ou le compte de service FCM sont fournis.
+// Push (Web Push) : activé si les clés VAPID sont fournies.
 const pushSender = createPushSenderFromEnv(process.env);
 
 const app = await buildApp({
@@ -71,7 +70,6 @@ const app = await buildApp({
   notifications: new SqliteNotificationRepository(db),
   notificationPreferences: new SqliteNotificationPreferenceRepository(db),
   pushSubscriptions: new SqlitePushSubscriptionRepository(db),
-  deviceTokens: new SqliteDeviceTokenRepository(db),
   credentials: new SqliteCredentialRepository(db),
   sessions: new SqliteSessionRepository(db),
   passwordHasher: new ScryptPasswordHasher(),
@@ -79,8 +77,7 @@ const app = await buildApp({
   idGenerator: new UuidGenerator(),
   clock: new SystemClock(),
   cookieSecure: isProduction,
-  // Le token de session ne doit jamais apparaître dans les logs : cookie (web) et
-  // `Authorization: Bearer` (app native) portent tous deux le jeton.
+  // Le token de session ne doit jamais apparaître dans les logs : le cookie le porte.
   logger: {
     level: isProduction ? 'info' : 'debug',
     redact: ['req.headers.cookie', 'req.headers["set-cookie"]', 'req.headers.authorization'],
@@ -97,7 +94,7 @@ const app = await buildApp({
 });
 
 if (!pushSender) {
-  app.log.info('Push désactivé (VAPID_* / FCM_SERVICE_ACCOUNT absents) : seul le centre in-app est actif.');
+  app.log.info('Push désactivé (VAPID_* absents) : seul le centre in-app est actif.');
 }
 
 // Arrêt propre (Railway envoie SIGTERM à chaque redéploiement).

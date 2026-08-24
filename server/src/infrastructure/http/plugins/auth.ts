@@ -1,8 +1,8 @@
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import type { Member } from '../../../domain/member/member.js';
 import type { AuthService, AuthSession } from '../../../application/auth-service.js';
 import { memberDto } from '../dto.js';
-import { SESSION_COOKIE, isNativeClient, sessionToken, setSessionCookie } from '../session.js';
+import { SESSION_COOKIE, sessionToken, setSessionCookie } from '../session.js';
 import { nullableText, object, params, text } from '../schema.js';
 import { limit } from '../rate-limit.js';
 import type { RateLimits } from '../rate-limit.js';
@@ -30,17 +30,10 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
   /** Limite anti force-brute des routes d'authentification publiques. */
   const AUTH_RATE_LIMIT = limit(rateLimits.auth);
 
-  /**
-   * Établit la session : cookie (web) et, pour l'app native, le token dans le corps pour
-   * qu'elle le stocke et le renvoie ensuite en `Authorization: Bearer`.
-   */
-  function authenticated(request: FastifyRequest, reply: FastifyReply, member: Member, session: AuthSession) {
+  /** Établit la session : pose le cookie httpOnly et rend le membre connecté. */
+  function authenticated(reply: FastifyReply, member: Member, session: AuthSession) {
     setSessionCookie(reply, session.token, session.expiresAt, cookieSecure);
-    const body: { member: ReturnType<typeof memberDto>; token?: string } = { member: memberDto(member) };
-    if (isNativeClient(request)) {
-      body.token = session.token;
-    }
-    return body;
+    return { member: memberDto(member) };
   }
 
   // Seule route anonyme qui interroge la base (session + amorçage) : plafonnée plus bas que le
@@ -61,7 +54,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
     },
     async (request, reply) => {
       const { member, session } = await authService.bootstrap(request.body);
-      return reply.status(201).send(authenticated(request, reply, member, session));
+      return reply.status(201).send(authenticated(reply, member, session));
     },
   );
 
@@ -73,7 +66,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
     },
     async (request, reply) => {
       const { member, session } = await authService.login(request.body.identifier, request.body.password);
-      return reply.send(authenticated(request, reply, member, session));
+      return reply.send(authenticated(reply, member, session));
     },
   );
 
@@ -103,7 +96,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
     },
     async (request, reply) => {
       const { member, session } = await authService.redeemInvite(request.params.code, request.body.password);
-      return reply.send(authenticated(request, reply, member, session));
+      return reply.send(authenticated(reply, member, session));
     },
   );
 
@@ -127,8 +120,8 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
         request.body.newPassword,
       );
       // Le changement révoque toutes les sessions du membre, celle-ci comprise : on repose le
-      // cookie (et on rend le jeton à l'app native) pour ne pas déconnecter l'auteur de son geste.
-      return reply.send(authenticated(request, reply, request.authMember, session));
+      // cookie pour ne pas déconnecter l'auteur de son geste.
+      return reply.send(authenticated(reply, request.authMember, session));
     },
   );
 };

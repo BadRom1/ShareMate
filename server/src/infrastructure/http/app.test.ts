@@ -5,7 +5,6 @@ import {
   SqliteChecklistItemRepository,
   SqliteChecklistRepository,
   SqliteCredentialRepository,
-  SqliteDeviceTokenRepository,
   SqliteDocumentRepository,
   SqliteEquipmentRepository,
   SqliteExpenseRepository,
@@ -60,7 +59,6 @@ async function buildTestApp(overrides: Partial<AppDependencies> = {}): Promise<F
     notifications: new SqliteNotificationRepository(db),
     notificationPreferences: new SqliteNotificationPreferenceRepository(db),
     pushSubscriptions: new SqlitePushSubscriptionRepository(db),
-    deviceTokens: new SqliteDeviceTokenRepository(db),
     credentials: new SqliteCredentialRepository(db),
     sessions: new SqliteSessionRepository(db),
     // Coût de dérivation réduit : ces parcours ouvrent des dizaines de sessions, et au coût de
@@ -385,7 +383,6 @@ describe('API — justificatifs et front statique', () => {
       ['GET', '/%61pi/members', undefined],
       ['GET', '/a%70i/notifications', undefined],
       ['DELETE', '/%61pi/notifications/subscriptions', { endpoint: 'https://push.example.test/abonnement' }],
-      ['DELETE', '/%61pi/notifications/device-tokens', { token: 'jeton-alice' }],
       ['GET', '/%75ploads/00000000-0000-4000-8000-000000000000.png', undefined],
     ];
     for (const [method, url, body] of encodées) {
@@ -790,48 +787,28 @@ describe('API — parcours complet du MVP', () => {
   });
 });
 
-describe('API — app native (token Bearer)', () => {
-  const NATIVE = { 'x-sharemate-client': 'native' };
-
-  it('login natif : le token est renvoyé dans le corps et authentifie via Authorization: Bearer', async () => {
-    await bootstrapAlice();
-    const login = await app.inject({
-      method: 'POST',
-      url: '/api/auth/login',
-      payload: { identifier: 'alice', password: PASSWORD },
-      headers: NATIVE,
-    });
-    expect(login.statusCode).toBe(200);
-    const token = (login.json() as { token?: string }).token;
-    expect(typeof token).toBe('string');
-
-    // Le token seul (sans cookie) suffit à authentifier une route protégée.
-    const protectedRes = await app.inject({
-      method: 'GET',
-      url: '/api/equipments',
-      headers: { authorization: `Bearer ${token}` },
-    });
-    expect(protectedRes.statusCode).toBe(200);
-  });
-
-  it('sans en-tête natif, le token n’est jamais exposé dans le corps (sécurité httpOnly du web)', async () => {
+describe('API — la session ne tient qu’au cookie httpOnly', () => {
+  it('le token de session n’est jamais exposé dans le corps', async () => {
     const res = await post('/api/auth/bootstrap', { name: 'Alice', password: PASSWORD });
     expect(res.statusCode).toBe(201);
     expect((res.json() as { token?: string }).token).toBeUndefined();
   });
 
-  it('un Bearer invalide est rejeté en 401', async () => {
-    await bootstrapAlice();
+  it('un en-tête Authorization ne vaut pas session, même avec un jeton valide', async () => {
+    const alice = await bootstrapAlice();
+    const token = alice.cookies.sharemate_session;
+    expect(typeof token).toBe('string');
+
     const res = await app.inject({
       method: 'GET',
       url: '/api/equipments',
-      headers: { authorization: 'Bearer jeton-bidon' },
+      headers: { authorization: `Bearer ${token}` },
     });
     expect(res.statusCode).toBe(401);
   });
 });
 
-describe('API — CORS (origines de l’app native)', () => {
+describe('API — CORS (front servi sur une autre origine)', () => {
   let corsApp: FastifyInstance;
 
   beforeEach(async () => {
@@ -2378,8 +2355,6 @@ describe('API — cloisonnement par cercle (aucune fuite hors du cercle)', () =>
 });
 
 describe('API — cloisonnement des comptes (annuaire, invitations, sessions)', () => {
-  const NATIVE = { 'x-sharemate-client': 'native' };
-
   /** Noms de l'annuaire tel que le voit ce demandeur, triés pour comparaison. */
   async function annuaire(cookies: Cookies): Promise<string[]> {
     const res = await get('/api/members', cookies);
@@ -2561,40 +2536,6 @@ describe('API — cloisonnement des comptes (annuaire, invitations, sessions)', 
     expect((await get('/api/equipments', alice.cookies)).statusCode).toBe(401);
     // …mais la réponse en a posé un neuf : le geste ne déconnecte pas son auteur.
     expect((await get('/api/equipments', sessionCookie(res))).statusCode).toBe(200);
-  });
-
-  it('changer de mot de passe en natif rend un nouveau jeton Bearer', async () => {
-    await bootstrapAlice();
-    const login = await app.inject({
-      method: 'POST',
-      url: '/api/auth/login',
-      payload: { identifier: 'Alice', password: PASSWORD },
-      headers: NATIVE,
-    });
-    const ancien = (login.json() as { token: string }).token;
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/auth/password',
-      payload: { currentPassword: PASSWORD, newPassword: 'nouveau-mdp' },
-      headers: { ...NATIVE, authorization: `Bearer ${ancien}` },
-    });
-    expect(res.statusCode).toBe(200);
-    const nouveau = (res.json() as { token: string }).token;
-    expect(nouveau).not.toBe(ancien);
-
-    const avecAncien = await app.inject({
-      method: 'GET',
-      url: '/api/equipments',
-      headers: { authorization: `Bearer ${ancien}` },
-    });
-    const avecNouveau = await app.inject({
-      method: 'GET',
-      url: '/api/equipments',
-      headers: { authorization: `Bearer ${nouveau}` },
-    });
-    expect(avecAncien.statusCode).toBe(401);
-    expect(avecNouveau.statusCode).toBe(200);
   });
 
   it('un lien d’invitation périme au bout de 7 jours', async () => {
@@ -2781,41 +2722,26 @@ describe('API — notifications', () => {
           poussés.push(...subs.map((s) => s.endpoint));
           return [];
         },
-        async sendFcm(tokens) {
-          poussés.push(...tokens.map((t) => t.token));
-          return [];
-        },
       },
     });
     const { equipment, alice, bruno } = await setupMembersAndEquipment(pushApp);
     const endpoint = 'https://push.example.test/abonnement-d-alice';
-    const token = 'jeton-d-alice';
     const abonnement = { endpoint, keys: { p256dh: 'p', auth: 'a' } };
     expect((await post('/api/notifications/subscriptions', abonnement, alice.cookies, pushApp)).statusCode).toBe(201);
-    expect((await post('/api/notifications/device-tokens', { token }, alice.cookies, pushApp)).statusCode).toBe(201);
 
-    // Bruno connaît l'endpoint et le jeton (ils circulent) : les connaître ne vaut pas le droit.
-    // 204 dans les deux cas, pour ne pas faire de la réponse un oracle sur leur existence.
-    for (const [url, payload] of [
-      ['/api/notifications/subscriptions', { endpoint }],
-      ['/api/notifications/device-tokens', { token }],
-    ] as const) {
-      const res = await pushApp.inject({ method: 'DELETE', url, payload, cookies: bruno.cookies });
-      expect(res.statusCode).toBe(204);
-    }
+    // Bruno connaît l'endpoint (il circule) : le connaître ne vaut pas le droit de le couper.
+    // 204 quand même, pour ne pas faire de la réponse un oracle sur son existence.
+    const coupe = (cookies: Cookies) =>
+      pushApp.inject({ method: 'DELETE', url: '/api/notifications/subscriptions', payload: { endpoint }, cookies });
+    expect((await coupe(bruno.cookies)).statusCode).toBe(204);
 
-    // Alice reçoit toujours ses alertes : ses deux canaux ont survécu à la tentative de Bruno.
+    // Alice reçoit toujours ses alertes : son canal a survécu à la tentative de Bruno.
     await openThread(equipment.id, bruno.cookies, pushApp);
-    expect(poussés).toEqual([endpoint, token]);
+    expect(poussés).toEqual([endpoint]);
 
-    // Alice, elle, coupe bien ses propres canaux.
+    // Alice, elle, coupe bien son propre canal.
     poussés.length = 0;
-    for (const [url, payload] of [
-      ['/api/notifications/subscriptions', { endpoint }],
-      ['/api/notifications/device-tokens', { token }],
-    ] as const) {
-      expect((await pushApp.inject({ method: 'DELETE', url, payload, cookies: alice.cookies })).statusCode).toBe(204);
-    }
+    expect((await coupe(alice.cookies)).statusCode).toBe(204);
     await openThread(equipment.id, bruno.cookies, pushApp);
     expect(poussés).toEqual([]);
     await pushApp.close();
