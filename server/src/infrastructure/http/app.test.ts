@@ -3104,14 +3104,14 @@ describe('API — administration : fusionner deux comptes du même membre', () =
     const complet = (await get('/api/admin/members', alice.cookies)).json() as { id: string }[];
     expect(complet.map((m) => m.id).sort()).toEqual([alice.id, chloe.id, nouveau.id].sort());
     const équipement = (await get('/api/equipments', alice.cookies)).json() as { id: string; memberIds: string[] }[];
-    expect(équipement[0].memberIds).toEqual([chloe.id, alice.id, nouveau.id]);
+    expect(équipement[0]?.memberIds).toEqual([chloe.id, alice.id, nouveau.id]);
 
     // La dépense se recharge, parts additionnées, somme toujours égale au montant.
     const dépenses = (await get(`/api/equipments/${minipelle.id}/expenses`, alice.cookies)).json() as {
       sharesEuros: Record<string, number>;
     }[];
     // 30 € + 30 € pour Damien, et non les 40 € qu'un partage à trois aurait produits.
-    expect(dépenses[0].sharesEuros).toEqual({ [chloe.id]: 30, [alice.id]: 30, [nouveau.id]: 60 });
+    expect(dépenses[0]?.sharesEuros).toEqual({ [chloe.id]: 30, [alice.id]: 30, [nouveau.id]: 60 });
     const soldes = (await get(`/api/equipments/${minipelle.id}/balances`, alice.cookies)).json() as {
       memberId: string;
       balanceEuros: number;
