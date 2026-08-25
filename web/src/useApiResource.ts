@@ -43,7 +43,12 @@ export function useApiResource<T>(loader: () => Promise<T>): ApiResource<T> {
     }
   }, [loader]);
 
+  // Le drapeau de chargement précède l'appel réseau : c'est la synchronisation avec un système
+  // externe que l'effet est fait pour porter. `set-state-in-effect` ne voit que le `setState`
+  // synchrone en tête de `reload`, sans lequel un changement de `loader` afficherait les données
+  // de la sélection précédente sans dire qu'un chargement est en cours.
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect
     void reload();
   }, [reload]);
 

@@ -93,16 +93,18 @@ describe('saisie du relevé', () => {
     expect(screen.queryByRole('button', { name: 'Enregistrer le relevé' })).toBeNull();
   });
 
-  it("retire la confirmation dès qu'on change d'équipement", async () => {
+  // Le changement d'équipement remet la page à neuf par le remontage décidé dans `App` (`key`) :
+  // ce qui reste ici, c'est la bascule de l'historique, qui ne démonte rien.
+  it("retire la confirmation dès qu'on bascule l'historique", async () => {
     const user = userEvent.setup();
-    const { rerender } = renderPage();
+    renderPage();
     await openForm(user);
 
     await user.type(screen.getByLabelText(/Durée d'utilisation/), '5');
     await user.click(screen.getByRole('button', { name: 'Enregistrer le relevé' }));
     expect(await screen.findByText('Relevé enregistré.')).toBeDefined();
 
-    rerender(<UsagePage members={members} currentMemberId="m1" equipment={broyeur} />);
+    await user.click(screen.getByLabelText('Mes relevés uniquement'));
 
     expect(screen.queryByText('Relevé enregistré.')).toBeNull();
   });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { api, receiptUrl } from '../api';
 import type { Equipment, Expense, ExpenseCategory, Member, SettlementTransaction, SplitInput } from '../api';
 import { CATEGORY_LABELS, formatDate, formatEuros } from '../format';
@@ -48,22 +48,28 @@ export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
     [equipment.memberIds, members],
   );
 
+  // Clé primitive du cercle : le rechargement du parc recrée des objets identiques, la comparer
+  // évite de recaler le formulaire pour rien.
+  const circleKey = equipment.memberIds.join(',');
+
   const [form, setForm] = useState({
     label: '',
     amountEuros: '',
-    payerId: currentMemberId,
+    payerId: equipment.memberIds.includes(currentMemberId) ? currentMemberId : (equipment.memberIds[0] ?? ''),
     date: new Date().toISOString().slice(0, 10),
     category: 'FUEL' as ExpenseCategory,
     splitType: 'EQUAL' as SplitType,
-    equalMemberIds: [] as string[],
+    equalMemberIds: [...equipment.memberIds],
     customAmounts: {} as Record<string, string>,
     receiptFile: null as File | null,
   });
 
-  // À chaque changement d'équipement (ou de son cercle), recale le formulaire.
-  // Clé primitive : évite de relancer l'effet quand le rechargement recrée des objets identiques.
-  const circleKey = equipment.memberIds.join(',');
-  useEffect(() => {
+  // Le cercle peut changer sans qu'on quitte l'équipement — un membre y entre depuis la gestion du
+  // parc. Le partage affiché doit suivre, sinon la dépense partirait sur un cercle périmé. Recalé
+  // pendant le rendu : un effet aurait laissé passer un rendu avec l'ancien cercle.
+  const [cercleSuivi, setCercleSuivi] = useState(circleKey);
+  if (cercleSuivi !== circleKey) {
+    setCercleSuivi(circleKey);
     const memberIds = circleKey === '' ? [] : circleKey.split(',');
     setForm((f) => ({
       ...f,
@@ -71,7 +77,7 @@ export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
       equalMemberIds: memberIds,
       customAmounts: {},
     }));
-  }, [circleKey]);
+  }
 
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;

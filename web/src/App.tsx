@@ -23,8 +23,19 @@ type Auth =
   | { kind: 'anonymous'; needsBootstrap: boolean }
   | { kind: 'authenticated'; member: Member };
 
+/** Code d'invitation porté par l'URL, s'il y en a un : `/invite/<code>`. */
+function codeInvitation(): string | null {
+  const found = window.location.pathname.match(/^\/invite\/([^/]+)$/);
+  return found ? decodeURIComponent(found[1]) : null;
+}
+
 export function App() {
-  const [auth, setAuth] = useState<Auth>({ kind: 'loading' });
+  // Un lien d'invitation dit l'état de départ à lui seul : inutile de passer par « Chargement… »
+  // puis d'attendre le serveur pour afficher un écran que l'URL désignait déjà.
+  const [auth, setAuth] = useState<Auth>(() => {
+    const code = codeInvitation();
+    return code === null ? { kind: 'loading' } : { kind: 'invite', code };
+  });
 
   const backToLogin = useCallback(async () => {
     try {
@@ -49,11 +60,8 @@ export function App() {
   }, [backToLogin]);
 
   useEffect(() => {
-    const inviteMatch = window.location.pathname.match(/^\/invite\/([^/]+)$/);
-    if (inviteMatch) {
-      setAuth({ kind: 'invite', code: decodeURIComponent(inviteMatch[1]) });
-      return;
-    }
+    // Une invitation se joue entre le lien et l'écran de bienvenue : l'état de départ est déjà fixé.
+    if (codeInvitation() !== null) return;
     api
       .me()
       .then((state) =>
@@ -282,8 +290,14 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
         </>
       ) : (
         <>
+          {/*
+           * `key` sur l'équipement : changer d'espace de travail remet chaque onglet à neuf —
+           * fil ouvert, filtres, brouillons de saisie. Le dire ici une fois vaut mieux que le
+           * réparer page par page dans un effet, qui laissait un rendu avec l'état du précédent.
+           */}
           {route.tab === 'agenda' && (
             <CalendarPage
+              key={currentEquipment.id}
               members={members}
               currentMemberId={member.id}
               equipment={currentEquipment}
@@ -295,6 +309,7 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
           )}
           {route.tab === 'maintenance' && (
             <MaintenancePage
+              key={currentEquipment.id}
               members={members}
               currentMemberId={member.id}
               equipment={currentEquipment}
@@ -303,10 +318,16 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
             />
           )}
           {route.tab === 'expenses' && (
-            <ExpensesPage members={members} currentMemberId={member.id} equipment={currentEquipment} />
+            <ExpensesPage
+              key={currentEquipment.id}
+              members={members}
+              currentMemberId={member.id}
+              equipment={currentEquipment}
+            />
           )}
           {route.tab === 'forum' && (
             <DiscussionsPage
+              key={currentEquipment.id}
               members={members}
               currentMemberId={member.id}
               equipment={currentEquipment}
@@ -314,7 +335,12 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
             />
           )}
           {route.tab === 'documents' && (
-            <DocumentsPage members={members} currentMemberId={member.id} equipment={currentEquipment} />
+            <DocumentsPage
+              key={currentEquipment.id}
+              members={members}
+              currentMemberId={member.id}
+              equipment={currentEquipment}
+            />
           )}
         </>
       )}

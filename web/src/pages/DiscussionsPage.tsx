@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { api } from '../api';
 import type { Equipment, Member } from '../api';
 import { formatRelative } from '../format';
@@ -54,16 +54,14 @@ export function DiscussionsPage({ members, currentMemberId, equipment, initialTh
     [equipment.memberIds, members],
   );
 
-  // Le fil ouvert appartient à l'équipement quitté : il se referme au changement d'espace.
-  useEffect(() => {
-    setOpenThreadId(null);
-  }, [equipment.id]);
-
   // Fil ciblé par un lien de notification, y compris quand un second lien arrive alors que
-  // l'onglet est déjà affiché : l'état initial ne suffit pas, le composant reste monté.
-  useEffect(() => {
+  // l'onglet est déjà affiché : l'état initial ne suffit pas, le composant reste monté. Le lien
+  // suivi est comparé pendant le rendu — un effet aurait affiché le fil précédent entre-temps.
+  const [lienSuivi, setLienSuivi] = useState(initialThreadId);
+  if (initialThreadId !== lienSuivi) {
+    setLienSuivi(initialThreadId);
     if (initialThreadId) setOpenThreadId(initialThreadId);
-  }, [initialThreadId]);
+  }
 
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { api } from '../api';
 import type { DirectoryMember, Equipment } from '../api';
 import type { Tab } from '../navigation';
@@ -42,8 +42,13 @@ export function OverviewPanel({ equipments, members, currentMemberId, onOpenEqui
   const equipementsParId = useMemo(() => new Map(equipments.map((e) => [e.id, e])), [equipments]);
   const moi = members.find((m) => m.id === currentMemberId) ?? null;
 
+  /**
+   * Instant de référence de « ma semaine », fixé à l'ouverture du panneau : le relire à chaque
+   * rendu ferait glisser la fenêtre de sept jours au gré de rendus qui n'ont rien à voir.
+   */
+  const [maintenant] = useState(() => Date.now());
+
   const maSemaine = useMemo(() => {
-    const maintenant = Date.now();
     return (calendrier.data ?? [])
       .filter(
         (r) =>
@@ -52,7 +57,7 @@ export function OverviewPanel({ equipments, members, currentMemberId, onOpenEqui
           new Date(r.start).getTime() <= maintenant + SEMAINE_MS,
       )
       .sort((a, b) => a.start.localeCompare(b.start));
-  }, [calendrier.data, currentMemberId]);
+  }, [calendrier.data, currentMemberId, maintenant]);
 
   const aFaire = useMemo(() => (alertes.data ?? []).filter((a) => a.alert), [alertes.data]);
 

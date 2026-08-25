@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { DOCUMENT_CATEGORIES, api, documentContentUrl } from '../api';
 import type { DocumentCategory, Equipment, EquipmentDocument, Member } from '../api';
 import { DOCUMENT_CATEGORY_LABELS, formatBytes, formatDate, linkHost } from '../format';
@@ -81,13 +81,6 @@ export function DocumentsPage({ members, equipment }: Props) {
           (d.fileName ?? '').toLowerCase().includes(needle)),
     );
   }, [documents, filter, search]);
-
-  // Changement d'équipement : le filtre d'un dossier n'a pas de sens dans le suivant.
-  useEffect(() => {
-    setFilter('*');
-    setSearch('');
-    setEditingId(null);
-  }, [equipment.id]);
 
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;

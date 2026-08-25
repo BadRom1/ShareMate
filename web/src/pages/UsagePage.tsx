@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { api } from '../api';
 import type { Equipment, Member } from '../api';
 import { formatDateTime, meterLabel } from '../format';
@@ -50,13 +50,11 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
   const lastReading = status?.currentReading ?? null;
   const unit = meterLabel(equipment.meterUnit);
 
-  useEffect(() => {
+  /** Bascule l'historique : la confirmation du relevé précédent ne décrit plus ce qui est affiché. */
+  function changerVue(parMembre: boolean) {
+    setViewByMember(parMembre);
     setInfo(null);
-  }, [equipment.id, viewByMember]);
-
-  useEffect(() => {
-    setForm((f) => ({ ...f, duration: '', meterReading: lastReading !== null ? String(lastReading) : '' }));
-  }, [equipment.id, lastReading]);
+  }
 
   /** Évite les artefacts de virgule flottante lors des conversions durée ↔ total. */
   const round = (n: number) => Math.round(n * 100) / 100;
@@ -148,7 +146,7 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
         <div className="row" style={{ alignItems: 'center', marginBottom: '0.5rem' }}>
           <h3 style={{ margin: 0, flex: '0 1 auto' }}>Historique</h3>
           <label className="check" style={{ marginLeft: 'auto', flex: '0 0 auto' }}>
-            <input type="checkbox" checked={viewByMember} onChange={(e) => setViewByMember(e.target.checked)} />
+            <input type="checkbox" checked={viewByMember} onChange={(e) => changerVue(e.target.checked)} />
             Mes relevés uniquement
           </label>
         </div>

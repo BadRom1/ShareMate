@@ -65,7 +65,7 @@ export class Money {
     if (!Number.isInteger(count) || count <= 0) {
       throw new DomainError('Le nombre de parts doit être un entier positif.');
     }
-    return this.splitByWeights(new Array<number>(count).fill(1));
+    return this.splitByWeights(Array.from({ length: count }, () => 1));
   }
 
   /**

@@ -46,7 +46,7 @@ import type {
 
 /** `IN (?, ?, …)` : better-sqlite3 ne lie pas un tableau à un seul paramètre. */
 function placeholders(count: number): string {
-  return new Array(count).fill('?').join(', ');
+  return Array.from({ length: count }, () => '?').join(', ');
 }
 
 interface MemberRow {

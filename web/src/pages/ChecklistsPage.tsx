@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { api } from '../api';
 import type { ChecklistItem, Equipment, Member } from '../api';
 import { formatDateTime, formatRelative } from '../format';
@@ -65,17 +65,13 @@ export function ChecklistsPage({ members, equipment }: Props) {
   );
   const checkedCount = items.filter((i) => i.checkedAt !== null).length;
 
-  // Changement de checklist : on repart d'une vue propre.
-  useEffect(() => {
+  /** Ouvre une checklist, ou revient à la liste : on y entre sur une vue propre, sans édition héritée. */
+  function ouvrirChecklist(id: string | null) {
+    setOpenChecklistId(id);
     setEditingItemId(null);
     setRenaming(false);
     setNewItemLabel('');
-  }, [openChecklistId]);
-
-  // Changement d'équipement : la checklist ouverte appartenait au précédent.
-  useEffect(() => {
-    setOpenChecklistId(null);
-  }, [equipment.id]);
+  }
 
   function memberName(id: string) {
     return members.find((m) => m.id === id)?.name ?? id;
@@ -98,7 +94,7 @@ export function ChecklistsPage({ members, equipment }: Props) {
       setNewItems('');
       setShowNew(false);
       await checklistsResource.reload();
-      setOpenChecklistId(checklist.id);
+      ouvrirChecklist(checklist.id);
     } catch (e) {
       fail(e);
     } finally {
@@ -110,7 +106,7 @@ export function ChecklistsPage({ members, equipment }: Props) {
     if (!confirm('Supprimer cette checklist et tous ses points ?')) return;
     try {
       await api.deleteChecklist(id);
-      if (openChecklistId === id) setOpenChecklistId(null);
+      if (openChecklistId === id) ouvrirChecklist(null);
       await checklistsResource.reload();
     } catch (e) {
       fail(e);
@@ -243,7 +239,7 @@ export function ChecklistsPage({ members, equipment }: Props) {
               <ul className="side-list">
                 {checklists.map((c) => (
                   <li key={c.id} className={`side-row ${c.id === openChecklistId ? 'side-active' : ''}`}>
-                    <button className="side-open" onClick={() => setOpenChecklistId(c.id)}>
+                    <button className="side-open" onClick={() => ouvrirChecklist(c.id)}>
                       <IconChecklist size={18} />
                       <span className="side-titles">
                         <span className="side-title">{c.title}</span>
@@ -317,7 +313,7 @@ export function ChecklistsPage({ members, equipment }: Props) {
     return (
       <div className="card">
         <div className="bell-head">
-          <button className="icon-btn side-back" onClick={() => setOpenChecklistId(null)} title="Retour aux checklists">
+          <button className="icon-btn side-back" onClick={() => ouvrirChecklist(null)} title="Retour aux checklists">
             <IconBack size={20} />
           </button>
           {renaming ? (

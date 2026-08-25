@@ -283,3 +283,23 @@ describe('session', () => {
     expect(stub.me).not.toHaveBeenCalled();
   });
 });
+
+describe("changement d'espace de travail", () => {
+  // Recherche, filtre, brouillon de saisie : cet état n'est déduit d'aucune donnée du serveur, donc
+  // rien ne le remet en place tout seul. Il appartient à l'équipement qu'on quitte, et l'onglet
+  // repart à neuf plutôt que de rouvrir sur la recherche du précédent.
+  it('vide la recherche de documents quand on passe à un autre équipement', async () => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, '', '/?tab=documents&equipment=e2');
+    render(<App />);
+
+    const recherche = await screen.findByLabelText('Rechercher un document');
+    await user.type(recherche, 'facture');
+    expect(recherche).toHaveProperty('value', 'facture');
+
+    clickNotification('/?tab=documents&equipment=e1');
+
+    await waitFor(() => expect(currentEquipment()).toBe('Tracteur'));
+    expect(screen.getByLabelText('Rechercher un document')).toHaveProperty('value', '');
+  });
+});

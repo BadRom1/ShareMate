@@ -97,7 +97,6 @@ export function AdminPage({ currentMemberId }: Props) {
   const [keptId, setKeptId] = useState('');
   const [nameFrom, setNameFrom] = useState<Origine>('kept');
   const [emailFrom, setEmailFrom] = useState<Origine>('kept');
-  const [counts, setCounts] = useState<MergeCounts | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,25 +115,29 @@ export function AdminPage({ currentMemberId }: Props) {
       }
     : null;
 
+  /** Couple demandé, sous forme primitive : c'est lui qui identifie l'aperçu affiché. */
+  const coupleDemandé = paire ? `${paire.absorbed.id}>${paire.kept.id}` : '';
+
   // Aperçu chiffré, recalculé à chaque changement de couple : c'est ce qui rend la confirmation
-  // autre chose qu'un pari. Les réponses hors séquence sont écartées — deux choix rapprochés
-  // afficheraient sinon le décompte du précédent.
+  // autre chose qu'un pari. Il porte le couple qu'il décrit, et n'est lu que si c'est celui qui
+  // est à l'écran — deux choix rapprochés afficheraient sinon le décompte du précédent, et un
+  // couple invalide garderait celui d'avant.
+  const [aperçu, setAperçu] = useState<{ couple: string; counts?: MergeCounts; erreur?: string } | null>(null);
+  const àJour = aperçu !== null && aperçu.couple === coupleDemandé;
+  const counts = àJour ? (aperçu.counts ?? null) : null;
+  const erreurAperçu = àJour ? (aperçu.erreur ?? null) : null;
+
   useEffect(() => {
-    if (absorbedId === '' || keptId === '' || absorbedId === keptId) {
-      setCounts(null);
-      return;
-    }
+    if (coupleDemandé === '') return;
     let courant = true;
-    setCounts(null);
-    setError(null);
     api
       .mergePreview(absorbedId, keptId)
-      .then((résultat) => courant && setCounts(résultat))
-      .catch((e) => courant && setError(errorMessage(e)));
+      .then((résultat) => courant && setAperçu({ couple: coupleDemandé, counts: résultat }))
+      .catch((e) => courant && setAperçu({ couple: coupleDemandé, erreur: errorMessage(e) }));
     return () => {
       courant = false;
     };
-  }, [absorbedId, keptId]);
+  }, [coupleDemandé, absorbedId, keptId]);
 
   async function fusionner() {
     if (!paire || !identité) return;
@@ -174,9 +177,9 @@ export function AdminPage({ currentMemberId }: Props) {
 
   return (
     <>
-      {error && (
+      {(error ?? erreurAperçu) !== null && (
         <div className="alert" onClick={() => setError(null)}>
-          {error}
+          {error ?? erreurAperçu}
         </div>
       )}
 

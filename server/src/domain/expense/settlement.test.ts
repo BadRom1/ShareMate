@@ -92,7 +92,7 @@ describe('settle — minimisation des transactions', () => {
       [],
     );
     const txs = settle(balances);
-    const involved = new Set([...balances.keys()]);
+    const involved = new Set(balances.keys());
     expect(txs.length).toBeLessThanOrEqual(involved.size - 1);
   });
 

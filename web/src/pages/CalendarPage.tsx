@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { api } from '../api';
 import type { Equipment, Member, Reservation } from '../api';
 import { formatDay, formatTime, formatDateTime } from '../format';
@@ -76,11 +76,23 @@ export function CalendarPage({ members, currentMemberId, equipment, onRecordUsag
   });
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
 
-  // La confirmation porte sur le geste qu'on vient de faire : dès qu'on navigue ailleurs
-  // dans la grille, elle ne décrit plus ce qu'on a sous les yeux.
-  useEffect(() => {
+  // La confirmation porte sur le geste qu'on vient de faire : dès qu'on navigue ailleurs dans la
+  // grille, elle ne décrit plus ce qu'on a sous les yeux. Chaque déplacement l'efface donc
+  // lui-même ; le changement d'équipement, lui, remonte la page entière (`key` posé par `App`).
+  function changerVue(suivante: 'month' | 'week' | 'list') {
+    setView(suivante);
     setInfo(null);
-  }, [view, month, weekStart, equipment.id]);
+  }
+
+  function changerMois(suivant: Date) {
+    setMonth(suivant);
+    setInfo(null);
+  }
+
+  function changerSemaine(suivante: Date) {
+    setWeekStart(suivante);
+    setInfo(null);
+  }
 
   const [draft, setDraft] = useState(EMPTY_DRAFT);
 
@@ -119,23 +131,30 @@ export function CalendarPage({ members, currentMemberId, equipment, onRecordUsag
     [byId],
   );
 
+  /**
+   * Instant de référence de « à venir » et « terminé récemment », fixé à l'ouverture de l'écran.
+   * Le lire à chaque rendu ferait glisser la fenêtre au fil de rendus qui n'ont rien à voir, et
+   * rendrait la liste des rappels imprévisible ; l'écran est de toute façon remonté à chaque
+   * changement d'équipement.
+   */
+  const [maintenant] = useState(() => Date.now());
+
   /** Mes réservations à venir sur lesquelles je ne suis pas prioritaire. */
   const myLosingConflicts = useMemo(() => {
-    const now = new Date().toISOString();
+    const now = new Date(maintenant).toISOString();
     return reservations.filter(
       (r) => r.memberId === currentMemberId && r.end > now && r.conflictIds.length > 0 && !isPriority(r),
     );
-  }, [reservations, currentMemberId, isPriority]);
+  }, [reservations, currentMemberId, isPriority, maintenant]);
 
   /** Mes créneaux terminés récemment, pour rappeler la saisie du relevé. */
   const usageReminders = useMemo(() => {
-    const now = Date.now();
-    const weekAgo = now - 7 * 24 * 3600 * 1000;
+    const weekAgo = maintenant - 7 * 24 * 3600 * 1000;
     return reservations.filter((r) => {
       const end = new Date(r.end).getTime();
-      return r.memberId === currentMemberId && end <= now && end > weekAgo && !dismissed.includes(r.id);
+      return r.memberId === currentMemberId && end <= maintenant && end > weekAgo && !dismissed.includes(r.id);
     });
-  }, [reservations, currentMemberId, dismissed]);
+  }, [reservations, currentMemberId, dismissed, maintenant]);
 
   function dismissReminder(id: string) {
     const next = [...dismissed, id];
@@ -361,13 +380,13 @@ export function CalendarPage({ members, currentMemberId, equipment, onRecordUsag
 
       <div className={cardClass}>
         <div className="view-toggle" role="group" aria-label="Vue du calendrier">
-          <button type="button" className={view === 'month' ? 'active' : ''} onClick={() => setView('month')}>
+          <button type="button" className={view === 'month' ? 'active' : ''} onClick={() => changerVue('month')}>
             Mois
           </button>
-          <button type="button" className={view === 'week' ? 'active' : ''} onClick={() => setView('week')}>
+          <button type="button" className={view === 'week' ? 'active' : ''} onClick={() => changerVue('week')}>
             Semaine
           </button>
-          <button type="button" className={view === 'list' ? 'active' : ''} onClick={() => setView('list')}>
+          <button type="button" className={view === 'list' ? 'active' : ''} onClick={() => changerVue('list')}>
             Liste
           </button>
         </div>
@@ -381,7 +400,7 @@ export function CalendarPage({ members, currentMemberId, equipment, onRecordUsag
                   type="button"
                   className="ghost cal-nav-arrow"
                   aria-label="Mois précédent"
-                  onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}
+                  onClick={() => changerMois(new Date(month.getFullYear(), month.getMonth() - 1, 1))}
                 >
                   ‹
                 </button>
@@ -389,7 +408,7 @@ export function CalendarPage({ members, currentMemberId, equipment, onRecordUsag
                   type="button"
                   className="ghost cal-nav-arrow"
                   aria-label="Mois suivant"
-                  onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}
+                  onClick={() => changerMois(new Date(month.getFullYear(), month.getMonth() + 1, 1))}
                 >
                   ›
                 </button>
@@ -398,7 +417,7 @@ export function CalendarPage({ members, currentMemberId, equipment, onRecordUsag
                   className="ghost cal-nav-today"
                   onClick={() => {
                     const now = new Date();
-                    setMonth(new Date(now.getFullYear(), now.getMonth(), 1));
+                    changerMois(new Date(now.getFullYear(), now.getMonth(), 1));
                   }}
                 >
                   Aujourd'hui
@@ -459,7 +478,7 @@ export function CalendarPage({ members, currentMemberId, equipment, onRecordUsag
                   onClick={() => {
                     const d = new Date(weekStart);
                     d.setDate(d.getDate() - 7);
-                    setWeekStart(d);
+                    changerSemaine(d);
                   }}
                 >
                   ‹
@@ -471,7 +490,7 @@ export function CalendarPage({ members, currentMemberId, equipment, onRecordUsag
                   onClick={() => {
                     const d = new Date(weekStart);
                     d.setDate(d.getDate() + 7);
-                    setWeekStart(d);
+                    changerSemaine(d);
                   }}
                 >
                   ›
@@ -479,7 +498,7 @@ export function CalendarPage({ members, currentMemberId, equipment, onRecordUsag
                 <button
                   type="button"
                   className="ghost cal-nav-today"
-                  onClick={() => setWeekStart(startOfWeek(new Date()))}
+                  onClick={() => changerSemaine(startOfWeek(new Date()))}
                 >
                   Aujourd'hui
                 </button>

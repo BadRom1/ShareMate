@@ -26,8 +26,11 @@ export function NotificationBell({ onNavigate }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearing, setClearing] = useState(false);
-  /** Rang de la ligne effacée, à qui rendre le focus une fois la liste redessinée. */
-  const [focusRank, setFocusRank] = useState<number | null>(null);
+  /**
+   * Rang de la ligne effacée, à qui rendre le focus une fois la liste redessinée. Une référence
+   * plutôt qu'un état : le rang ne s'affiche pas, il ne fait que traverser jusqu'au rendu suivant.
+   */
+  const focusRank = useRef<number | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
   const prefsButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -54,11 +57,28 @@ export function NotificationBell({ onNavigate }: Props) {
     }
   }, []);
 
+  // Sondage du badge : `refreshCount` ne pose son état qu'après la réponse du serveur, donc après
+  // un `await`. La règle ne suit pas l'appel jusque-là et le prend pour un état posé pendant
+  // l'effet ; il n'y a pas de rendu en cascade à éviter ici.
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect
     void refreshCount();
     const timer = setInterval(() => void refreshCount(), POLL_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [refreshCount]);
+
+  /*
+   * Le panneau fermé ne garde rien : ni le message d'erreur du geste précédent, ni une
+   * confirmation en cours. Sans cette remise à zéro, un panneau refermé pendant la confirmation
+   * laissait `confirmClear` à vrai — la boîte revenait sans être demandée à la réouverture, et la
+   * garde du clic extérieur bloquait définitivement la fermeture. Toute fermeture passe
+   * donc par ici, plutôt que par un effet qui rattrape l'état après coup.
+   */
+  const fermer = useCallback(() => {
+    setOpen(false);
+    setConfirmClear(false);
+    setError(null);
+  }, []);
 
   /*
    * Ferme le panneau au clic extérieur — sauf pendant la confirmation d'un vidage : la boîte vit
@@ -68,23 +88,11 @@ export function NotificationBell({ onNavigate }: Props) {
   useEffect(() => {
     if (!open || confirmClear) return;
     function onClick(e: MouseEvent) {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) setOpen(false);
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) fermer();
     }
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
-  }, [open, confirmClear]);
-
-  /*
-   * Le panneau fermé ne garde rien : ni le message d'erreur du geste précédent, ni une
-   * confirmation en cours. Sans cette remise à zéro, un panneau refermé pendant la confirmation
-   * laissait `confirmClear` à vrai — la boîte revenait sans être demandée à la réouverture, et la
-   * garde ci-dessous bloquait définitivement la fermeture au clic extérieur.
-   */
-  useEffect(() => {
-    if (open) return;
-    setConfirmClear(false);
-    setError(null);
-  }, [open]);
+  }, [open, confirmClear, fermer]);
 
   /*
    * Rend le focus après un effacement : la croix de la ligne qui prend la place de celle qui
@@ -93,24 +101,26 @@ export function NotificationBell({ onNavigate }: Props) {
    * notification effacée.
    */
   useEffect(() => {
-    if (focusRank === null) return;
-    setFocusRank(null);
+    const rang = focusRank.current;
+    if (rang === null) return;
+    focusRank.current = null;
     const croix = listRef.current?.querySelectorAll<HTMLButtonElement>('.notif-dismiss');
-    const cible = croix?.length ? croix[Math.min(focusRank, croix.length - 1)] : prefsButtonRef.current;
+    const cible = croix?.length ? croix[Math.min(rang, croix.length - 1)] : prefsButtonRef.current;
     cible?.focus();
-  }, [focusRank, items]);
+  }, [items]);
 
   // Échap referme le panneau — mais pas quand la confirmation est ouverte : le hook laisse la
   // main à la boîte de dialogue, sinon un seul appui emporterait les deux.
-  useEscape(useCallback(() => setOpen(false), []));
+  useEscape(fermer);
 
   async function toggleOpen() {
-    const next = !open;
-    setOpen(next);
-    if (next) {
-      setShowPrefs(false);
-      await reload();
+    if (open) {
+      fermer();
+      return;
     }
+    setOpen(true);
+    setShowPrefs(false);
+    await reload();
   }
 
   async function openItem(n: AppNotification) {
@@ -122,7 +132,7 @@ export function NotificationBell({ onNavigate }: Props) {
         /* ignoré */
       }
     }
-    setOpen(false);
+    fermer();
     if (n.link) onNavigate(n.link);
   }
 
@@ -149,7 +159,7 @@ export function NotificationBell({ onNavigate }: Props) {
     setError(null);
     const avant = items;
     setItems(avant.filter((item) => item.id !== n.id));
-    setFocusRank(avant.findIndex((item) => item.id === n.id));
+    focusRank.current = avant.findIndex((item) => item.id === n.id);
     try {
       await api.dismissNotification(n.id);
       // Une non-lue de moins : le badge suit sans second aller-retour, que le réseau se
