@@ -101,7 +101,7 @@ server/src/
 web/src/              # Front React (Vite) — adapter de présentation
 ```
 
-Les frontières sont vérifiées par ESLint : le domaine ne peut rien importer des couches
+Les frontières sont vérifiées par oxlint : le domaine ne peut rien importer des couches
 application/infrastructure, l'application ne peut pas importer l'infrastructure.
 
 **Choix notables**
@@ -142,9 +142,9 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 
 ```bash
 npm install
-npm test              # 834 tests : 596 serveur (Node) + 238 front (jsdom)
+npm test              # 835 tests : 596 serveur (Node) + 239 front (jsdom)
 npm run test:coverage # Tests + seuils de couverture (90 % lignes/fonctions, 85 % branches)
-npm run lint          # ESLint (frontières hexagonales + règles React hooks)
+npm run lint          # oxlint (frontières hexagonales + règles React)
 npm run format        # Prettier (format:check en CI)
 npm run typecheck     # tsc sur les deux workspaces
 npm run audit:prod    # npm audit des dépendances de production (high+)
@@ -166,7 +166,7 @@ npm start             # Sert l'API + le front buildé
   des identifiants français, qui prolongent l'intention décrite par le titre du test.
 - **Un commentaire dit pourquoi**, jamais quoi : la contrainte, l'invariant, le piège que le code
   suivant évite. Ce que fait le code se lit dans le code.
-- **Architecture hexagonale**, vérifiée par ESLint : `server/src/domain` ne dépend de rien,
+- **Architecture hexagonale**, vérifiée par oxlint : `server/src/domain` ne dépend de rien,
   `server/src/application` ne dépend pas de `infrastructure`.
 
 Variables d'environnement du serveur :

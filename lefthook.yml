@@ -6,9 +6,9 @@ pre-commit:
       glob: '*.{ts,tsx,js,json,md,yml,yaml,css,html}'
       run: npx prettier --write {staged_files}
       stage_fixed: true
-    - name: eslint
+    - name: oxlint
       glob: '*.{ts,tsx,js}'
-      run: npx eslint --max-warnings 0 {staged_files}
+      run: npx oxlint --deny-warnings {staged_files}
 
 pre-push:
   jobs:

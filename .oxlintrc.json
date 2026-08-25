@@ -1,0 +1,53 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "react", "oxc", "unicorn"],
+  "categories": {
+    "correctness": "error"
+  },
+  "ignorePatterns": ["**/dist/**", "**/dev-dist/**", "**/node_modules/**"],
+  "rules": {
+    "no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_"
+      }
+    ],
+    "typescript/consistent-type-imports": "error",
+    "react/rules-of-hooks": "error",
+    "react/exhaustive-deps": "error"
+  },
+  "overrides": [
+    {
+      "files": ["server/src/domain/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/application/**", "**/infrastructure/**"],
+                "message": "Le domaine ne doit dépendre ni de la couche application ni de la couche infrastructure."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["server/src/application/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/infrastructure/**"],
+                "message": "La couche application ne doit pas dépendre de l'infrastructure."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
