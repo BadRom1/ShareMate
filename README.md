@@ -149,7 +149,7 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 
 ```bash
 npm install
-npm test              # 870 tests : 624 serveur (Node) + 246 front (jsdom)
+npm test              # 873 tests : 624 serveur (Node) + 249 front (jsdom)
 npm run test:coverage # Tests + seuils de couverture (90 % lignes/fonctions, 85 % branches)
 npm run lint          # oxlint (frontières hexagonales + règles React)
 npm run format        # Prettier (format:check en CI)
@@ -365,9 +365,10 @@ admin:designate`) et jamais deviné. À tout autre, `/api/admin/*` répond `403`
   `trustProxy` est activé en production pour lire la vraie IP derrière le proxy Railway.
 - **En-têtes** : `@fastify/helmet` — CSP `default-src 'self'`, `frame-ancestors 'none'`,
   `object-src 'none'`, `nosniff`, HSTS.
-- **Logs** : pino JSON en production ; `cookie`, `set-cookie` et `authorization` expurgés. Les
-  changements de composition d'un cercle partent dans le journal du serveur, hors de portée des
-  membres concernés.
+- **Logs** : pino JSON en production ; `cookie`, `set-cookie` et `authorization` expurgés — mais
+  **pas l'URL**, qui porte les codes d'invitation et de reprise (voir plus bas). Les changements de
+  composition d'un cercle, les fusions et les liens de réinitialisation émis partent dans le
+  journal du serveur, hors de portée des membres concernés.
 - **Conteneur** : image non-root (`USER node`), `HEALTHCHECK` intégré.
 - **Chaîne d'appro** : audit npm en CI (bloquant à partir de high), CodeQL hebdomadaire,
   Dependabot (npm, GitHub Actions, image Docker de base).
@@ -391,6 +392,17 @@ admin:designate`) et jamais deviné. À tout autre, `/api/admin/*` répond `403`
 - **Pas de vérification d'email.** L'adresse sert d'identifiant de connexion, elle n'est jamais
   confirmée : rien ne peut donc porter automatiquement la preuve d'identité d'une réinitialisation,
   qui repose sur l'administrateur et le canal par lequel il transmet le lien.
+- **Les codes transmis hors bande sont en clair de bout en bout.** Invitation comme
+  réinitialisation, le code est stocké tel quel en base et voyage dans le **chemin de l'URL**
+  (`/api/auth/invites/:code`, `/api/auth/password-resets/:code`) : le journal d'accès de Fastify
+  écrit donc chaque ouverture de lien, code compris — seuls `cookie`, `set-cookie` et
+  `authorization` sont expurgés. Les jetons de session, eux, ne sont stockés que hachés et ne
+  quittent jamais le cookie. Conséquences : qui lit les logs, ou une sauvegarde SQLite prise
+  pendant la fenêtre de validité (24 h pour une reprise, 7 jours pour une invitation), tient un
+  lien directement utilisable. La nuance entre les deux codes compte — une invitation ouvre un
+  compte vide, une reprise prend un compte en service —, mais le défaut est le même et se
+  corrigera pour les deux à la fois : hacher le code au repos et le sortir du chemin d'URL (voir
+  la feuille de route).
 - **`trustProxy` fait confiance à toute la chaîne `X-Forwarded-For`.** Si le service devient
   joignable autrement que par le proxy Railway, un client peut forger l'en-tête et contourner le
   plafond par IP. Tant que l'accès passe exclusivement par le proxy, le risque est nul.
@@ -515,3 +527,10 @@ GitHub Actions :
 6. **Multi-cercles assumé** : le modèle le permet déjà (un membre, plusieurs équipements, des
    cercles disjoints) ; ce qui manque est l'interface — rien ne montre à un membre qu'il vit dans
    plusieurs cercles étanches.
+7. **Codes hors bande hachés, et hors de l'URL** : invitation et reprise partagent le même défaut
+   — code en clair en base, et dans le chemin de l'URL, donc dans le journal d'accès (voir
+   [Sécurité](#sécurité)). Le correctif vaut pour les deux à la fois : empreinte au repos comme
+   pour les jetons de session, et code passé dans le corps de la requête plutôt que dans le
+   chemin. Ce qui le rend prioritaire n'est pas l'invitation, qui n'ouvre qu'un compte vide, mais
+   la reprise, qui prend un compte en service — une sauvegarde de la base prise pendant ses 24 h
+   de validité livre un lien utilisable.

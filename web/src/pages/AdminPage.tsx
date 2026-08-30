@@ -106,6 +106,9 @@ export function AdminPage({ currentMemberId }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fait, setFait] = useState<{ name: string; counts: MergeCounts } | null>(null);
+  const [cibleReset, setCibleReset] = useState('');
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const [émission, setÉmission] = useState(false);
   const [lienRendu, setLienRendu] = useState<{ memberName: string; url: string } | null>(null);
 
   const absorbed = members?.find((m) => m.id === absorbedId) ?? null;
@@ -147,16 +150,27 @@ export function AdminPage({ currentMemberId }: Props) {
 
   /**
    * Lien de reprise pour un membre qui a perdu son mot de passe. Le code ne revient qu'une fois,
-   * dans cette réponse : il n'est stocké nulle part, et se transmet hors application (WhatsApp,
-   * SMS…) comme un lien de première connexion.
+   * dans cette réponse : il ne vit ensuite que dans cet écran, jusqu'à ce qu'on en émette un
+   * autre ou qu'on quitte la page, et se transmet hors application (WhatsApp, SMS…) comme un
+   * lien de première connexion.
    */
   async function réinitialiser(membre: DirectoryMember) {
     setError(null);
+    // Le lien affiché disparaît avant l'appel, et non après : sur un échec, celui de la personne
+    // précédente resterait sinon à l'écran sous la bannière d'erreur, à recopier et à transmettre
+    // à la place de celui qu'on croyait venir d'obtenir.
+    setLienRendu(null);
+    setÉmission(true);
     try {
       const { resetCode } = await api.startPasswordReset(membre.id);
       setLienRendu({ memberName: membre.name, url: `${window.location.origin}/reset/${resetCode}` });
+      setCibleReset('');
     } catch (e) {
       setError(errorMessage(e));
+    } finally {
+      // Fermée dans tous les cas : l'erreur s'affiche en haut de page, sous la modale.
+      setConfirmingReset(false);
+      setÉmission(false);
     }
   }
 
@@ -197,6 +211,7 @@ export function AdminPage({ currentMemberId }: Props) {
   const conservables = members.filter((m) => m.id !== absorbedId);
   // Seuls les comptes déjà ouverts : ailleurs, il n'y a pas de mot de passe à remplacer.
   const réinitialisables = members.filter((m) => m.hasPassword);
+  const cible = réinitialisables.find((m) => m.id === cibleReset) ?? null;
 
   return (
     <>
@@ -229,28 +244,35 @@ export function AdminPage({ currentMemberId }: Props) {
           ses soldes restent en place, il n’y a rien à recréer ni à réunir. Le lien vaut 24 heures et ne sert qu’une
           fois ; jusqu’à ce qu’il soit utilisé, l’ancien mot de passe continue de fonctionner.
         </p>
-        <div className="row" style={{ alignItems: 'flex-end' }}>
-          <label className="field">
-            Personne à qui redonner l’accès
-            <select
-              value=""
-              onChange={(e) => {
-                const membre = réinitialisables.find((m) => m.id === e.target.value);
-                if (membre) void réinitialiser(membre);
-              }}
-            >
-              <option value="" disabled>
-                Choisir…
-              </option>
-              {réinitialisables.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {étiquette(m)}
-                  {m.id === currentMemberId ? ' — vous' : ''}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+        {/* Choisir n'émet rien : sur un select natif au clavier, chaque flèche émet un
+            « change », et le lien serait posé pour la personne qu'on ne fait que survoler —
+            invalidant au passage celui qu'elle avait déjà reçu. Le geste passe donc par un
+            bouton puis une confirmation, comme la fusion plus bas. */}
+        <form
+          className="stack"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setConfirmingReset(true);
+          }}
+        >
+          <div className="row" style={{ alignItems: 'flex-end' }}>
+            <label className="field">
+              Personne à qui redonner l’accès
+              <select value={cibleReset} onChange={(e) => setCibleReset(e.target.value)} required>
+                <option value="">Choisir…</option>
+                {réinitialisables.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {étiquette(m)}
+                    {m.id === currentMemberId ? ' — vous' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button className="ghost" disabled={cible === null || émission}>
+              Émettre le lien…
+            </button>
+          </div>
+        </form>
         {/* Un compte jamais ouvert n'a pas de mot de passe à remplacer : c'est un lien de
             première connexion qu'il lui faut, depuis l'écran des équipements. */}
         <p className="muted">
@@ -373,6 +395,26 @@ export function AdminPage({ currentMemberId }: Props) {
           ))}
         </ul>
       </div>
+
+      {confirmingReset && cible && (
+        <ConfirmDialog
+          title={`Émettre un lien de reprise pour « ${cible.name} » ?`}
+          confirmLabel="Émettre le lien"
+          busy={émission}
+          onConfirm={() => void réinitialiser(cible)}
+          onCancel={() => setConfirmingReset(false)}
+        >
+          <p style={{ margin: 0 }}>
+            Le lien vaut 24 heures et ne sert qu’une fois. Tant qu’il n’est pas utilisé, le mot de passe actuel de
+            {` ${cible.name} `}
+            continue de fonctionner ; sa consommation le remplace et déconnecte les appareils restés ouverts sur ce
+            compte.
+          </p>
+          <p className="muted" style={{ margin: 0 }}>
+            Un lien déjà transmis à cette personne cesse aussitôt de valoir : c’est le nouveau qu’il faudra lui donner.
+          </p>
+        </ConfirmDialog>
+      )}
 
       {confirming && paire && identité && (
         <ConfirmDialog

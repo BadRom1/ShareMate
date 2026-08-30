@@ -59,9 +59,11 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (
    * parce qu'il remplace précisément ce que la fusion servait à rattraper : recréer la personne,
    * puis réunir les deux comptes.
    *
-   * Le code n'est rendu qu'une fois, dans cette réponse : il n'est stocké nulle part en clair
-   * côté client, et l'administrateur le transmet hors application (WhatsApp, SMS…), comme un
-   * lien de première connexion.
+   * Le code n'est rendu qu'une fois, dans cette réponse : rien ne le garde côté client, et
+   * l'administrateur le transmet hors application (WhatsApp, SMS…), comme un lien de première
+   * connexion. En base et dans le chemin des routes publiques qui le consomment, il est en
+   * revanche en clair, comme un code d'invitation : limite connue, documentée au README, à
+   * corriger pour les deux codes à la fois.
    */
   app.post<{ Params: { id: string } }>(
     '/api/admin/members/:id/password-reset',

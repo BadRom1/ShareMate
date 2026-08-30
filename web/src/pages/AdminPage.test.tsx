@@ -140,17 +140,48 @@ describe('Écran d’administration', () => {
 });
 
 describe('Écran d’administration — mot de passe perdu', () => {
+  /** Choisit la personne, puis émet réellement le lien : le bouton, puis la confirmation. */
+  async function émettrePour(id: string) {
+    await userEvent.selectOptions(screen.getByLabelText(/Personne à qui redonner l’accès/), id);
+    await userEvent.click(screen.getByRole('button', { name: 'Émettre le lien…' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Émettre le lien' }));
+  }
+
   it('émet un lien de reprise et le donne à recopier', async () => {
     await afficher();
     stub.startPasswordReset.mockResolvedValue({ memberName: 'Damien', resetCode: 'code-reset' });
 
-    await userEvent.selectOptions(screen.getByLabelText(/Personne à qui redonner l’accès/), 'ancien');
+    await émettrePour('ancien');
 
     await waitFor(() => expect(stub.startPasswordReset).toHaveBeenCalledWith('ancien'));
     const lien = (await screen.findByDisplayValue(/\/reset\/code-reset$/)) as HTMLInputElement;
     expect(lien.readOnly).toBe(true);
     // Rien n'a été fusionné : redonner un accès ne touche pas aux comptes.
     expect(stub.mergeMembers).not.toHaveBeenCalled();
+  });
+
+  // Sur un select natif au clavier, chaque flèche émet un « change » : si le choix émettait,
+  // parcourir la liste poserait un vrai code de reprise pour chaque personne survolée — et
+  // invaliderait au passage le lien qu'elle avait déjà reçu.
+  it('choisir une personne n’émet rien, et annuler la confirmation non plus', async () => {
+    await afficher();
+
+    await userEvent.selectOptions(screen.getByLabelText(/Personne à qui redonner l’accès/), 'ancien');
+    expect(stub.startPasswordReset).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Émettre le lien…' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Annuler' }));
+    expect(stub.startPasswordReset).not.toHaveBeenCalled();
+    expect(screen.queryByDisplayValue(/\/reset\//)).toBeNull();
+  });
+
+  it('la confirmation nomme la personne et annonce que le lien précédent cesse de valoir', async () => {
+    await afficher();
+    await userEvent.selectOptions(screen.getByLabelText(/Personne à qui redonner l’accès/), 'ancien');
+    await userEvent.click(screen.getByRole('button', { name: 'Émettre le lien…' }));
+
+    expect(await screen.findByText(/Émettre un lien de reprise pour « Damien » \?/)).toBeTruthy();
+    expect(screen.getByText(/cesse aussitôt de valoir/)).toBeTruthy();
   });
 
   it('ne propose que les comptes déjà ouverts', async () => {
@@ -168,9 +199,24 @@ describe('Écran d’administration — mot de passe perdu', () => {
     await afficher();
     stub.startPasswordReset.mockRejectedValue(new ApiError('Geste réservé à l’administrateur de l’instance.', 403));
 
-    await userEvent.selectOptions(screen.getByLabelText(/Personne à qui redonner l’accès/), 'ancien');
+    await émettrePour('ancien');
 
     expect(await screen.findByText('Geste réservé à l’administrateur de l’instance.')).toBeTruthy();
     expect(screen.queryByDisplayValue(/\/reset\//)).toBeNull();
+  });
+
+  // Le lien d'une personne affiché sous l'erreur d'une autre se transmet à sa place : celui qui
+  // est à l'écran doit toujours être celui qu'on vient de demander, ou aucun.
+  it('un échec retire le lien de la personne précédente', async () => {
+    await afficher();
+    stub.startPasswordReset.mockResolvedValue({ memberName: 'Damien', resetCode: 'code-ancien' });
+    await émettrePour('ancien');
+    expect(await screen.findByDisplayValue(/\/reset\/code-ancien$/)).toBeTruthy();
+
+    stub.startPasswordReset.mockRejectedValue(new ApiError('Membre introuvable : nouveau', 404));
+    await émettrePour('nouveau');
+
+    expect(await screen.findByText('Membre introuvable : nouveau')).toBeTruthy();
+    expect(screen.queryByDisplayValue(/\/reset\/code-ancien$/)).toBeNull();
   });
 });
