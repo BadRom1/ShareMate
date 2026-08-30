@@ -3252,7 +3252,9 @@ describe('API — administration : redonner l’accès à un mot de passe perdu'
     expect(trace).toBeDefined();
     expect(trace).toContain(bruno.id);
     expect(trace).toContain(alice.id);
-    // Le code, lui, ne part pas au journal : il ne circule que dans la réponse.
+    // Le code, lui, n'apparaît pas dans cette entrée-là. Il n'est pas pour autant absent des
+    // logs : la route publique qui le consomme le porte dans son chemin d'URL, que le journal
+    // d'accès écrit (limite connue, commune aux invitations — voir « Sécurité » du README).
     await tracé.close();
   });
 });
