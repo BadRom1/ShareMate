@@ -33,6 +33,7 @@ export function EquipmentsPage({ members, currentMemberId, onMemberCreated }: Pr
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [newMemberName, setNewMemberName] = useState('');
+  const [cibleInvite, setCibleInvite] = useState('');
   const [invite, setInvite] = useState<{ memberName: string; url: string } | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Equipment | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -121,9 +122,14 @@ export function EquipmentsPage({ members, currentMemberId, onMemberCreated }: Pr
 
   async function shareInvite(member: DirectoryMember) {
     setActionError(null);
+    // Le lien affiché disparaît avant l'appel, et non après : sur un échec, celui de la personne
+    // précédente resterait sinon à l'écran, à recopier et à transmettre à la place de celui qu'on
+    // croyait venir d'obtenir.
+    setInvite(null);
     try {
       const { inviteCode } = await api.regenerateInvite(member.id);
       setInvite({ memberName: member.name, url: inviteUrl(inviteCode) });
+      setCibleInvite('');
     } catch (e) {
       setActionError(errorMessage(e));
     }
@@ -169,6 +175,7 @@ export function EquipmentsPage({ members, currentMemberId, onMemberCreated }: Pr
 
   /** Comptes jamais ouverts : les seuls à qui un lien de première connexion peut encore servir. */
   const pendingMembers = members.filter((m) => !m.hasPassword);
+  const cibleInvitée = pendingMembers.find((m) => m.id === cibleInvite) ?? null;
 
   return (
     <>
@@ -315,21 +322,20 @@ export function EquipmentsPage({ members, currentMemberId, onMemberCreated }: Pr
                 pouvoir en émettre pour un compte ouvert reviendrait à pouvoir en prendre le
                 contrôle. Les comptes déjà ouverts sont donc absents de cette liste — un mot de
                 passe perdu se redonne depuis l'écran d'administration, par un lien qui lui est
-                propre. */}
+                propre.
+
+                Choisir, ici, n'émet rien : sur un select natif au clavier, chaque flèche émet un
+                « change », et le lien partirait pour la personne qu'on ne fait que survoler —
+                rendant caduc celui qu'elle avait peut-être déjà reçu, puisqu'un code neuf
+                remplace le précédent. Le geste passe donc par le bouton voisin, en `type="button"`
+                comme celui qui crée une personne juste au-dessus : dans ce formulaire, un bouton
+                par défaut créerait l'équipement. */}
             {pendingMembers.length > 0 && (
               <div className="row" style={{ alignItems: 'flex-end' }}>
                 <label className="field">
                   Lien de première connexion (personnes n'ayant pas encore choisi leur mot de passe)
-                  <select
-                    value=""
-                    onChange={(e) => {
-                      const m = pendingMembers.find((x) => x.id === e.target.value);
-                      if (m) void shareInvite(m);
-                    }}
-                  >
-                    <option value="" disabled>
-                      Choisir une personne…
-                    </option>
+                  <select value={cibleInvite} onChange={(e) => setCibleInvite(e.target.value)}>
+                    <option value="">Choisir une personne…</option>
                     {pendingMembers.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.name}
@@ -337,11 +343,23 @@ export function EquipmentsPage({ members, currentMemberId, onMemberCreated }: Pr
                     ))}
                   </select>
                 </label>
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={cibleInvitée === null}
+                  onClick={() => {
+                    if (cibleInvitée) void shareInvite(cibleInvitée);
+                  }}
+                >
+                  Obtenir le lien
+                </button>
               </div>
             )}
             <span className="muted">
-              Un mot de passe perdu ne se rejoue pas par ce lien-là : l’administrateur de l’instance émet un lien de
-              réinitialisation depuis l’écran d’administration, sans qu’il y ait de compte à recréer.
+              Chaque lien obtenu remplace le précédent : celui qui avait déjà été transmis à cette personne cesse alors
+              de fonctionner. Un mot de passe perdu, lui, ne se rejoue pas par ce lien-là — l’administrateur de
+              l’instance émet un lien de réinitialisation depuis l’écran d’administration, sans qu’il y ait de compte à
+              recréer.
             </span>
             {invite && (
               <div className="card" style={{ background: 'transparent' }}>

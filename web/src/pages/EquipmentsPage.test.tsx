@@ -180,3 +180,68 @@ describe('cercle : une personne qui n’a pas encore ouvert son compte', () => {
     expect(stub.createEquipment.mock.calls[0]![0]).toMatchObject({ memberIds: ['m1', 'm9'] });
   });
 });
+
+describe('lien de première connexion', () => {
+  const enAttente = [
+    aMember({ id: 'm1', name: 'Alice' }),
+    aMember({ id: 'm8', name: 'Damien', hasPassword: false }),
+    aMember({ id: 'm9', name: 'Guillaume', hasPassword: false }),
+  ];
+
+  /** Ouvre le formulaire d'équipement, où vit le partage des liens. */
+  async function ouvrirLeFormulaire() {
+    const user = userEvent.setup();
+    stub.listEquipments.mockResolvedValue([]);
+    renderPage({ members: enAttente });
+    await user.click(await screen.findByRole('button', { name: '+ Ajouter un équipement' }));
+    return user;
+  }
+
+  // Sur un select natif au clavier, chaque flèche émet un « change » : si le choix émettait,
+  // parcourir la liste régénérerait un code pour chaque personne survolée — rendant caduc celui
+  // qu'elle avait déjà reçu, puisqu'un code neuf remplace le précédent.
+  it('choisir une personne n’émet aucun lien', async () => {
+    const user = await ouvrirLeFormulaire();
+
+    await user.selectOptions(screen.getByLabelText(/Lien de première connexion/), 'm8');
+
+    expect(stub.regenerateInvite).not.toHaveBeenCalled();
+    expect(screen.queryByDisplayValue(/\/invite\//)).toBeNull();
+  });
+
+  it('le bouton émet le lien de la personne choisie, et le donne à recopier', async () => {
+    const user = await ouvrirLeFormulaire();
+    stub.regenerateInvite.mockResolvedValue({ inviteCode: 'code-damien' });
+
+    await user.selectOptions(screen.getByLabelText(/Lien de première connexion/), 'm8');
+    await user.click(screen.getByRole('button', { name: 'Obtenir le lien' }));
+
+    await waitFor(() => expect(stub.regenerateInvite).toHaveBeenCalledWith('m8'));
+    expect(await screen.findByDisplayValue(/\/invite\/code-damien$/)).toBeTruthy();
+    // Le lien est nommé : « Damien » figure aussi ailleurs (case du cercle, option de la liste).
+    expect(screen.getByText(/Transmettez ce lien à/).textContent).toContain('Damien');
+  });
+
+  // Le lien d'une personne affiché après l'échec d'une autre se transmet à sa place : celui qui
+  // est à l'écran doit toujours être celui qu'on vient de demander, ou aucun.
+  it('un échec retire le lien de la personne précédente', async () => {
+    const user = await ouvrirLeFormulaire();
+    stub.regenerateInvite.mockResolvedValue({ inviteCode: 'code-damien' });
+    await user.selectOptions(screen.getByLabelText(/Lien de première connexion/), 'm8');
+    await user.click(screen.getByRole('button', { name: 'Obtenir le lien' }));
+    expect(await screen.findByDisplayValue(/\/invite\/code-damien$/)).toBeTruthy();
+
+    stub.regenerateInvite.mockRejectedValue(new ApiError('Membre introuvable : m9', 404));
+    await user.selectOptions(screen.getByLabelText(/Lien de première connexion/), 'm9');
+    await user.click(screen.getByRole('button', { name: 'Obtenir le lien' }));
+
+    expect(await screen.findByText('Membre introuvable : m9')).toBeTruthy();
+    expect(screen.queryByDisplayValue(/\/invite\/code-damien$/)).toBeNull();
+  });
+
+  it('ne propose que les comptes jamais ouverts', async () => {
+    await ouvrirLeFormulaire();
+    const choix = screen.getByLabelText(/Lien de première connexion/) as HTMLSelectElement;
+    expect([...choix.options].map((o) => o.value).filter(Boolean)).toEqual(['m8', 'm9']);
+  });
+});
