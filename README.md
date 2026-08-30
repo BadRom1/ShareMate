@@ -8,11 +8,17 @@ partage des frais façon Tricount.
 
 - **Comptes et cercles** : chaque membre a un compte (mot de passe, session). Le premier compte
   s'ouvre au premier démarrage ; les suivants entrent par un **lien de première connexion** que
-  n'importe quel membre peut émettre et transmettre hors application. Il n'y a pas de « groupe »
+  n'importe quel membre peut émettre et transmettre hors application. Un mot de passe perdu se
+  redonne de la même façon, par un **lien de réinitialisation** que l'administrateur émet et
+  transmet hors application : le compte est repris tel quel, il n'y a rien à recréer. Il n'y a pas de « groupe »
   au sens d'une entité : le cercle d'un équipement est **la liste de ses membres**, et un membre
   peut appartenir à plusieurs cercles sans qu'ils se voient entre eux.
-- **Administration** : le premier compte ouvert est l'**administrateur** de l'instance, et il est
-  le seul à pouvoir **réunir deux comptes du même membre**. Le doublon arrive : quand le dernier
+- **Administration** : le premier compte ouvert est l'**administrateur** de l'instance. Il est le
+  seul à pouvoir **redonner l'accès à un compte dont le mot de passe est perdu** — un lien de
+  reprise, valable 24 heures, à usage unique, qu'il transmet hors application ; jusqu'à ce qu'il
+  soit consommé, l'ancien mot de passe et les sessions ouvertes continuent de valoir, et la
+  consommation les révoque tous. Il est aussi le seul à pouvoir **réunir deux comptes du même
+  membre**. Le doublon arrive : quand le dernier
   équipement qui reliait deux personnes disparaît, elles sortent du champ de vision l'une de
   l'autre, et il ne reste qu'à recréer l'autre — un compte porte alors l'historique, l'autre
   l'accès qui fonctionne. La fusion choisit lequel absorbe lequel, quel nom et quel email
@@ -77,7 +83,8 @@ server/src/
 │   ├── shared/       # Money (centimes entiers), TimeRange (fin exclusive), erreurs métier,
 │   │                 # StoredFile (référence d'un objet stocké, et ses bornes)
 │   ├── member/       # Member (email validé : il sert d'identifiant de connexion ; rôle admin)
-│   ├── auth/         # MemberCredential (mot de passe, invitation datée), Session
+│   ├── auth/         # MemberCredential (mot de passe, invitation datée, réinitialisation datée),
+│   │                 # Session
 │   ├── equipment/    # Equipment (cercle des membres, compteur heures/km, seuil d'entretien),
 │   │                 # SubEquipment (contenu du lot : remorque, godets, jerrican…)
 │   ├── reservation/  # Reservation + règle de non-chevauchement, récurrences
@@ -142,7 +149,7 @@ application/infrastructure, l'application ne peut pas importer l'infrastructure.
 
 ```bash
 npm install
-npm test              # 835 tests : 596 serveur (Node) + 239 front (jsdom)
+npm test              # 870 tests : 624 serveur (Node) + 246 front (jsdom)
 npm run test:coverage # Tests + seuils de couverture (90 % lignes/fonctions, 85 % branches)
 npm run lint          # oxlint (frontières hexagonales + règles React)
 npm run format        # Prettier (format:check en CI)
@@ -269,9 +276,9 @@ la confiance est totale et assumée. Le reste de cette section dit précisément
   connexion, qu'il transmet hors application. C'est le choix du produit : la communauté se coopte,
   personne n'ouvre les portes. Le garde-fou est un plafond de 20 créations par minute et par IP,
   pas un droit.
-- Il existe **un** rôle d'administrateur, et il n'ouvre **qu'un seul geste** : réunir deux comptes
-  du même membre. Il ne donne aucun accès supplémentaire aux cercles, aux dépenses ni aux
-  discussions — l'administrateur reste cadré sur son périmètre comme tout le monde, à la seule
+- Il existe **un** rôle d'administrateur, et il n'ouvre **que deux gestes** : redonner l'accès à
+  un compte dont le mot de passe est perdu, et réunir deux comptes du même membre. Il ne donne
+  aucun accès supplémentaire aux cercles, aux dépenses ni aux discussions — l'administrateur reste cadré sur son périmètre comme tout le monde, à la seule
   exception de la liste des comptes de l'instance (`GET /api/admin/members`), sans laquelle les
   deux comptes à réunir ne s'afficheraient pas ensemble. Le rôle est porté par le premier compte
   ouvert ; sur une base antérieure à ce rôle, il est **désigné par l'opérateur** (`npm run
@@ -286,9 +293,22 @@ admin:designate`) et jamais deviné. À tout autre, `/api/admin/*` répond `403`
   pour soi-même, pour un membre d'un cercle partagé, ou pour quelqu'un qu'on a soi-même invité ;
   hors de là, la réponse est celle d'un membre inexistant, et toute régénération visant un autre
   que soi est tracée en `warn`.
-- **Conséquence assumée** : un mot de passe perdu ne se réinitialise pas. Rendre cela possible sans
-  preuve hors bande (email vérifié) rouvrirait exactement la prise de contrôle de compte que cette
-  règle ferme. Le compte est alors à recréer.
+- **Un mot de passe perdu se redonne, et par un autre chemin que l'invitation.** Le lien de
+  réinitialisation porte son propre code, sa propre échéance (**24 heures**) et ses propres
+  routes : les deux ne s'échangent pas, et un code d'invitation ne rouvre toujours pas un compte
+  en service. Il est **réservé à l'administrateur** — ni le titulaire, ni un membre du cercle, ni
+  même l'invitant ne peuvent l'émettre : ce code reprend un compte, et l'ouvrir à l'invitant lui
+  donnerait sur son invité un pouvoir de reprise permanent, que celui-ci n'a jamais accordé et ne
+  peut pas retirer. L'administrateur, lui, ne gagne rien : la fusion lui permettait déjà d'absorber
+  une identité entière — c'était même l'unique recours, en recréant la personne puis en réunissant
+  les deux comptes. Le geste est journalisé (`membre.reinitialisation-emise`, acteur et cible), et
+  l'émission ne révoque rien : c'est la **consommation** qui remplace le mot de passe et **révoque
+  toutes les sessions** du compte.
+- **Ce qu'il reste d'assumé** : la preuve d'identité est hors bande, humaine — l'administrateur
+  reconnaît la personne qui lui demande un lien, et le lui transmet par un canal qu'il choisit
+  (WhatsApp, SMS, de vive voix). Aucune vérification d'email n'existe pour la porter, et un lien
+  transmis au mauvais destinataire donne le compte. C'est le même parti que pour l'invitation, sur
+  un cercle où les gens se connaissent.
 
 **Qui voit qui**
 
@@ -369,7 +389,8 @@ admin:designate`) et jamais deviné. À tout autre, `/api/admin/*` répond `403`
   parti que pour les checklists et les équipements : entre membres d'un cercle, la confiance est
   totale et assumée. Ce qui est fait, en revanche, est visible — le nom du déposant reste affiché.
 - **Pas de vérification d'email.** L'adresse sert d'identifiant de connexion, elle n'est jamais
-  confirmée — d'où l'absence de réinitialisation de mot de passe.
+  confirmée : rien ne peut donc porter automatiquement la preuve d'identité d'une réinitialisation,
+  qui repose sur l'administrateur et le canal par lequel il transmet le lien.
 - **`trustProxy` fait confiance à toute la chaîne `X-Forwarded-For`.** Si le service devient
   joignable autrement que par le proxy Railway, un client peut forger l'en-tête et contourner le
   plafond par IP. Tant que l'accès passe exclusivement par le proxy, le risque est nul.
@@ -487,8 +508,10 @@ GitHub Actions :
    lien de première connexion transmis hors application (voir [Sécurité](#sécurité)).
 4. ~~**Notifications de rappel d'entretien**~~ ✅ Faites — `MAINTENANCE_ALERT`, in-app et push,
    parmi cinq autres types.
-5. **Réinitialisation de mot de passe** : suppose une preuve hors bande, donc la vérification des
-   adresses email. C'est aujourd'hui le seul geste qu'un membre ne peut pas faire seul.
+5. ~~**Réinitialisation de mot de passe**~~ ✅ Faite, mais pas sous la forme prévue : ni magic link
+   ni email, un lien de reprise émis par l'administrateur et transmis hors application, comme l'est
+   déjà un lien de première connexion (voir [Sécurité](#sécurité)). La preuve d'identité reste
+   humaine ; c'est le seul geste d'un membre qui passe encore par quelqu'un d'autre.
 6. **Multi-cercles assumé** : le modèle le permet déjà (un membre, plusieurs équipements, des
    cercles disjoints) ; ce qui manque est l'interface — rien ne montre à un membre qu'il vit dans
    plusieurs cercles étanches.

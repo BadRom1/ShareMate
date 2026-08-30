@@ -1,14 +1,16 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AuthService } from './auth-service.js';
 import { makeFixture } from './testing/fixture.js';
-import { FakePasswordHasher } from './testing/in-memory.js';
+import { FakePasswordHasher, RecordingAuditLogger } from './testing/in-memory.js';
 import {
+  AuthorizationError,
   ConflictError,
   DomainError,
   ForbiddenError,
   NotFoundError,
   UnauthorizedError,
 } from '../domain/shared/domain-error.js';
+import { Member } from '../domain/member/member.js';
 
 /**
  * Compte les dérivations de clé. `hash` et `verify` coûtent la même chose en scrypt : le nombre
@@ -28,11 +30,13 @@ class HasherCompteur extends FakePasswordHasher {
 
 let service: AuthService;
 let hasher: HasherCompteur;
+let audit: RecordingAuditLogger;
 let fixture: Awaited<ReturnType<typeof makeFixture>>;
 
 beforeEach(async () => {
   fixture = await makeFixture();
   hasher = new HasherCompteur();
+  audit = new RecordingAuditLogger();
   service = new AuthService(
     fixture.members,
     fixture.credentials,
@@ -42,6 +46,7 @@ beforeEach(async () => {
     fixture.tokens,
     fixture.idGenerator,
     fixture.clock,
+    audit,
   );
 });
 
@@ -200,6 +205,128 @@ describe('AuthService — invitations', () => {
     await expect(inconnu).rejects.toThrow(NotFoundError);
     await expect(inconnu).rejects.toThrow('Membre introuvable : fantome');
     await expect(service.regenerateInvite('m1', 'm2')).rejects.toThrow('Membre introuvable : m1');
+  });
+});
+
+describe('AuthService — réinitialisation de mot de passe', () => {
+  /** Compte ouvert de Bruno, invité par m1, et m1 promu administrateur de l'instance. */
+  async function instance() {
+    await fixture.members.save(Member.create({ id: 'm1', name: 'Alice', isAdmin: true }));
+    const { member, inviteCode } = await service.createMemberWithInvite({ name: 'Bruno' }, 'm1');
+    await service.redeemInvite(inviteCode, 'secretbruno');
+    return member;
+  }
+
+  it('l’administrateur émet un lien, le membre choisit un nouveau mot de passe et est connecté', async () => {
+    const bruno = await instance();
+    const { resetCode, member } = await service.startPasswordReset(bruno.id, 'm1');
+    expect(member.name).toBe('Bruno');
+    expect((await service.resetInfo(resetCode)).id).toBe(bruno.id);
+
+    const { session } = await service.redeemPasswordReset(resetCode, 'nouveaupass');
+    expect((await service.authenticate(session.token))?.member.id).toBe(bruno.id);
+    await expect(service.login('Bruno', 'nouveaupass')).resolves.toBeDefined();
+    // L'ancien mot de passe ne vaut plus rien.
+    await expect(service.login('Bruno', 'secretbruno')).rejects.toThrow(UnauthorizedError);
+  });
+
+  it('le code ne sert qu’une fois', async () => {
+    const bruno = await instance();
+    const { resetCode } = await service.startPasswordReset(bruno.id, 'm1');
+    await service.redeemPasswordReset(resetCode, 'nouveaupass');
+    await expect(service.resetInfo(resetCode)).rejects.toThrow(NotFoundError);
+    await expect(service.redeemPasswordReset(resetCode, 'encoreunautre')).rejects.toThrow(NotFoundError);
+  });
+
+  it('expire au bout de 24 h', async () => {
+    const bruno = await instance();
+    const { resetCode } = await service.startPasswordReset(bruno.id, 'm1');
+    fixture.clock.set(new Date('2026-07-03T10:00:01Z')); // émission + 24 h + 1 s
+    await expect(service.resetInfo(resetCode)).rejects.toThrow(NotFoundError);
+    await expect(service.redeemPasswordReset(resetCode, 'nouveaupass')).rejects.toThrow(NotFoundError);
+    // Et le compte reste ouvert avec son mot de passe d'origine.
+    await expect(service.login('Bruno', 'secretbruno')).resolves.toBeDefined();
+  });
+
+  it('émettre un lien ne révoque rien : le mot de passe et les sessions tiennent jusqu’à sa consommation', async () => {
+    const bruno = await instance();
+    const { session } = await service.login('Bruno', 'secretbruno');
+    await service.startPasswordReset(bruno.id, 'm1');
+    expect((await service.authenticate(session.token))?.member.id).toBe(bruno.id);
+    await expect(service.login('Bruno', 'secretbruno')).resolves.toBeDefined();
+  });
+
+  it('la consommation révoque toutes les sessions du membre', async () => {
+    // Le geste réflexe après une compromission : celui qui reprend son compte en expulse
+    // l'appareil resté connecté.
+    const bruno = await instance();
+    const { session: ancienne } = await service.login('Bruno', 'secretbruno');
+    const { resetCode } = await service.startPasswordReset(bruno.id, 'm1');
+    const { session: neuve } = await service.redeemPasswordReset(resetCode, 'nouveaupass');
+    expect(await service.authenticate(ancienne.token)).toBeNull();
+    expect((await service.authenticate(neuve.token))?.member.id).toBe(bruno.id);
+  });
+
+  it('un nouveau lien remplace le précédent', async () => {
+    const bruno = await instance();
+    const { resetCode: premier } = await service.startPasswordReset(bruno.id, 'm1');
+    const { resetCode: second } = await service.startPasswordReset(bruno.id, 'm1');
+    await expect(service.resetInfo(premier)).rejects.toThrow(NotFoundError);
+    expect((await service.resetInfo(second)).id).toBe(bruno.id);
+  });
+
+  it('réservé à l’administrateur : ni l’invitant, ni un membre du cercle, ni le titulaire', async () => {
+    const bruno = await instance();
+    // m2 partage la minipelle avec m1 ; m3 a été invité par m1 comme Bruno.
+    for (const demandeur of [bruno.id, 'm2', 'm3']) {
+      await expect(service.startPasswordReset(bruno.id, demandeur)).rejects.toThrow(AuthorizationError);
+    }
+    // Le refus parle du geste, jamais des comptes visés : il tombe avant même de les chercher.
+    await expect(service.startPasswordReset('fantome', 'm2')).rejects.toThrow(AuthorizationError);
+  });
+
+  it('refuse un compte jamais ouvert : c’est un lien de première connexion qu’il lui faut', async () => {
+    await fixture.members.save(Member.create({ id: 'm1', name: 'Alice', isAdmin: true }));
+    const { member } = await service.createMemberWithInvite({ name: 'Denis' }, 'm1');
+    await expect(service.startPasswordReset(member.id, 'm1')).rejects.toThrow(ConflictError);
+  });
+
+  it('refuse un membre inconnu', async () => {
+    await instance();
+    await expect(service.startPasswordReset('fantome', 'm1')).rejects.toThrow(NotFoundError);
+  });
+
+  it('un mot de passe trop court est refusé, et le code reste valable', async () => {
+    const bruno = await instance();
+    const { resetCode } = await service.startPasswordReset(bruno.id, 'm1');
+    await expect(service.redeemPasswordReset(resetCode, 'court')).rejects.toThrow(DomainError);
+    expect((await service.resetInfo(resetCode)).id).toBe(bruno.id);
+  });
+
+  it('le geste laisse une trace au journal des gestes sensibles', async () => {
+    const bruno = await instance();
+    await service.startPasswordReset(bruno.id, 'm1');
+    expect(audit.entries).toEqual([
+      {
+        action: 'membre.reinitialisation-emise',
+        actorId: 'm1',
+        targetId: bruno.id,
+        details: { targetName: 'Bruno' },
+      },
+    ]);
+  });
+
+  it('un code d’invitation ne s’exploite pas comme une réinitialisation, et réciproquement', async () => {
+    const bruno = await instance();
+    const { resetCode } = await service.startPasswordReset(bruno.id, 'm1');
+    // Le code de reprise ne passe pas par la porte des invitations…
+    await expect(service.inviteInfo(resetCode)).rejects.toThrow(NotFoundError);
+    await expect(service.redeemInvite(resetCode, 'volé')).rejects.toThrow(NotFoundError);
+    // …et une invitation en attente ne reprend pas un compte par celle des réinitialisations.
+    const { inviteCode } = await service.createMemberWithInvite({ name: 'Denis' }, 'm1');
+    await expect(service.resetInfo(inviteCode)).rejects.toThrow(NotFoundError);
+    await expect(service.redeemPasswordReset(inviteCode, 'volé')).rejects.toThrow(NotFoundError);
+    await service.login('Bruno', 'secretbruno'); // le mot de passe du titulaire est intact
   });
 });
 

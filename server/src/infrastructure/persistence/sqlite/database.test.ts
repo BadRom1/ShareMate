@@ -66,6 +66,28 @@ describe('Migration du schéma', () => {
     db.close();
   });
 
+  it('ajoute les colonnes de réinitialisation, vides, et leur unicité', () => {
+    baseAntérieure();
+    const db = openDatabase(fichier);
+    const colonnes = (db.prepare(`PRAGMA table_info(member_credentials)`).all() as { name: string }[]).map(
+      (c) => c.name,
+    );
+    expect(colonnes).toContain('reset_code');
+    expect(colonnes).toContain('reset_expires_at');
+    // Aucun compte existant n'a de reprise en cours : la migration n'en invente pas.
+    expect(
+      (db.prepare(`SELECT COUNT(*) AS c FROM member_credentials WHERE reset_code IS NOT NULL`).get() as { c: number })
+        .c,
+    ).toBe(0);
+
+    // Deux comptes sans reprise cohabitent (index partiel), deux fois le même code, non.
+    db.prepare(`UPDATE member_credentials SET reset_code = 'repris' WHERE member_id = 'm1'`).run();
+    expect(() =>
+      db.prepare(`UPDATE member_credentials SET reset_code = 'repris' WHERE member_id = 'm2'`).run(),
+    ).toThrow();
+    db.close();
+  });
+
   it('ajoute l’invitant aux membres existants, sans le renseigner', () => {
     baseAntérieure();
     const db = openDatabase(fichier);

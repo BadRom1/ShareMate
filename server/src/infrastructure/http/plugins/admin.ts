@@ -1,7 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
+import type { AuthService } from '../../../application/auth-service.js';
 import type { MemberMergeService } from '../../../application/member-merge-service.js';
 import { directoryMemberDto, memberDto } from '../dto.js';
-import { id, nullableText, object, query, text } from '../schema.js';
+import { id, idParams, nullableText, object, query, text } from '../schema.js';
 import { limit } from '../rate-limit.js';
 import type { RateLimits } from '../rate-limit.js';
 import '../session.js'; // augmentation de type : request.authMember
@@ -16,6 +17,7 @@ import '../session.js'; // augmentation de type : request.authMember
  * visés : il dit « geste réservé », jamais si tel identifiant existe.
  */
 export interface AdminRoutesOptions {
+  authService: AuthService;
   mergeService: MemberMergeService;
   rateLimits: RateLimits;
 }
@@ -23,7 +25,10 @@ export interface AdminRoutesOptions {
 /** Les deux comptes de la fusion, tels qu'ils circulent en paramètres de requête. */
 const mergePair = { absorbedId: id, keptId: id };
 
-export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (app, { mergeService, rateLimits }) => {
+export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (
+  app,
+  { authService, mergeService, rateLimits },
+) => {
   /**
    * Tous les membres de l'instance. Un doublon naît justement de la perte du dernier cercle
    * commun : l'écran de fusion ne peut pas montrer les deux comptes en se cadrant sur ce qui
@@ -45,6 +50,30 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (app, {
     async (request) => {
       const { absorbedId, keptId } = request.query;
       return mergeService.preview(request.authMember.id, absorbedId, keptId);
+    },
+  );
+
+  /**
+   * Lien de réinitialisation pour un membre qui a perdu son mot de passe. Il vit ici parce qu'il
+   * est réservé à l'administrateur — la garde est dans le service, comme pour la fusion — et
+   * parce qu'il remplace précisément ce que la fusion servait à rattraper : recréer la personne,
+   * puis réunir les deux comptes.
+   *
+   * Le code n'est rendu qu'une fois, dans cette réponse : il n'est stocké nulle part en clair
+   * côté client, et l'administrateur le transmet hors application (WhatsApp, SMS…), comme un
+   * lien de première connexion.
+   */
+  app.post<{ Params: { id: string } }>(
+    '/api/admin/members/:id/password-reset',
+    {
+      // Chaque appel émet de quoi reprendre un compte en service : plafond serré, comme la fusion.
+      config: { rateLimit: limit(rateLimits.sensitive) },
+      schema: { params: idParams },
+    },
+    async (request, reply) => {
+      const { member, resetCode } = await authService.startPasswordReset(request.params.id, request.authMember.id);
+      // La trace du geste part au journal des gestes sensibles, depuis le service.
+      return reply.status(201).send({ memberName: member.name, resetCode });
     },
   );
 

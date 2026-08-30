@@ -44,6 +44,11 @@ import type {
   WebPushSubscription,
 } from '../../../application/ports.js';
 
+/** Échéance stockée en texte ISO, ou absence. */
+function iso(date: Date | null): string | null {
+  return date ? date.toISOString() : null;
+}
+
 /** `IN (?, ?, …)` : better-sqlite3 ne lie pas un tableau à un seul paramètre. */
 function placeholders(count: number): string {
   return Array.from({ length: count }, () => '?').join(', ');
@@ -121,6 +126,8 @@ interface CredentialRow {
   password_hash: string | null;
   invite_code: string | null;
   invite_expires_at: string | null;
+  reset_code: string | null;
+  reset_expires_at: string | null;
 }
 
 export class SqliteCredentialRepository implements CredentialRepository {
@@ -132,6 +139,8 @@ export class SqliteCredentialRepository implements CredentialRepository {
       passwordHash: row.password_hash,
       inviteCode: row.invite_code,
       inviteExpiresAt: row.invite_expires_at ? new Date(row.invite_expires_at) : null,
+      resetCode: row.reset_code,
+      resetExpiresAt: row.reset_expires_at ? new Date(row.reset_expires_at) : null,
     });
   }
 
@@ -143,6 +152,12 @@ export class SqliteCredentialRepository implements CredentialRepository {
 
   async findByInviteCode(code: string): Promise<MemberCredential | null> {
     const row = this.db.prepare('SELECT * FROM member_credentials WHERE invite_code = ?').get(code) as
+      CredentialRow | undefined;
+    return row ? this.toEntity(row) : null;
+  }
+
+  async findByResetCode(code: string): Promise<MemberCredential | null> {
+    const row = this.db.prepare('SELECT * FROM member_credentials WHERE reset_code = ?').get(code) as
       CredentialRow | undefined;
     return row ? this.toEntity(row) : null;
   }
@@ -166,11 +181,21 @@ export class SqliteCredentialRepository implements CredentialRepository {
   async save(credential: MemberCredential): Promise<void> {
     this.db
       .prepare(
-        `INSERT INTO member_credentials (member_id, password_hash, invite_code, invite_expires_at) VALUES (?, ?, ?, ?)
+        `INSERT INTO member_credentials
+           (member_id, password_hash, invite_code, invite_expires_at, reset_code, reset_expires_at)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(member_id) DO UPDATE SET password_hash = excluded.password_hash,
-           invite_code = excluded.invite_code, invite_expires_at = excluded.invite_expires_at`,
+           invite_code = excluded.invite_code, invite_expires_at = excluded.invite_expires_at,
+           reset_code = excluded.reset_code, reset_expires_at = excluded.reset_expires_at`,
       )
-      .run(credential.memberId, credential.passwordHash, credential.inviteCode, this.expiry(credential));
+      .run(
+        credential.memberId,
+        credential.passwordHash,
+        credential.inviteCode,
+        iso(credential.inviteExpiresAt),
+        credential.resetCode,
+        iso(credential.resetExpiresAt),
+      );
   }
 
   /**
@@ -180,15 +205,19 @@ export class SqliteCredentialRepository implements CredentialRepository {
   async saveFirst(credential: MemberCredential): Promise<boolean> {
     const result = this.db
       .prepare(
-        `INSERT INTO member_credentials (member_id, password_hash, invite_code, invite_expires_at)
-         SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM member_credentials)`,
+        `INSERT INTO member_credentials
+           (member_id, password_hash, invite_code, invite_expires_at, reset_code, reset_expires_at)
+         SELECT ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM member_credentials)`,
       )
-      .run(credential.memberId, credential.passwordHash, credential.inviteCode, this.expiry(credential));
+      .run(
+        credential.memberId,
+        credential.passwordHash,
+        credential.inviteCode,
+        iso(credential.inviteExpiresAt),
+        credential.resetCode,
+        iso(credential.resetExpiresAt),
+      );
     return result.changes === 1;
-  }
-
-  private expiry(credential: MemberCredential): string | null {
-    return credential.inviteExpiresAt ? credential.inviteExpiresAt.toISOString() : null;
   }
 }
 

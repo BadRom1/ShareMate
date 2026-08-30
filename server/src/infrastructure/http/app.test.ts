@@ -358,10 +358,13 @@ describe('API — justificatifs et front statique', () => {
     expect(index.statusCode).toBe(200);
     expect(index.payload).toContain('ShareMate');
 
-    // Route front inconnue : index.html (rendu côté client), pas un 404.
-    const spa = await staticApp.inject({ method: 'GET', url: '/invite/abc123' });
-    expect(spa.statusCode).toBe(200);
-    expect(spa.payload).toContain('ShareMate');
+    // Routes front inconnues (lien d'invitation, lien de réinitialisation) : index.html rendu
+    // côté client, pas un 404.
+    for (const url of ['/invite/abc123', '/reset/abc123']) {
+      const spa = await staticApp.inject({ method: 'GET', url });
+      expect(spa.statusCode).toBe(200);
+      expect(spa.payload).toContain('ShareMate');
+    }
 
     // Une route d'API inconnue est un 404 JSON, avec ou sans session : aucune route n'ayant été
     // appariée, il n'y a rien à protéger — la garde de session vit dans les plugins de domaine.
@@ -3136,6 +3139,121 @@ describe('API — administration : fusionner deux comptes du même membre', () =
       alice.cookies,
     );
     expect(inconnu.statusCode).toBe(404);
+  });
+});
+
+describe('API — administration : redonner l’accès à un mot de passe perdu', () => {
+  const NOUVEAU = 'nouveaumotdepasse';
+
+  it('l’administrateur émet un lien, le membre repose son mot de passe et se retrouve connecté', async () => {
+    const alice = await bootstrapAlice();
+    const bruno = await inviteAndRedeem('Bruno', alice.cookies);
+
+    const émis = await post(`/api/admin/members/${bruno.id}/password-reset`, {}, alice.cookies);
+    expect(émis.statusCode).toBe(201);
+    const { memberName, resetCode } = émis.json() as { memberName: string; resetCode: string };
+    expect(memberName).toBe('Bruno');
+
+    // Le lien s'ouvre sans session : son titulaire est justement dehors.
+    const info = await get(`/api/auth/password-resets/${resetCode}`);
+    expect(info.statusCode).toBe(200);
+    expect(info.json()).toEqual({ memberName: 'Bruno' });
+
+    const repris = await post(`/api/auth/password-resets/${resetCode}/redeem`, { password: NOUVEAU });
+    expect(repris.statusCode).toBe(200);
+    // La réponse ouvre directement la session : le membre n'a pas à se reconnecter derrière.
+    expect((await get('/api/auth/me', sessionCookie(repris))).json()).toMatchObject({ member: { name: 'Bruno' } });
+
+    expect((await post('/api/auth/login', { identifier: 'Bruno', password: NOUVEAU })).statusCode).toBe(200);
+    expect((await post('/api/auth/login', { identifier: 'Bruno', password: PASSWORD })).statusCode).toBe(401);
+  });
+
+  it('la reprise révoque les sessions ouvertes du compte', async () => {
+    const alice = await bootstrapAlice();
+    const bruno = await inviteAndRedeem('Bruno', alice.cookies);
+    const { resetCode } = (await post(`/api/admin/members/${bruno.id}/password-reset`, {}, alice.cookies)).json() as {
+      resetCode: string;
+    };
+
+    // Tant que le code n'est pas consommé, rien ne bouge : l'appareil resté connecté fonctionne.
+    expect((await get('/api/auth/me', bruno.cookies)).json()).toMatchObject({ member: { name: 'Bruno' } });
+
+    await post(`/api/auth/password-resets/${resetCode}/redeem`, { password: NOUVEAU });
+    expect((await get('/api/auth/me', bruno.cookies)).json()).toMatchObject({ member: null });
+  });
+
+  it('le code ne sert qu’une fois, et un code inconnu ne dit rien de plus', async () => {
+    const alice = await bootstrapAlice();
+    const bruno = await inviteAndRedeem('Bruno', alice.cookies);
+    const { resetCode } = (await post(`/api/admin/members/${bruno.id}/password-reset`, {}, alice.cookies)).json() as {
+      resetCode: string;
+    };
+    await post(`/api/auth/password-resets/${resetCode}/redeem`, { password: NOUVEAU });
+
+    const consommé = await get(`/api/auth/password-resets/${resetCode}`);
+    const inconnu = await get('/api/auth/password-resets/jamais-emis');
+    for (const refus of [consommé, inconnu]) {
+      expect(refus.statusCode).toBe(404);
+      expect((refus.json() as { error: string }).error).toBe(
+        'Lien de réinitialisation invalide, expiré ou déjà utilisé.',
+      );
+    }
+  });
+
+  it('refuse le geste à un non-administrateur, sans rien dire du compte visé', async () => {
+    const alice = await bootstrapAlice();
+    const bruno = await inviteAndRedeem('Bruno', alice.cookies);
+    const chloe = await inviteAndRedeem('Chloé', alice.cookies);
+
+    // Ni un membre du cercle, ni l'invitant (Bruno a invité David), ni le titulaire lui-même :
+    // ce code reprend un compte en service, il ne s'obtient qu'auprès de l'administrateur.
+    const david = await inviteAndRedeem('David', bruno.cookies);
+    for (const [demandeur, cible] of [
+      [chloe, bruno],
+      [bruno, david],
+      [bruno, bruno],
+    ] as const) {
+      const refus = await post(`/api/admin/members/${cible.id}/password-reset`, {}, demandeur.cookies);
+      expect(refus.statusCode).toBe(403);
+      expect((refus.json() as { error: string }).error).not.toContain(cible.id);
+    }
+    // Et le mot de passe en place n'a pas bougé.
+    expect((await post('/api/auth/login', { identifier: 'Bruno', password: PASSWORD })).statusCode).toBe(200);
+  });
+
+  it('renvoie vers le lien de première connexion pour un compte jamais ouvert', async () => {
+    const alice = await bootstrapAlice();
+    const créé = await post('/api/members', { name: 'Denis' }, alice.cookies);
+    const denis = créé.json() as { id: string };
+
+    const refus = await post(`/api/admin/members/${denis.id}/password-reset`, {}, alice.cookies);
+    expect(refus.statusCode).toBe(409);
+    expect((refus.json() as { error: string }).error).toContain('première connexion');
+    // Le geste qui convient, lui, passe.
+    expect((await post(`/api/members/${denis.id}/invite`, {}, alice.cookies)).statusCode).toBe(201);
+  });
+
+  it('un membre inconnu de l’instance reste un 404', async () => {
+    const alice = await bootstrapAlice();
+    const refus = await post('/api/admin/members/inexistant/password-reset', {}, alice.cookies);
+    expect(refus.statusCode).toBe(404);
+  });
+
+  it('laisse une trace au journal des gestes sensibles', async () => {
+    const lignes: string[] = [];
+    const tracé = await buildTestApp({
+      logger: { level: 'info', stream: { write: (l: string) => void lignes.push(l) } },
+    });
+    const alice = await bootstrapAlice(tracé);
+    const bruno = await inviteAndRedeem('Bruno', alice.cookies, tracé);
+    await post(`/api/admin/members/${bruno.id}/password-reset`, {}, alice.cookies, tracé);
+
+    const trace = lignes.find((l) => l.includes('membre.reinitialisation-emise'));
+    expect(trace).toBeDefined();
+    expect(trace).toContain(bruno.id);
+    expect(trace).toContain(alice.id);
+    // Le code, lui, ne part pas au journal : il ne circule que dans la réponse.
+    await tracé.close();
   });
 });
 

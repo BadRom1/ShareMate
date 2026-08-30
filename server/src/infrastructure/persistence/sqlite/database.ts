@@ -479,6 +479,34 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // Réinitialisation d'un mot de passe perdu : un code à durée de vie courte, transmis hors
+    // bande comme l'est déjà une invitation. Colonnes distinctes de celles de l'invitation, et
+    // non un drapeau posé à côté d'un code unique : les deux gestes n'ouvrent pas la même chose
+    // — l'invitation, un compte jamais ouvert ; la réinitialisation, un compte en service —, et
+    // c'est précisément leur confusion qui rendrait un code d'invitation capable de reprendre un
+    // compte (voir `MemberCredential`).
+    //
+    // L'unicité passe par un index : SQLite ne sait pas ajouter une colonne UNIQUE à une table
+    // existante, et un index unique laisse de toute façon coexister autant de NULL que de comptes
+    // sans réinitialisation en cours.
+    description: 'codes de réinitialisation de mot de passe',
+    apply(db) {
+      const existantes = columns(db, 'member_credentials');
+      for (const [colonne, type] of [
+        ['reset_code', 'TEXT'],
+        ['reset_expires_at', 'TEXT'],
+      ] as const) {
+        if (!existantes.includes(colonne)) {
+          db.exec(`ALTER TABLE member_credentials ADD COLUMN ${colonne} ${type};`);
+        }
+      }
+      db.exec(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_member_credentials_reset ON member_credentials(reset_code)
+           WHERE reset_code IS NOT NULL;`,
+      );
+    },
+  },
 ];
 
 /** Version de schéma attendue par ce code : rank de la dernière migration connue. */

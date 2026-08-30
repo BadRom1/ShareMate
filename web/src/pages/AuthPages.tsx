@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import type { Member } from '../api';
 
-/** Écrans publics : connexion, création du premier compte, invitation. */
+/** Écrans publics : connexion, création du premier compte, invitation, mot de passe perdu. */
 
 export function LoginPage({ onLoggedIn }: { onLoggedIn: (member: Member) => void }) {
   const [identifier, setIdentifier] = useState('');
@@ -42,6 +42,10 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: (member: Member) => void
           Se connecter
         </button>
         <p className="muted">Pas encore de mot de passe ? Demandez un lien d'invitation à un membre de votre cercle.</p>
+        <p className="muted">
+          Mot de passe perdu ? Demandez un lien de réinitialisation à l'administrateur de l'instance : il vous le
+          transmet comme un lien d'invitation, et vous choisissez un nouveau mot de passe.
+        </p>
       </form>
     </div>
   );
@@ -150,6 +154,73 @@ export function InvitePage({ code, onRedeemed }: { code: string; onRedeemed: (me
             </label>
             <button className="primary" disabled={busy}>
               Activer mon accès
+            </button>
+          </form>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Reprise d'un compte dont le mot de passe est perdu, par le lien émis par l'administrateur.
+ *
+ * Jumelle de `InvitePage`, et volontairement distincte : le lien ne pose pas un premier mot de
+ * passe, il en remplace un — l'écran le dit, puisque le choix révoque les sessions ouvertes du
+ * compte, y compris celles d'un appareil resté connecté ailleurs.
+ */
+export function PasswordResetPage({ code, onReset }: { code: string; onReset: (member: Member) => void }) {
+  const [memberName, setMemberName] = useState<string | null>(null);
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .passwordResetInfo(code)
+      .then((info) => setMemberName(info.memberName))
+      .catch((err: Error) => setError(err.message));
+  }, [code]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      const { member } = await api.redeemPasswordReset(code, password);
+      onReset(member);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card" style={{ marginTop: '3rem', maxWidth: '26rem', marginInline: 'auto' }}>
+      <h2>🚜 ShareMate</h2>
+      {error && <div className="alert">{error}</div>}
+      {memberName === null && !error && <p className="empty">Vérification du lien…</p>}
+      {memberName !== null && (
+        <>
+          <p className="muted">
+            Bonjour <strong>{memberName}</strong> ! Choisissez un nouveau mot de passe : il remplace l'ancien, et
+            déconnecte les appareils encore ouverts sur votre compte.
+          </p>
+          <form className="stack" onSubmit={submit}>
+            <label className="field">
+              Nouveau mot de passe (8 caractères minimum)
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                minLength={8}
+                autoFocus
+                required
+              />
+            </label>
+            <button className="primary" disabled={busy}>
+              Reprendre mon compte
             </button>
           </form>
         </>

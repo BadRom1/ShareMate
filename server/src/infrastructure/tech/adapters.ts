@@ -124,6 +124,10 @@ export class CryptoTokenGenerator implements TokenGenerator {
     return crypto.randomBytes(9).toString('base64url');
   }
 
+  resetCode(): string {
+    return crypto.randomBytes(16).toString('base64url');
+  }
+
   hash(token: string): string {
     return crypto.createHash('sha256').update(token).digest('hex');
   }

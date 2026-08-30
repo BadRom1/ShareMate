@@ -5,7 +5,8 @@ import { errorMessage, useApiResource } from '../useApiResource';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 
 /**
- * Administration de l'instance : réunir deux comptes du même membre.
+ * Administration de l'instance : redonner l'accès à un mot de passe perdu, et réunir deux comptes
+ * du même membre.
  *
  * Un doublon naît d'une perte de lien — le dernier équipement qui reliait deux personnes
  * disparaît, elles sortent du champ de vision l'une de l'autre, et l'une recrée l'autre. Cet
@@ -16,6 +17,10 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
  * qui fonctionne. On choisit donc les deux rôles, puis champ par champ le nom et l'email qui
  * survivent — et l'on voit ce qui sera déplacé avant de confirmer, comme pour la suppression d'un
  * équipement, qui annonce ce qu'elle emporte.
+ *
+ * Le lien de réinitialisation vit ici parce qu'il évite justement d'en arriver là : un mot de
+ * passe perdu se redonnait en recréant la personne puis en réunissant les deux comptes — un geste
+ * irréversible pour un oubli.
  */
 
 interface Props {
@@ -101,6 +106,7 @@ export function AdminPage({ currentMemberId }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fait, setFait] = useState<{ name: string; counts: MergeCounts } | null>(null);
+  const [lienRendu, setLienRendu] = useState<{ memberName: string; url: string } | null>(null);
 
   const absorbed = members?.find((m) => m.id === absorbedId) ?? null;
   const kept = members?.find((m) => m.id === keptId) ?? null;
@@ -139,6 +145,21 @@ export function AdminPage({ currentMemberId }: Props) {
     };
   }, [coupleDemandé, absorbedId, keptId]);
 
+  /**
+   * Lien de reprise pour un membre qui a perdu son mot de passe. Le code ne revient qu'une fois,
+   * dans cette réponse : il n'est stocké nulle part, et se transmet hors application (WhatsApp,
+   * SMS…) comme un lien de première connexion.
+   */
+  async function réinitialiser(membre: DirectoryMember) {
+    setError(null);
+    try {
+      const { resetCode } = await api.startPasswordReset(membre.id);
+      setLienRendu({ memberName: membre.name, url: `${window.location.origin}/reset/${resetCode}` });
+    } catch (e) {
+      setError(errorMessage(e));
+    }
+  }
+
   async function fusionner() {
     if (!paire || !identité) return;
     setBusy(true);
@@ -174,6 +195,8 @@ export function AdminPage({ currentMemberId }: Props) {
   // autorise le geste, et le rôle ne se redonne qu'avec un script, base en main.
   const absorbables = members.filter((m) => !m.isAdmin);
   const conservables = members.filter((m) => m.id !== absorbedId);
+  // Seuls les comptes déjà ouverts : ailleurs, il n'y a pas de mot de passe à remplacer.
+  const réinitialisables = members.filter((m) => m.hasPassword);
 
   return (
     <>
@@ -197,6 +220,58 @@ export function AdminPage({ currentMemberId }: Props) {
           )}
         </div>
       )}
+
+      <div className="card">
+        <h3>Mot de passe perdu</h3>
+        <p className="muted">
+          Émettez un lien de réinitialisation pour la personne qui ne peut plus se connecter, et transmettez-le-lui
+          (WhatsApp, SMS…). Elle choisit un nouveau mot de passe, et retrouve son compte — ses cercles, ses dépenses et
+          ses soldes restent en place, il n’y a rien à recréer ni à réunir. Le lien vaut 24 heures et ne sert qu’une
+          fois ; jusqu’à ce qu’il soit utilisé, l’ancien mot de passe continue de fonctionner.
+        </p>
+        <div className="row" style={{ alignItems: 'flex-end' }}>
+          <label className="field">
+            Personne à qui redonner l’accès
+            <select
+              value=""
+              onChange={(e) => {
+                const membre = réinitialisables.find((m) => m.id === e.target.value);
+                if (membre) void réinitialiser(membre);
+              }}
+            >
+              <option value="" disabled>
+                Choisir…
+              </option>
+              {réinitialisables.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {étiquette(m)}
+                  {m.id === currentMemberId ? ' — vous' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {/* Un compte jamais ouvert n'a pas de mot de passe à remplacer : c'est un lien de
+            première connexion qu'il lui faut, depuis l'écran des équipements. */}
+        <p className="muted">
+          Une personne qui n’a jamais choisi de mot de passe n’apparaît pas ici : envoyez-lui un lien de première
+          connexion depuis « Mes équipements ».
+        </p>
+        {lienRendu && (
+          <div className="card" style={{ background: 'transparent' }}>
+            <p className="muted">
+              Transmettez ce lien à <strong>{lienRendu.memberName}</strong> : il ouvre le choix d’un nouveau mot de
+              passe, et déconnecte les appareils restés ouverts sur ce compte.
+            </p>
+            <div className="row">
+              <input readOnly value={lienRendu.url} onFocus={(e) => e.target.select()} style={{ flex: 1 }} />
+              <button type="button" className="ghost" onClick={() => void navigator.clipboard.writeText(lienRendu.url)}>
+                Copier
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       <div className="card">
         <h3>Réunir deux comptes</h3>

@@ -234,6 +234,7 @@ export interface PushSubscriptionRepository {
 export interface CredentialRepository {
   findByMemberId(memberId: string): Promise<MemberCredential | null>;
   findByInviteCode(code: string): Promise<MemberCredential | null>;
+  findByResetCode(code: string): Promise<MemberCredential | null>;
   /**
    * Parmi ces membres, ceux dont le compte a déjà été ouvert. Le port répond en une interrogation :
    * l'annuaire pose la question pour tout un périmètre, pas membre par membre.
@@ -358,6 +359,12 @@ export interface TokenGenerator {
   sessionToken(): string;
   /** Code d'invitation court, transmissible hors de l'application. */
   inviteCode(): string;
+  /**
+   * Code de réinitialisation, transmissible hors de l'application lui aussi. Plus long qu'une
+   * invitation : celle-ci ouvre un compte vide, celui-ci remplace le mot de passe d'un compte
+   * en service — le deviner, c'est le prendre.
+   */
+  resetCode(): string;
   /** Empreinte non réversible d'un jeton, seule valeur persistée. */
   hash(token: string): string;
 }

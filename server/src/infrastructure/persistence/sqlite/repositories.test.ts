@@ -136,6 +136,36 @@ describe('SQLite — accès (credentials)', () => {
     expect(relu.isInviteValid(new Date('2026-07-10T10:00:00Z'))).toBe(false);
   });
 
+  it('retrouve par code de réinitialisation, échéance conservée', async () => {
+    await seedBase();
+    const credentials = new SqliteCredentialRepository(db);
+    const échéance = new Date('2026-07-03T10:00:00Z');
+    await credentials.save(
+      MemberCredential.create({ memberId: 'm1', passwordHash: 'hash-alice' }).withReset('repris', échéance),
+    );
+    const relu = (await credentials.findByResetCode('repris'))!;
+    expect(relu.memberId).toBe('m1');
+    expect(relu.passwordHash).toBe('hash-alice');
+    expect(relu.resetExpiresAt).toEqual(échéance);
+    expect(await credentials.findByResetCode('inconnu')).toBeNull();
+    // Les deux codes ne se répondent pas l'un pour l'autre.
+    expect(await credentials.findByInviteCode('repris')).toBeNull();
+  });
+
+  it('la consommation d’une réinitialisation efface le code', async () => {
+    await seedBase();
+    const credentials = new SqliteCredentialRepository(db);
+    await credentials.save(
+      MemberCredential.create({ memberId: 'm1', passwordHash: 'ancien' }).withReset(
+        'repris',
+        new Date('2026-07-03T10:00:00Z'),
+      ),
+    );
+    await credentials.save((await credentials.findByResetCode('repris'))!.withPassword('nouveau'));
+    expect(await credentials.findByResetCode('repris')).toBeNull();
+    expect((await credentials.findByMemberId('m1'))?.passwordHash).toBe('nouveau');
+  });
+
   it('saveFirst n’écrit que sur une table vide (garde atomique du bootstrap)', async () => {
     await seedBase();
     const credentials = new SqliteCredentialRepository(db);

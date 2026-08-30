@@ -243,6 +243,8 @@ export function createApiStub() {
     logout: vi.fn(async () => {}),
     inviteInfo: vi.fn(async (_code: string) => ({ memberName: 'Bob' })),
     redeemInvite: vi.fn(async (_code: string, _password: string) => ({ member: me })),
+    passwordResetInfo: vi.fn(async (_code: string) => ({ memberName: 'Bob' })),
+    redeemPasswordReset: vi.fn(async (_code: string, _password: string) => ({ member: me })),
 
     listMembers: vi.fn(async () => [aMember()]),
     createMember: vi.fn(async (_input: { name: string; email?: string }) => ({
@@ -252,6 +254,7 @@ export function createApiStub() {
     regenerateInvite: vi.fn(async (_memberId: string) => ({ inviteCode: 'code-9' })),
 
     adminMembers: vi.fn(async () => [aMember()]),
+    startPasswordReset: vi.fn(async (_memberId: string) => ({ memberName: 'Bob', resetCode: 'reset-9' })),
     mergePreview: vi.fn(async (_absorbedId: string, _keptId: string) => noMergeCounts()),
     mergeMembers: vi.fn(
       async (_input: { absorbedId: string; keptId: string; name?: string; email?: string | null }) => ({

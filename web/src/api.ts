@@ -405,6 +405,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ password }),
     }),
+  /** Lien de réinitialisation, côté titulaire : le nom du compte qu'il rouvre. */
+  passwordResetInfo: (code: string) =>
+    request<{ memberName: string }>(`/api/auth/password-resets/${encodeURIComponent(code)}`),
+  // La reprise révoque toutes les sessions du compte et ouvre celle-ci : le membre qui repose son
+  // mot de passe entre directement, sans repasser par l'écran de connexion.
+  redeemPasswordReset: (code: string, password: string) =>
+    request<{ member: Member }>(`/api/auth/password-resets/${encodeURIComponent(code)}/redeem`, {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }),
+
   // Le changement de mot de passe révoque toutes les sessions du membre : la réponse en rouvre
   // une, dont le cookie remplace l'ancien.
   changePassword: (currentPassword: string, newPassword: string) =>
@@ -431,6 +442,15 @@ export const api = {
     request<MergeCounts>(
       `/api/admin/members/merge-preview?absorbedId=${encodeURIComponent(absorbedId)}&keptId=${encodeURIComponent(keptId)}`,
     ),
+  /**
+   * Lien de réinitialisation pour un membre qui a perdu son mot de passe, réservé à
+   * l'administrateur. Le code n'est rendu qu'ici, une fois : il se transmet hors application.
+   */
+  startPasswordReset: (memberId: string) =>
+    request<{ memberName: string; resetCode: string }>(`/api/admin/members/${memberId}/password-reset`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
   mergeMembers: (input: { absorbedId: string; keptId: string; name?: string; email?: string | null }) =>
     request<{ member: Member; counts: MergeCounts }>('/api/admin/members/merge', {
       method: 'POST',
