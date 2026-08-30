@@ -479,6 +479,9 @@ export class InMemoryCredentialRepository implements CredentialRepository {
   async findByInviteCode(code: string) {
     return [...this.items.values()].find((c) => c.inviteCode === code) ?? null;
   }
+  async findByResetCode(code: string) {
+    return [...this.items.values()].find((c) => c.resetCode === code) ?? null;
+  }
   async findMemberIdsWithPassword(memberIds: readonly string[]) {
     return new Set(memberIds.filter((id) => this.items.get(id)?.hasPassword));
   }
@@ -534,6 +537,7 @@ export class FakePasswordHasher implements PasswordHasher {
 export class SequentialTokenGenerator implements TokenGenerator {
   private sessionCounter = 0;
   private inviteCounter = 0;
+  private resetCounter = 0;
   sessionToken() {
     this.sessionCounter += 1;
     return `token-${this.sessionCounter}`;
@@ -541,6 +545,10 @@ export class SequentialTokenGenerator implements TokenGenerator {
   inviteCode() {
     this.inviteCounter += 1;
     return `invite-${this.inviteCounter}`;
+  }
+  resetCode() {
+    this.resetCounter += 1;
+    return `reset-${this.resetCounter}`;
   }
   hash(token: string) {
     return `hash(${token})`;

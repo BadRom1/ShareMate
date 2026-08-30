@@ -386,6 +386,16 @@ entièrement contournable en trois requêtes.
 > d'un membre inexistant ; toute régénération visant un autre membre est tracée en `warn`.
 > Conséquence assumée et documentée dans le README : sans preuve hors bande, un mot de passe perdu
 > ne se réinitialise plus.
+>
+> **Suite — la conséquence a été levée depuis, sans rouvrir la faille.** Le volet 2 demandait que
+> la réinitialisation devienne « un geste distinct » : c'est ce qui a été fait. Elle porte son
+> propre code, sa propre échéance (24 h) et ses propres routes, elle ne vaut que sur un compte
+> **qui a déjà un mot de passe** — exactement le miroir de la garde d'invitation —, et elle est
+> réservée à l'administrateur, qui pouvait déjà absorber n'importe quel compte par la fusion. La
+> preuve hors bande n'est pas un email vérifié mais l'administrateur lui-même, qui reconnaît la
+> personne et lui transmet le lien ; le geste est journalisé, et sa consommation révoque toutes
+> les sessions du compte. La chaîne de S1 reste fermée : aucun membre ordinaire ne peut obtenir
+> de code pour un compte qui n'est pas le sien.
 
 ### S2 — ÉLEVÉE — L'annuaire des membres est global, sans cloisonnement [vérifié]
 

@@ -282,6 +282,20 @@ describe('session', () => {
     // L'appel `me()` est inutile ici : l'écran d'invitation ne dépend pas d'une session.
     expect(stub.me).not.toHaveBeenCalled();
   });
+
+  it('ouvre l’écran de mot de passe perdu sur une URL /reset/<code>', async () => {
+    window.history.replaceState(null, '', '/reset/xyz789');
+    stub.passwordResetInfo.mockResolvedValue({ memberName: 'Bob' });
+
+    render(<App />);
+
+    expect(await screen.findByRole('button', { name: 'Reprendre mon compte' })).toBeDefined();
+    expect(stub.passwordResetInfo).toHaveBeenCalledWith('xyz789');
+    // Le titulaire est justement dehors : cet écran ne dépend d'aucune session.
+    expect(stub.me).not.toHaveBeenCalled();
+    // Et ce n'est pas l'écran d'invitation : les deux codes ne s'échangent pas.
+    expect(stub.inviteInfo).not.toHaveBeenCalled();
+  });
 });
 
 describe("changement d'espace de travail", () => {

@@ -8,7 +8,7 @@ import { ExpensesPage } from './pages/ExpensesPage';
 import { DiscussionsPage } from './pages/DiscussionsPage';
 import { DocumentsPage } from './pages/DocumentsPage';
 import { AdminPage } from './pages/AdminPage';
-import { BootstrapPage, InvitePage, LoginPage } from './pages/AuthPages';
+import { BootstrapPage, InvitePage, LoginPage, PasswordResetPage } from './pages/AuthPages';
 import { AppShell } from './components/AppShell';
 import { OverviewPanel } from './components/OverviewPanel';
 import { IconClose } from './components/icons';
@@ -20,22 +20,25 @@ import { clearErrors, firstError, useApiResource } from './useApiResource';
 type Auth =
   | { kind: 'loading' }
   | { kind: 'invite'; code: string }
+  | { kind: 'reset'; code: string }
   | { kind: 'anonymous'; needsBootstrap: boolean }
   | { kind: 'authenticated'; member: Member };
 
-/** Code d'invitation porté par l'URL, s'il y en a un : `/invite/<code>`. */
-function codeInvitation(): string | null {
-  const found = window.location.pathname.match(/^\/invite\/([^/]+)$/);
-  return found ? decodeURIComponent(found[1]) : null;
+/**
+ * Code porté par l'URL, s'il y en a un : `/invite/<code>` pour une première connexion,
+ * `/reset/<code>` pour un mot de passe perdu. Deux chemins, parce que ce ne sont pas les mêmes
+ * codes ni le même écran — l'un ouvre un compte, l'autre en reprend un.
+ */
+function codeDeLUrl(): { kind: 'invite' | 'reset'; code: string } | null {
+  const found = window.location.pathname.match(/^\/(invite|reset)\/([^/]+)$/);
+  return found ? { kind: found[1] as 'invite' | 'reset', code: decodeURIComponent(found[2]) } : null;
 }
 
 export function App() {
-  // Un lien d'invitation dit l'état de départ à lui seul : inutile de passer par « Chargement… »
-  // puis d'attendre le serveur pour afficher un écran que l'URL désignait déjà.
-  const [auth, setAuth] = useState<Auth>(() => {
-    const code = codeInvitation();
-    return code === null ? { kind: 'loading' } : { kind: 'invite', code };
-  });
+  // Un lien d'invitation ou de réinitialisation dit l'état de départ à lui seul : inutile de
+  // passer par « Chargement… » puis d'attendre le serveur pour afficher un écran que l'URL
+  // désignait déjà.
+  const [auth, setAuth] = useState<Auth>(() => codeDeLUrl() ?? { kind: 'loading' });
 
   const backToLogin = useCallback(async () => {
     try {
@@ -47,7 +50,7 @@ export function App() {
   }, []);
 
   const enterApp = useCallback((member: Member) => {
-    // Une invitation consommée ne doit pas rester dans l'URL.
+    // Un code consommé — invitation ou réinitialisation — ne doit pas rester dans l'URL.
     if (window.location.pathname !== '/') {
       window.history.replaceState(null, '', '/');
     }
@@ -60,8 +63,8 @@ export function App() {
   }, [backToLogin]);
 
   useEffect(() => {
-    // Une invitation se joue entre le lien et l'écran de bienvenue : l'état de départ est déjà fixé.
-    if (codeInvitation() !== null) return;
+    // Un lien se joue entre lui-même et l'écran de bienvenue : l'état de départ est déjà fixé.
+    if (codeDeLUrl() !== null) return;
     api
       .me()
       .then((state) =>
@@ -79,6 +82,9 @@ export function App() {
   }
   if (auth.kind === 'invite') {
     return <InvitePage code={auth.code} onRedeemed={enterApp} />;
+  }
+  if (auth.kind === 'reset') {
+    return <PasswordResetPage code={auth.code} onReset={enterApp} />;
   }
   if (auth.kind === 'anonymous') {
     return auth.needsBootstrap ? <BootstrapPage onCreated={enterApp} /> : <LoginPage onLoggedIn={enterApp} />;

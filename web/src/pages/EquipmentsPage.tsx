@@ -313,7 +313,9 @@ export function EquipmentsPage({ members, currentMemberId, onMemberCreated }: Pr
             </div>
             {/* Une invitation pose un premier mot de passe, elle n'en réinitialise jamais un :
                 pouvoir en émettre pour un compte ouvert reviendrait à pouvoir en prendre le
-                contrôle. Les comptes déjà ouverts sont donc absents de cette liste. */}
+                contrôle. Les comptes déjà ouverts sont donc absents de cette liste — un mot de
+                passe perdu se redonne depuis l'écran d'administration, par un lien qui lui est
+                propre. */}
             {pendingMembers.length > 0 && (
               <div className="row" style={{ alignItems: 'flex-end' }}>
                 <label className="field">
@@ -337,6 +339,10 @@ export function EquipmentsPage({ members, currentMemberId, onMemberCreated }: Pr
                 </label>
               </div>
             )}
+            <span className="muted">
+              Un mot de passe perdu ne se rejoue pas par ce lien-là : l’administrateur de l’instance émet un lien de
+              réinitialisation depuis l’écran d’administration, sans qu’il y ait de compte à recréer.
+            </span>
             {invite && (
               <div className="card" style={{ background: 'transparent' }}>
                 <p className="muted">

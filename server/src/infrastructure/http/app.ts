@@ -246,6 +246,12 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.clock,
   );
 
+  // Le journal des gestes sensibles part dans les logs du serveur : hors de portée des membres
+  // concernés, contrairement aux notifications qu'ils peuvent effacer.
+  const auditLogger: AuditLogger = {
+    record: (entry) => app.log.info(entry, 'geste sensible'),
+  };
+
   const authService = new AuthService(
     deps.members,
     deps.credentials,
@@ -255,6 +261,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.tokenGenerator,
     deps.idGenerator,
     deps.clock,
+    auditLogger,
   );
   const memberService = new MemberService(deps.members, deps.equipments, deps.credentials);
   // Justificatifs, documents et pièces jointes partagent le même bucket S3/R2 dès que son
@@ -266,11 +273,6 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   const receiptStorage = deps.receiptStorage ?? createReceiptStorage(bucket, deps.uploadsDir ?? null) ?? undefined;
   const documentStorage = deps.documentStorage ?? createDocumentStorage(bucket, deps.documentsDir ?? null);
   const attachmentStorage = deps.attachmentStorage ?? createAttachmentStorage(bucket, deps.attachmentsDir ?? null);
-  // Le journal des gestes sensibles part dans les logs du serveur : hors de portée des membres
-  // concernés, contrairement aux notifications qu'ils peuvent effacer.
-  const auditLogger: AuditLogger = {
-    record: (entry) => app.log.info(entry, 'geste sensible'),
-  };
   const mergeService = new MemberMergeService(deps.members, deps.credentials, deps.memberMerger, auditLogger);
   const equipmentService = new EquipmentService(
     deps.equipments,
@@ -434,7 +436,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     // Composition : chaque plugin reçoit explicitement les services dont il a besoin.
     await protectedScope.register(authRoutes, { authService, cookieSecure: deps.cookieSecure ?? false, rateLimits });
     await protectedScope.register(memberRoutes, { authService, memberService, rateLimits });
-    await protectedScope.register(adminRoutes, { mergeService, rateLimits });
+    await protectedScope.register(adminRoutes, { authService, mergeService, rateLimits });
     await protectedScope.register(equipmentRoutes, { equipmentService });
     await protectedScope.register(subEquipmentRoutes, { subEquipmentService });
     await protectedScope.register(reservationRoutes, { reservationService });

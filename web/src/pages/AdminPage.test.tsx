@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type * as ApiModule from '../api';
 import { AdminPage } from './AdminPage';
+import { ApiError } from '../api';
 import { aMember, createApiStub, noMergeCounts } from '../test/factories';
 import type { ApiStub } from '../test/factories';
 
@@ -135,5 +136,41 @@ describe('Écran d’administration', () => {
 
     await screen.findByText('Cette adresse email est déjà utilisée par un autre membre.');
     expect(screen.queryByText(/Comptes réunis/)).toBeNull();
+  });
+});
+
+describe('Écran d’administration — mot de passe perdu', () => {
+  it('émet un lien de reprise et le donne à recopier', async () => {
+    await afficher();
+    stub.startPasswordReset.mockResolvedValue({ memberName: 'Damien', resetCode: 'code-reset' });
+
+    await userEvent.selectOptions(screen.getByLabelText(/Personne à qui redonner l’accès/), 'ancien');
+
+    await waitFor(() => expect(stub.startPasswordReset).toHaveBeenCalledWith('ancien'));
+    const lien = (await screen.findByDisplayValue(/\/reset\/code-reset$/)) as HTMLInputElement;
+    expect(lien.readOnly).toBe(true);
+    // Rien n'a été fusionné : redonner un accès ne touche pas aux comptes.
+    expect(stub.mergeMembers).not.toHaveBeenCalled();
+  });
+
+  it('ne propose que les comptes déjà ouverts', async () => {
+    // Un compte jamais ouvert n'a pas de mot de passe à remplacer : c'est une invitation qu'il
+    // lui faut, et l'écran le dit plutôt que de laisser choisir puis refuser.
+    stub.adminMembers.mockResolvedValue([alice, ancien, aMember({ id: 'denis', name: 'Denis', hasPassword: false })]);
+    await afficher();
+
+    const choix = screen.getByLabelText(/Personne à qui redonner l’accès/) as HTMLSelectElement;
+    expect([...choix.options].map((o) => o.value).filter(Boolean)).toEqual(['alice', 'ancien']);
+    expect(screen.getByText(/lien de première connexion depuis « Mes équipements »/)).toBeTruthy();
+  });
+
+  it('affiche le refus du serveur sans rien laisser croire', async () => {
+    await afficher();
+    stub.startPasswordReset.mockRejectedValue(new ApiError('Geste réservé à l’administrateur de l’instance.', 403));
+
+    await userEvent.selectOptions(screen.getByLabelText(/Personne à qui redonner l’accès/), 'ancien');
+
+    expect(await screen.findByText('Geste réservé à l’administrateur de l’instance.')).toBeTruthy();
+    expect(screen.queryByDisplayValue(/\/reset\//)).toBeNull();
   });
 });

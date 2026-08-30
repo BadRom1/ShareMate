@@ -1,6 +1,7 @@
 import { Member } from '../domain/member/member.js';
 import { MemberCredential } from '../domain/auth/credential.js';
 import {
+  AuthorizationError,
   ConflictError,
   DomainError,
   ForbiddenError,
@@ -9,6 +10,7 @@ import {
 } from '../domain/shared/domain-error.js';
 import { visibleMemberIds } from './member-scope.js';
 import type {
+  AuditLogger,
   Clock,
   CredentialRepository,
   EquipmentRepository,
@@ -40,6 +42,9 @@ export interface AuthenticatedSession {
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 jours, expiration glissante
 const SESSION_RENEWAL_THRESHOLD_MS = SESSION_TTL_MS / 3; // en deçà, la session est repoussée
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 jours : un code circule hors bande (SMS, WhatsApp)
+// 24 h : ce code-là remplace le mot de passe d'un compte en service, il n'a pas à traîner une
+// semaine dans une conversation. Assez long pour couvrir un décalage horaire ou une soirée.
+const RESET_TTL_MS = 24 * 60 * 60 * 1000;
 const MIN_PASSWORD_LENGTH = 8;
 
 function validatePassword(password: string): void {
@@ -63,6 +68,7 @@ export class AuthService {
     private readonly tokens: TokenGenerator,
     private readonly idGenerator: IdGenerator,
     private readonly clock: Clock,
+    private readonly audit: AuditLogger,
   ) {}
 
   /** Aucun accès en base : le tout premier compte reste à créer. */
@@ -149,9 +155,13 @@ export class AuthService {
     }
     const existing = await this.credentials.findByMemberId(memberId);
     // Une invitation n'est pas une réinitialisation : sans cette garde, obtenir un code pour un
-    // compte ouvert revient à en prendre le contrôle. Un mot de passe perdu se règle donc autrement.
+    // compte ouvert revient à en prendre le contrôle. Un mot de passe perdu se règle par
+    // `startPasswordReset`, réservé à l'administrateur, sur un code qui lui est propre.
     if (existing?.hasPassword) {
-      throw new ConflictError("Ce membre a déjà un mot de passe : un lien d'invitation ne le réinitialise pas.");
+      throw new ConflictError(
+        "Ce membre a déjà un mot de passe : un lien d'invitation ne le réinitialise pas. " +
+          'Un mot de passe perdu se redonne depuis l’écran d’administration.',
+      );
     }
     const inviteCode = this.tokens.inviteCode();
     const expiresAt = this.inviteDeadline();
@@ -161,6 +171,74 @@ export class AuthService {
         : MemberCredential.create({ memberId, inviteCode, inviteExpiresAt: expiresAt }),
     );
     return inviteCode;
+  }
+
+  /**
+   * Lien de réinitialisation pour un mot de passe perdu, réservé à l'administrateur de l'instance.
+   *
+   * C'est le pendant du lien de première connexion, pour le cas qu'il refuse : un compte déjà
+   * ouvert dont le titulaire a perdu son mot de passe. Sans lui, il ne restait qu'à recréer la
+   * personne puis à fusionner les deux comptes — un geste plus lourd, irréversible, et qui passe
+   * de toute façon par l'administrateur.
+   *
+   * Réservé à lui, donc, et à personne d'autre : ce code reprend un compte en service. L'ouvrir
+   * à l'invitant, comme l'est la relance d'invitation, lui donnerait sur son invité un pouvoir de
+   * reprise permanent, que celui-ci n'a jamais accordé et ne peut pas retirer. L'administrateur,
+   * lui, ne gagne rien qu'il n'ait déjà : la fusion absorbe une identité entière, et il peut donc
+   * s'en emparer par un chemin plus destructeur. Le refus opposé aux autres se lit pour ce qu'il
+   * est — un geste réservé, non une ressource absente — comme celui de la fusion.
+   *
+   * Émettre un lien ne révoque rien : le mot de passe en place et les sessions ouvertes tiennent
+   * jusqu'à ce que le code soit consommé. Un lien émis à tort, ou par erreur, n'enferme donc
+   * personne dehors ; il suffit de ne pas s'en servir, et il expire.
+   */
+  async startPasswordReset(memberId: string, requesterId: string): Promise<{ member: Member; resetCode: string }> {
+    const requester = await this.members.findById(requesterId);
+    if (!requester?.isAdmin) {
+      throw new AuthorizationError('Geste réservé à l’administrateur de l’instance.');
+    }
+    const member = await this.memberOf(memberId);
+    const existing = await this.credentials.findByMemberId(memberId);
+    // Un compte jamais ouvert n'a pas de mot de passe à remplacer : c'est un lien de première
+    // connexion qu'il lui faut, et le message le dit plutôt que d'émettre un code sans emploi.
+    if (!existing?.hasPassword) {
+      throw new ConflictError(
+        "Ce membre n'a jamais choisi de mot de passe : envoyez-lui un lien de première connexion.",
+      );
+    }
+    const resetCode = this.tokens.resetCode();
+    await this.credentials.save(existing.withReset(resetCode, this.resetDeadline()));
+    // Le geste ouvre la reprise d'un compte qui n'est pas celui du demandeur : il laisse une
+    // trace côté exploitant, comme la fusion.
+    this.audit.record({
+      action: 'membre.reinitialisation-emise',
+      actorId: requesterId,
+      targetId: memberId,
+      details: { targetName: member.name },
+    });
+    return { member, resetCode };
+  }
+
+  /** Membre associé à un code de réinitialisation encore valable. */
+  async resetInfo(code: string): Promise<Member> {
+    const credential = await this.pendingReset(code);
+    return this.memberOf(credential.memberId);
+  }
+
+  /**
+   * Consomme une réinitialisation : le membre choisit un nouveau mot de passe et est connecté.
+   *
+   * Toutes les sessions du compte tombent — c'est le geste réflexe après une compromission, et le
+   * titulaire qui reprend son compte doit pouvoir en expulser qui s'y trouverait. La session
+   * rendue ici est la seule qui survit.
+   */
+  async redeemPasswordReset(code: string, password: string): Promise<AuthResult> {
+    const credential = await this.pendingReset(code);
+    validatePassword(password);
+    await this.credentials.save(credential.withPassword(await this.hasher.hash(password)));
+    await this.sessions.deleteByMemberId(credential.memberId);
+    const member = await this.memberOf(credential.memberId);
+    return { member, session: await this.openSession(member.id) };
   }
 
   /** Membre associé à un code d'invitation encore valable. */
@@ -285,6 +363,23 @@ export class AuthService {
 
   private inviteDeadline(): Date {
     return new Date(this.clock.now().getTime() + INVITE_TTL_MS);
+  }
+
+  private resetDeadline(): Date {
+    return new Date(this.clock.now().getTime() + RESET_TTL_MS);
+  }
+
+  /**
+   * Réinitialisation exploitable : code connu, non expiré, sur un compte qui a bien un mot de
+   * passe. Le même message couvre l'inconnu, l'expiré et le consommé — un code déjà utilisé a
+   * disparu avec le mot de passe qu'il a posé —, si bien que rien ne permet de les sonder.
+   */
+  private async pendingReset(code: string): Promise<MemberCredential> {
+    const credential = await this.credentials.findByResetCode(code);
+    if (!credential || !credential.isResetValid(this.clock.now())) {
+      throw new NotFoundError('Lien de réinitialisation invalide, expiré ou déjà utilisé.');
+    }
+    return credential;
   }
 
   /**

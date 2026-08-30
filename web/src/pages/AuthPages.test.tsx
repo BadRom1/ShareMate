@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type * as ApiModule from '../api';
-import { BootstrapPage, InvitePage, LoginPage } from './AuthPages';
+import { BootstrapPage, InvitePage, LoginPage, PasswordResetPage } from './AuthPages';
 import { ApiError } from '../api';
 import { aMember, createApiStub } from '../test/factories';
 import type { ApiStub } from '../test/factories';
@@ -105,5 +105,48 @@ describe('invitation', () => {
 
     expect(await screen.findByText('Invitation invalide ou expirée.')).toBeDefined();
     expect(onRedeemed).not.toHaveBeenCalled();
+  });
+});
+
+describe('mot de passe perdu', () => {
+  it('accueille le titulaire par son nom, pose le nouveau mot de passe et le connecte', async () => {
+    const user = userEvent.setup();
+    const onReset = vi.fn();
+    stub.passwordResetInfo.mockResolvedValue({ memberName: 'Bob' });
+    stub.redeemPasswordReset.mockResolvedValue({ member: aMember({ id: 'm2', name: 'Bob' }) });
+    render(<PasswordResetPage code="code-reset" onReset={onReset} />);
+
+    expect(await screen.findByText('Bob')).toBeDefined();
+    await user.type(screen.getByLabelText('Nouveau mot de passe (8 caractères minimum)'), 'nouveaupass');
+    await user.click(screen.getByRole('button', { name: 'Reprendre mon compte' }));
+
+    expect(stub.redeemPasswordReset).toHaveBeenCalledWith('code-reset', 'nouveaupass');
+    expect(onReset).toHaveBeenCalledWith(expect.objectContaining({ id: 'm2' }));
+  });
+
+  // Un lien périmé ou déjà consommé ne doit pas laisser croire qu'il reste un mot de passe à
+  // choisir : le formulaire n'apparaît pas.
+  it("n'affiche aucun formulaire quand le lien est refusé", async () => {
+    stub.passwordResetInfo.mockRejectedValue(
+      new ApiError('Lien de réinitialisation invalide, expiré ou déjà utilisé.', 404),
+    );
+    render(<PasswordResetPage code="perime" onReset={vi.fn()} />);
+
+    expect(await screen.findByText('Lien de réinitialisation invalide, expiré ou déjà utilisé.')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Reprendre mon compte' })).toBeNull();
+  });
+
+  it('affiche le refus du serveur quand la reprise échoue', async () => {
+    const user = userEvent.setup();
+    const onReset = vi.fn();
+    stub.passwordResetInfo.mockResolvedValue({ memberName: 'Bob' });
+    stub.redeemPasswordReset.mockRejectedValue(new ApiError('Le mot de passe doit faire au moins 8 caractères.', 400));
+    render(<PasswordResetPage code="code-reset" onReset={onReset} />);
+
+    await user.type(await screen.findByLabelText('Nouveau mot de passe (8 caractères minimum)'), 'motdepasse');
+    await user.click(screen.getByRole('button', { name: 'Reprendre mon compte' }));
+
+    expect(await screen.findByText('Le mot de passe doit faire au moins 8 caractères.')).toBeDefined();
+    expect(onReset).not.toHaveBeenCalled();
   });
 });

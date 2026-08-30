@@ -100,6 +100,34 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
     },
   );
 
+  /**
+   * Réinitialisation d'un mot de passe perdu, côté titulaire : mêmes routes publiques que
+   * l'invitation, sur un code qui lui est propre. Le lien s'obtient auprès de l'administrateur
+   * (`POST /api/admin/members/:id/password-reset`), jamais ici — rien de public n'émet de code,
+   * sans quoi l'identifiant d'un membre suffirait à déclencher la reprise de son compte.
+   */
+  app.get<{ Params: { code: string } }>(
+    '/api/auth/password-resets/:code',
+    { config: { public: true, rateLimit: AUTH_RATE_LIMIT }, schema: { params: codeParams } },
+    async (request) => {
+      const member = await authService.resetInfo(request.params.code);
+      return { memberName: member.name };
+    },
+  );
+
+  app.post<{ Params: { code: string }; Body: { password: string } }>(
+    '/api/auth/password-resets/:code/redeem',
+    {
+      config: { public: true, rateLimit: AUTH_RATE_LIMIT },
+      schema: { params: codeParams, body: object({ password }, ['password']) },
+    },
+    async (request, reply) => {
+      const { member, session } = await authService.redeemPasswordReset(request.params.code, request.body.password);
+      // La consommation révoque toutes les sessions du membre : celle-ci est la seule qui reste.
+      return reply.send(authenticated(reply, member, session));
+    },
+  );
+
   app.post<{ Body: { currentPassword: string; newPassword: string } }>(
     '/api/auth/password',
     {

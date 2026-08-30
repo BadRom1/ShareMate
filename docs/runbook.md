@@ -1,7 +1,8 @@
 # Runbook d'exploitation
 
-Les gestes d'exploitation d'une instance en service : désigner l'administrateur, consulter la
-base, transférer les justificatifs, sauvegarder et restaurer.
+Les gestes d'exploitation d'une instance en service : désigner l'administrateur, débloquer un
+administrateur qui a perdu son mot de passe, consulter la base, transférer les justificatifs,
+sauvegarder et restaurer.
 
 Tout part du même endroit : **la base SQLite et les fichiers vivent sur le volume Railway monté
 sur `/data`**. Aucun de ces gestes ne se joue depuis votre machine — c'est là que sont les
@@ -50,7 +51,8 @@ feraient.
 
 ## Désigner l'administrateur
 
-L'administrateur est le seul compte autorisé à réunir deux membres en un. Sur une base créée
+L'administrateur est le seul compte autorisé à redonner l'accès à un mot de passe perdu et à
+réunir deux membres en un. Sur une base créée
 avant ce rôle, **personne ne l'est** : la migration n'attribue rien, faute de repère fiable
 (`invited_by` vaut `NULL` sur tous les membres d'alors). Se tromper donnerait à quelqu'un le
 pouvoir d'absorber n'importe quel compte, alors le script ne devine pas — il montre.
@@ -87,6 +89,31 @@ node server/dist/designate-admin.js <identifiant>   # désigne ce compte
 Le rôle est **unique** : le désigner le retire à tout autre. Un compte jamais ouvert est refusé —
 il ne pourrait pas se connecter pour l'exercer. Le changement est immédiat, sans redémarrage ni
 reconnexion : il est lu à chaque requête.
+
+## Un mot de passe perdu
+
+Le cas courant ne demande **rien** de cette page : l'administrateur ouvre l'écran
+d'administration, choisit la personne dans « Mot de passe perdu », et lui transmet le lien obtenu
+(WhatsApp, SMS…). Elle choisit un nouveau mot de passe et retrouve son compte intact. Le lien vaut
+24 heures, ne sert qu'une fois, et jusqu'à sa consommation l'ancien mot de passe continue de
+fonctionner — un lien transmis par erreur n'enferme personne dehors.
+
+Reste le cas que l'application ne peut pas régler seule : **l'administrateur lui-même est dehors**,
+sans session ouverte nulle part. Personne ne peut lui émettre de lien, puisque lui seul en a le
+droit. Le déblocage passe par le rôle, qui se déplace, et non par la base, qu'il ne faut pas
+toucher :
+
+1. désignez un autre compte ouvert comme administrateur (`node server/dist/designate-admin.js
+<identifiant>`) — le rôle est unique, il quitte le compte bloqué ;
+2. cette personne se connecte, ouvre l'écran d'administration et émet le lien de réinitialisation
+   du compte bloqué, qu'elle lui transmet ;
+3. l'administrateur d'origine repose son mot de passe par ce lien ;
+4. rendez-lui le rôle (`node server/dist/designate-admin.js <son identifiant>`).
+
+Le compte intermédiaire n'a jamais eu à toucher aux données : le rôle n'ouvre que les deux gestes
+d'administration, et le pas 4 le lui reprend. Aucun mot de passe ne se réécrit à la main dans la
+base — les empreintes scrypt ne se fabriquent pas au clavier, et un `UPDATE` sur
+`member_credentials` ne produirait qu'un compte impossible à ouvrir.
 
 ## Consulter la base
 
