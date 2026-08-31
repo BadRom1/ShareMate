@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { api } from '../api';
 import type { DirectoryMember, Equipment, MaintenanceStatus, MeterUnit } from '../api';
-import { formatDate, formatEuros, meterLabel } from '../format';
+import { formatDate, formatDecimal, formatEuros, meterLabel } from '../format';
 import { errorMessage, useApiResource } from '../useApiResource';
 import { IconEdit, IconLogout, IconTrash } from '../components/icons';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -411,12 +411,12 @@ export function EquipmentsPage({ members, currentMemberId, onMemberCreated }: Pr
               <p>
                 {status?.alert ? (
                   <span className="badge danger">
-                    🔧 Entretien requis ({status.unitsSinceMaintenance} {meterLabel(e.meterUnit)} depuis la dernière
-                    maintenance)
+                    🔧 Entretien requis ({formatDecimal(status.unitsSinceMaintenance ?? 0)} {meterLabel(e.meterUnit)}{' '}
+                    depuis la dernière maintenance)
                   </span>
                 ) : status?.currentReading !== null && status?.currentReading !== undefined ? (
                   <span className="badge">
-                    Compteur : {status.currentReading} {meterLabel(e.meterUnit)}
+                    Compteur : {formatDecimal(status.currentReading)} {meterLabel(e.meterUnit)}
                   </span>
                 ) : (
                   <span className="badge warn">Aucun relevé</span>

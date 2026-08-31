@@ -60,6 +60,17 @@ export function meterLabel(unit: 'HOURS' | 'KILOMETERS'): string {
   return unit === 'HOURS' ? 'h' : 'km';
 }
 
+/**
+ * Valeur décimale telle qu'on l'écrit en français (« 1,3 », « 165,3 »).
+ *
+ * Les compteurs, durées et litres viennent de calculs flottants : affichés bruts,
+ * ils laissent parfois filtrer « 1.3000000000000114 ». On arrondit donc à la
+ * précision utile (deux décimales) avant d'afficher.
+ */
+export function formatDecimal(value: number): string {
+  return value.toLocaleString('fr-FR', { maximumFractionDigits: 2 });
+}
+
 export const NOTIFICATION_LABELS: Record<string, string> = {
   MESSAGE_POSTED: 'Nouveau message de discussion',
   EXPENSE_ADDED: 'Nouvelle dépense',

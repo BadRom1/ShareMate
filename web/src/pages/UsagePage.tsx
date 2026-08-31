@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { api } from '../api';
 import type { Equipment, Member } from '../api';
-import { formatDateTime, meterLabel } from '../format';
+import { formatDateTime, formatDecimal, meterLabel } from '../format';
 import { errorMessage, useApiResource } from '../useApiResource';
 import { Modal } from '../components/Modal';
 import { Fab } from '../components/Fab';
@@ -136,9 +136,10 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
 
       {status?.alert && (
         <div className="notice">
-          🔧 <strong>{equipment.name}</strong> : entretien recommandé — {status.unitsSinceMaintenance} unités depuis la
-          dernière maintenance (seuil : {status.threshold}). Déclarez la maintenance via un relevé coché « maintenance
-          effectuée ».
+          🔧 <strong>{equipment.name}</strong> : entretien recommandé —{' '}
+          {formatDecimal(status.unitsSinceMaintenance ?? 0)} unités depuis la dernière maintenance (seuil :{' '}
+          {formatDecimal(status.threshold ?? 0)}). Déclarez la maintenance via un relevé coché « maintenance effectuée
+          ».
         </div>
       )}
 
@@ -160,10 +161,10 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
             )}{' '}
             {status.currentReading !== null && (
               <span className="muted">
-                Compteur actuel : {status.currentReading} {unit}
+                Compteur actuel : {formatDecimal(status.currentReading)} {unit}
                 {status.threshold !== null &&
                   status.unitsSinceMaintenance !== null &&
-                  ` — ${status.unitsSinceMaintenance}/${status.threshold} depuis la dernière maintenance`}
+                  ` — ${formatDecimal(status.unitsSinceMaintenance)}/${formatDecimal(status.threshold)} depuis la dernière maintenance`}
               </span>
             )}
           </p>
@@ -189,9 +190,9 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
                   <tr key={u.id}>
                     <td>{formatDateTime(u.recordedAt)}</td>
                     <td>{memberName(u.memberId)}</td>
-                    <td>{u.duration !== null ? `${u.duration} ${unit}` : '—'}</td>
+                    <td>{u.duration !== null ? `${formatDecimal(u.duration)} ${unit}` : '—'}</td>
                     <td>
-                      {u.meterReading}
+                      {formatDecimal(u.meterReading)}
                       {u.isMaintenance && (
                         <>
                           {' '}
@@ -199,7 +200,7 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
                         </>
                       )}
                     </td>
-                    <td>{u.fuelAddedLiters !== null ? `${u.fuelAddedLiters} L` : '—'}</td>
+                    <td>{u.fuelAddedLiters !== null ? `${formatDecimal(u.fuelAddedLiters)} L` : '—'}</td>
                     <td className="muted">{u.notes ?? '—'}</td>
                   </tr>
                 ))}
@@ -243,7 +244,7 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
                 />
                 {lastReading !== null && (
                   <span className="muted">
-                    Dernier relevé : {lastReading} {unit}
+                    Dernier relevé : {formatDecimal(lastReading)} {unit}
                   </span>
                 )}
               </label>

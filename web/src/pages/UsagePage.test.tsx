@@ -51,6 +51,21 @@ describe('historique', () => {
     expect(screen.queryByRole('button', { name: 'Enregistrer le relevé' })).toBeNull();
   });
 
+  it('affiche les décimales à la française, sans artefact de calcul flottant', async () => {
+    stub.usageByEquipment.mockResolvedValue([
+      aUsageRecord({ meterReading: 165.3, duration: 165.3 - 164, fuelAddedLiters: 12.5 }),
+    ]);
+    stub.maintenanceStatus.mockResolvedValue(
+      aMaintenanceStatus({ currentReading: 165.3, unitsSinceMaintenance: 165.3 - 164, threshold: 10 }),
+    );
+    renderPage();
+
+    expect(await screen.findByText('1,3 h')).toBeDefined();
+    expect(screen.getByText('165,3')).toBeDefined();
+    expect(screen.getByText('12,5 L')).toBeDefined();
+    expect(screen.getByText(/165,3 h — 1,3\/10 depuis la dernière maintenance/)).toBeDefined();
+  });
+
   it("recharge l'historique quand l'équipement de l'espace change", async () => {
     const { rerender } = renderPage();
     await waitFor(() => expect(stub.usageByEquipment).toHaveBeenCalledWith('e1'));
