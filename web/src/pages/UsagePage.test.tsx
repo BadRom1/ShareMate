@@ -51,6 +51,21 @@ describe('historique', () => {
     expect(screen.queryByRole('button', { name: 'Enregistrer le relevé' })).toBeNull();
   });
 
+  it('affiche les décimales à la française, sans artefact de calcul flottant', async () => {
+    stub.usageByEquipment.mockResolvedValue([
+      aUsageRecord({ meterReading: 165.3, duration: 165.3 - 164, fuelAddedLiters: 12.5 }),
+    ]);
+    stub.maintenanceStatus.mockResolvedValue(
+      aMaintenanceStatus({ currentReading: 165.3, unitsSinceMaintenance: 165.3 - 164, threshold: 10 }),
+    );
+    renderPage();
+
+    expect(await screen.findByText('1,3 h')).toBeDefined();
+    expect(screen.getByText('165,3')).toBeDefined();
+    expect(screen.getByText('12,5 L')).toBeDefined();
+    expect(screen.getByText(/165,3 h — 1,3\/10 depuis la dernière maintenance/)).toBeDefined();
+  });
+
   it("recharge l'historique quand l'équipement de l'espace change", async () => {
     const { rerender } = renderPage();
     await waitFor(() => expect(stub.usageByEquipment).toHaveBeenCalledWith('e1'));
@@ -95,6 +110,52 @@ describe('saisie du relevé', () => {
 
   // Le changement d'équipement remet la page à neuf par le remontage décidé dans `App` (`key`) :
   // ce qui reste ici, c'est la bascule de l'historique, qui ne démonte rien.
+  it('accepte la virgule du clavier français et convertit en compteur total', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openForm(user);
+
+    await user.type(screen.getByLabelText(/Durée d'utilisation/), '1,3');
+
+    expect(screen.getByLabelText(/Compteur total/)).toHaveProperty('value', '101,3');
+    await user.click(screen.getByRole('button', { name: 'Enregistrer le relevé' }));
+
+    await waitFor(() =>
+      expect(stub.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ equipmentId: 'e1', duration: 1.3 })),
+    );
+  });
+
+  it('un compteur sous le dernier relevé laisse la durée modifiable et le dit', async () => {
+    const user = userEvent.setup();
+    stub.maintenanceStatus.mockResolvedValue(aMaintenanceStatus({ currentReading: 164 }));
+    renderPage();
+    await openForm(user);
+
+    const compteur = screen.getByLabelText(/Compteur total/);
+    await user.clear(compteur);
+    await user.type(compteur, '100');
+
+    // Une durée négative (100 − 164) bloquerait le champ, qui n'accepte que des nombres positifs.
+    const duree = screen.getByLabelText(/Durée d'utilisation/);
+    expect(duree).toHaveProperty('value', '');
+    expect(screen.getByText(/Un compteur ne recule pas/)).toBeDefined();
+
+    await user.type(duree, '5');
+    expect(duree).toHaveProperty('value', '5');
+    expect(compteur).toHaveProperty('value', '169');
+  });
+
+  it('ignore les frappes qui ne font pas un nombre', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openForm(user);
+
+    const duree = screen.getByLabelText(/Durée d'utilisation/);
+    await user.type(duree, '1,3,5abc');
+
+    expect(duree).toHaveProperty('value', '1,35');
+  });
+
   it("retire la confirmation dès qu'on bascule l'historique", async () => {
     const user = userEvent.setup();
     renderPage();

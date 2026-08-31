@@ -20,6 +20,11 @@ describe('computeDurations', () => {
     expect(durations.get('u3')).toBe(2.5);
   });
 
+  it('les décimales restent lisibles : 164 h puis 165,3 h donnent 1,3 h', () => {
+    const durations = computeDurations([record('u1', 164), record('u2', 164 + 1.3)]);
+    expect(durations.get('u2')).toBe(1.3);
+  });
+
   it('le premier relevé n’a pas de durée (compteur d’origine inconnu)', () => {
     const durations = computeDurations([record('u1', 1200)]);
     expect(durations.get('u1')).toBeNull();

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { attachmentUrl } from '../../api';
 import type { Member, Message } from '../../api';
+import { pickCompressed } from '../../compressImage';
 import { formatBytes, formatDateTime } from '../../format';
 import { IconCheck, IconClose, IconEdit, IconPaperclip, IconReply, IconSend, IconTrash } from '../../components/icons';
 import { AttachmentDraft, AttachmentField } from './AttachmentField';
@@ -211,7 +212,11 @@ export function MessageTree({ messages, members, currentMemberId, inCircle, busy
               maxLength={4000}
               autoFocus
             />
-            <AttachmentField onPick={setReplyFile} disabled={busy} label="Joindre un fichier à la réponse" />
+            <AttachmentField
+              onPick={(picked) => pickCompressed(picked, setReplyFile)}
+              disabled={busy}
+              label="Joindre un fichier à la réponse"
+            />
             <button
               type="submit"
               className="icon-btn icon-primary"

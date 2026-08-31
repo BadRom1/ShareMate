@@ -293,7 +293,7 @@ export function createApiStub() {
     settlement: vi.fn(async (_equipmentId: string) => [] as SettlementTransaction[]),
     listReimbursements: vi.fn(async (_equipmentId: string) => [] as Reimbursement[]),
     recordReimbursement: vi.fn(async (_input: unknown) => aReimbursement()),
-    uploadReceipt: vi.fn(async (_file: File) => '/uploads/0189a4c2-1f3b-4d5e-8a9b-0c1d2e3f4a5b.jpg'),
+    addExpenseWithReceipt: vi.fn(async (_input: unknown, _receipt: File) => anExpense()),
 
     listThreads: vi.fn(async (_equipmentId: string) => [] as ThreadSummary[]),
     listMessages: vi.fn(async (_threadId: string) => [] as Message[]),

@@ -1,4 +1,5 @@
 import type { Equipment } from '../equipment/equipment.js';
+import { roundMeterValue } from './meter-value.js';
 import type { UsageRecord } from './usage-record.js';
 
 export interface MaintenanceStatus {
@@ -32,7 +33,9 @@ export function computeMaintenanceStatus(equipment: Equipment, records: readonly
         : null;
 
   const unitsSinceMaintenance =
-    currentReading !== null && lastMaintenanceReading !== null ? currentReading - lastMaintenanceReading : null;
+    currentReading !== null && lastMaintenanceReading !== null
+      ? roundMeterValue(currentReading - lastMaintenanceReading)
+      : null;
 
   const alert =
     equipment.maintenanceThreshold !== null &&

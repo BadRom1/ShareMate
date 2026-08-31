@@ -297,6 +297,12 @@ th {
   font-size: 0.85rem;
 }
 
+/* Refus annoncé sous un champ, avant même l'envoi du formulaire. */
+.field-warn {
+  color: var(--warning);
+  font-size: 0.85rem;
+}
+
 .day-group {
   margin-bottom: 1rem;
 }

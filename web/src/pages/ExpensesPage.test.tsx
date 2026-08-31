@@ -38,6 +38,18 @@ async function openForm(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('formulaire de dépense', () => {
+  it('accepte un montant à la virgule', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openForm(user);
+
+    await user.type(screen.getByLabelText('Libellé'), 'Plein de gazole');
+    await user.type(screen.getByLabelText('Montant (€)'), '90,55');
+    await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
+
+    await waitFor(() => expect(stub.addExpense).toHaveBeenCalledWith(expect.objectContaining({ amountEuros: 90.55 })));
+  });
+
   it('enregistre une dépense partagée à parts égales sur tout le cercle', async () => {
     const user = userEvent.setup();
     renderPage();
@@ -56,7 +68,6 @@ describe('formulaire de dépense', () => {
           payerId: 'm1',
           category: 'FUEL',
           split: { type: 'EQUAL', memberIds: ['m1', 'm2'] },
-          receiptPath: null,
         }),
       ),
     );
@@ -99,25 +110,78 @@ describe('formulaire de dépense', () => {
     );
   });
 
-  it('téléverse le justificatif avant la dépense et transmet son chemin', async () => {
+  it('refuse un montant nul sans téléverser le justificatif', async () => {
     const user = userEvent.setup();
-    stub.uploadReceipt.mockResolvedValue('/uploads/0189a4c2-1f3b-4d5e-8a9b-0c1d2e3f4a5b.jpg');
     renderPage();
     await openForm(user);
 
-    await user.type(screen.getByLabelText('Libellé'), 'Filtre à huile');
-    await user.type(screen.getByLabelText('Montant (€)'), '35');
+    await user.type(screen.getByLabelText('Libellé'), 'Gazole');
+    await user.type(screen.getByLabelText('Montant (€)'), '0');
     await user.upload(
       screen.getByLabelText('Justificatif (image ou PDF, optionnel)'),
       new File(['x'], 'facture.jpg', { type: 'image/jpeg' }),
     );
     await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
 
+    expect(await screen.findByText('Le montant de la dépense doit être supérieur à 0 €.')).toBeDefined();
+    // Le refus tombe avant l'envoi : rien ne part, justificatif compris.
+    expect(stub.addExpenseWithReceipt).not.toHaveBeenCalled();
+    expect(stub.addExpense).not.toHaveBeenCalled();
+  });
+
+  it('refuse un montant plus précis que le centime plutôt que de l’arrondir en silence', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openForm(user);
+
+    await user.type(screen.getByLabelText('Libellé'), 'Gazole');
+    await user.type(screen.getByLabelText('Montant (€)'), '90,555');
+    await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
+
+    expect(
+      await screen.findByText('Le montant de la dépense ne va pas au-delà du centime (deux décimales).'),
+    ).toBeDefined();
+    expect(stub.addExpense).not.toHaveBeenCalled();
+  });
+
+  it('refuse une part personnalisée mal saisie, en nommant le membre', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openForm(user);
+
+    await user.type(screen.getByLabelText('Libellé'), 'Assurance');
+    await user.type(screen.getByLabelText('Montant (€)'), '200');
+    await user.selectOptions(screen.getByLabelText('Répartition (au sein du cercle)'), 'CUSTOM');
+    await user.type(screen.getByLabelText('Alice (€)'), '200,005');
+    await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
+
+    expect(
+      await screen.findByText('La part de « Alice » ne va pas au-delà du centime (deux décimales).'),
+    ).toBeDefined();
+    expect(stub.addExpense).not.toHaveBeenCalled();
+  });
+
+  // Le justificatif part avec la dépense : téléversé à part, il restait sur le serveur sans que
+  // rien ne le nomme dès que l'enregistrement était refusé.
+  it('envoie le justificatif et la dépense en une seule requête', async () => {
+    const user = userEvent.setup();
+    const facture = new File(['x'], 'facture.jpg', { type: 'image/jpeg' });
+    renderPage();
+    await openForm(user);
+
+    await user.type(screen.getByLabelText('Libellé'), 'Filtre à huile');
+    await user.type(screen.getByLabelText('Montant (€)'), '35');
+    await user.upload(screen.getByLabelText('Justificatif (image ou PDF, optionnel)'), facture);
+    await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
+
     await waitFor(() =>
-      expect(stub.addExpense).toHaveBeenCalledWith(
-        expect.objectContaining({ receiptPath: '/uploads/0189a4c2-1f3b-4d5e-8a9b-0c1d2e3f4a5b.jpg' }),
+      expect(stub.addExpenseWithReceipt).toHaveBeenCalledWith(
+        expect.objectContaining({ label: 'Filtre à huile', amountEuros: 35 }),
+        facture,
       ),
     );
+    // Sans justificatif, la dépense passe par la route JSON : rien ne change de ce côté.
+    expect(stub.addExpense).not.toHaveBeenCalled();
   });
 
   it("affiche le message du serveur quand l'enregistrement échoue", async () => {

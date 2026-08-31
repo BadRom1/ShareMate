@@ -219,6 +219,14 @@ Plafonds et formats diffèrent selon la nature du fichier :
 | Poids maximal    | 10 Mo par fichier       | 25 Mo par fichier                                | 25 Mo par fichier       |
 | Formats acceptés | png, jpg, webp, pdf     | + gif, txt, csv, doc(x), xls(x), ppt(x), od[tsp] | idem document           |
 
+**Les images sont compressées avant de partir**, dans le navigateur de celui qui les dépose :
+ramenées à 2000 px sur leur plus grand côté et réencodées en WebP (qualité 0,82), une photo de
+téléphone tombe d'un ordre de grandeur. Le travail se fait avant la requête — c'est le seul endroit
+où il économise aussi le téléversement, souvent le trajet le plus lent. Rien n'est dégradé sans
+gain : si le résultat n'est pas plus léger, ou si le navigateur ne sait pas relire l'image, c'est le
+fichier d'origine qui part. Les plafonds ci-dessus, eux, ne bougent pas : ils bornent ce qui arrive,
+quoi qu'il arrive.
+
 **Documents et pièces jointes se partagent 500 Mo par équipement** — c'est le même bucket, donc la
 même enveloppe. Deux budgets séparés en feraient deux fois plus, et ne plafonner que le dossier
 ferait des discussions la façon la moins chère de remplir le bucket. Le contrôle a lieu avant que
@@ -345,7 +353,9 @@ admin:designate`) et jamais deviné. À tout autre, `/api/admin/*` répond `403`
 - **Entrées** : schéma JSON sur le corps, les paramètres et la querystring de chaque route ; objets
   fermés, longueurs bornées. Un chemin de justificatif n'est accepté que sous la forme exacte que
   produit le téléversement, ce qui interdit d'afficher une URL externe sous couvert de reçu.
-- **Justificatifs** : servis par une route applicative qui remonte à la dépense qui les porte,
+- **Justificatifs** : déposés avec la dépense qui les porte, en une seule requête — un fichier
+  déposé seul survivrait au refus de la dépense sans que rien ne le nomme, donc hors de portée de
+  la purge. Servis par une route applicative qui remonte à la dépense qui les porte,
   jamais mis en cache par le client (`Cache-Control: private, no-store`, `NetworkOnly` côté service
   worker), supprimés avec la dépense — du bucket **et** du volume, puisqu'après une bascule on ne
   sait plus lequel des deux les porte. La déconnexion vide les caches `sharemate-*` de l'appareil.

@@ -4,7 +4,7 @@ import type { DirectoryMember, Equipment } from '../api';
 import type { Tab } from '../navigation';
 import { firstError, useApiResource } from '../useApiResource';
 import { useEscape } from '../useEscape';
-import { formatDay, formatEuros, formatTime, meterLabel } from '../format';
+import { formatDay, formatDecimal, formatEuros, formatTime, meterLabel } from '../format';
 import { EquipmentDot } from './EquipmentSwitcher';
 import { IconClose } from './icons';
 
@@ -146,7 +146,7 @@ export function OverviewPanel({ equipments, members, currentMemberId, onOpenEqui
                         <span className="overview-row-sub">
                           {alerte.unitsSinceMaintenance === null
                             ? 'Entretien à prévoir'
-                            : `${alerte.unitsSinceMaintenance} ${unite} depuis le dernier entretien`}
+                            : `${formatDecimal(alerte.unitsSinceMaintenance)} ${unite} depuis le dernier entretien`}
                         </span>
                       </span>
                       <span className="badge warn">Entretien</span>

@@ -399,7 +399,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
    * domaine sont enregistrés dedans : toute route qu'ils déclarent exige une session, sauf celles
    * marquées `config.public`. C'est la composition qui porte le périmètre, pas un préfixe d'URL —
    * `request.raw.url` n'est pas décodé alors que le routeur, lui, l'est, si bien qu'un test sur
-   * `startsWith('/api/')` laissait `/%61pi/uploads/receipts` atteindre le handler sans session.
+   * `startsWith('/api/')` laissait `/%61pi/expenses/file` atteindre le handler sans session.
    * Les routes hors de ce contexte (front statique, santé) sont publiques par construction.
    */
   await app.register(async (protectedScope) => {
@@ -441,7 +441,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     await protectedScope.register(subEquipmentRoutes, { subEquipmentService });
     await protectedScope.register(reservationRoutes, { reservationService });
     await protectedScope.register(usageRoutes, { usageService });
-    await protectedScope.register(expenseRoutes, { expenseService });
+    await protectedScope.register(expenseRoutes, { expenseService, receipts: receiptStorage, rateLimits });
     await protectedScope.register(discussionRoutes, {
       discussionService,
       storage: attachmentStorage ?? undefined,
@@ -458,7 +458,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       vapidPublicKey: deps.vapidPublicKey ?? null,
     });
     if (receiptStorage) {
-      await protectedScope.register(uploadRoutes, { storage: receiptStorage, expenseService, rateLimits });
+      await protectedScope.register(uploadRoutes, { storage: receiptStorage, expenseService });
     }
   });
 

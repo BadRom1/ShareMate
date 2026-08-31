@@ -75,3 +75,23 @@ export function enumField<T extends string>(fields: Record<string, string>, fiel
   }
   return value;
 }
+
+/** Champ numérique : dans un corps multipart, tout voyage en texte. */
+export function numberField(fields: Record<string, string>, field: string): number {
+  const value = requiredField(fields, field);
+  const n = Number(value.replace(',', '.'));
+  if (!Number.isFinite(n)) {
+    throw new DomainError(`Le champ « ${field} » doit être un nombre.`);
+  }
+  return n;
+}
+
+/** Champ portant une structure : elle ne se transporte pas autrement qu'en JSON. */
+export function jsonField<T>(fields: Record<string, string>, field: string): T {
+  const value = requiredField(fields, field);
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    throw new DomainError(`Le champ « ${field} » n’est pas un JSON valide.`);
+  }
+}
