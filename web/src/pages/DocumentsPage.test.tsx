@@ -153,6 +153,41 @@ describe('ajout', () => {
     await waitFor(() => expect(stub.listDocuments).toHaveBeenCalledTimes(2));
   });
 
+  it('garde le nom déjà tapé quand un fichier est choisi ensuite', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Manuel d’utilisation');
+
+    await user.click(screen.getByRole('button', { name: /Ajouter un document/ }));
+    const nom = screen.getByPlaceholderText('ex. Manuel d’utilisation') as HTMLInputElement;
+    // Le nom est tapé avant le choix du fichier : c'est aussi ce qui se passe quand il est tapé
+    // pendant la compression de l'image, qui arrive après coup.
+    await user.type(nom, 'Notice constructeur');
+    await user.upload(
+      screen.getByLabelText('Fichier à déposer'),
+      new File(['%PDF-1.4'], 'notice-kx027.pdf', { type: 'application/pdf' }),
+    );
+    expect(nom.value).toBe('Notice constructeur');
+  });
+
+  it('ne traîne pas le nom d’un fichier abandonné jusqu’au lien', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Manuel d’utilisation');
+
+    await user.click(screen.getByRole('button', { name: /Ajouter un document/ }));
+    await user.upload(
+      screen.getByLabelText('Fichier à déposer'),
+      new File(['%PDF-1.4'], 'notice-kx027.pdf', { type: 'application/pdf' }),
+    );
+    const nom = screen.getByPlaceholderText('ex. Manuel d’utilisation') as HTMLInputElement;
+    expect(nom.value).toBe('notice-kx027.pdf');
+
+    // Le nom proposé appartient au fichier : la bascule vers le lien ne le garde pas.
+    await user.click(screen.getByRole('button', { name: /^Lien$/ }));
+    expect((screen.getByPlaceholderText('ex. Manuel d’utilisation') as HTMLInputElement).value).toBe('');
+  });
+
   it('ajoute un lien de bout en bout depuis le bouton flottant, sans fermer la modale', async () => {
     const user = userEvent.setup();
     renderPage();

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MAX_IMAGE_DIMENSION, compressImage, fitted, renamed } from './compressImage';
+import { MAX_IMAGE_DIMENSION, compressImage, fitted, pickCompressed, renamed } from './compressImage';
 
 /**
  * jsdom n'a ni décodeur d'image ni canevas : le navigateur est donc remplacé ici par un double qui
@@ -16,8 +16,12 @@ interface CanvasStub {
   background: string | null;
 }
 
-/** Installe un canevas hors écran factice. `webp: false` imite un navigateur qui rend un PNG. */
-function installCanvas(options: { bytes: number; webp?: boolean; context?: boolean }): CanvasStub {
+/**
+ * Installe un canevas hors écran factice. `webp` décrit ce que fait l'encodeur quand on lui demande
+ * du WebP : il l'écrit, il rend un PNG à la place, ou il lève — les trois façons dont un navigateur
+ * signale qu'il ne sait pas l'écrire.
+ */
+function installCanvas(options: { bytes: number; webp?: 'écrit' | 'png' | 'lève'; context?: boolean }): CanvasStub {
   const stub: CanvasStub = { painted: null, encoded: [], background: null };
   class FakeOffscreenCanvas {
     constructor(
@@ -40,7 +44,9 @@ function installCanvas(options: { bytes: number; webp?: boolean; context?: boole
 
     convertToBlob({ type }: { type: string }) {
       stub.encoded.push(type);
-      const rendu = type === 'image/webp' && options.webp === false ? 'image/png' : type;
+      const refus = type === 'image/webp' ? (options.webp ?? 'écrit') : 'écrit';
+      if (refus === 'lève') return Promise.reject(new Error('format non pris en charge'));
+      const rendu = refus === 'png' ? 'image/png' : type;
       return Promise.resolve(new Blob([new Uint8Array(options.bytes)], { type: rendu }));
     }
   }
@@ -112,7 +118,7 @@ describe('compressImage', () => {
 
   it('repasse en JPEG sur fond blanc quand le navigateur n’écrit pas le WebP', async () => {
     installDecoder(1200, 900);
-    const canvas = installCanvas({ bytes: 100_000, webp: false });
+    const canvas = installCanvas({ bytes: 100_000, webp: 'png' });
 
     const compressed = await compressImage(imageFile('capture.png', 'image/png', 900_000));
 
@@ -122,6 +128,17 @@ describe('compressImage', () => {
     expect(compressed.type).toBe('image/jpeg');
     // Une image sous le plafond n'est pas agrandie pour autant.
     expect(canvas.painted).toEqual({ width: 1200, height: 900 });
+  });
+
+  it('repasse en JPEG quand l’encodeur WebP lève au lieu de rendre autre chose', async () => {
+    installDecoder(1200, 900);
+    const canvas = installCanvas({ bytes: 100_000, webp: 'lève' });
+
+    const compressed = await compressImage(imageFile('photo.jpg', 'image/jpeg', 900_000));
+
+    expect(canvas.encoded).toEqual(['image/webp', 'image/jpeg']);
+    expect(compressed.type).toBe('image/jpeg');
+    expect(compressed.size).toBe(100_000);
   });
 
   it('rend l’original quand le navigateur ne sait pas décoder l’image', async () => {
@@ -149,6 +166,81 @@ describe('compressImage', () => {
     const original = imageFile('photo.jpg', 'image/jpeg', 5_000_000);
 
     expect(await compressImage(original)).toBe(original);
+  });
+});
+
+/**
+ * Champ qui retient un fichier, réduit à ce dont `pickCompressed` a besoin : la valeur courante et
+ * un moyen de la remplacer au vu d'elle-même, c'est-à-dire un `setState` fonctionnel de React.
+ */
+function champ() {
+  let retenu: File | null = null;
+  return {
+    get: () => retenu,
+    retain: (update: (current: File | null) => File | null) => {
+      retenu = update(retenu);
+    },
+  };
+}
+
+/** Laisse partir les promesses en attente : la compression se termine après le geste. */
+const compressionTerminée = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe('pickCompressed', () => {
+  it('retient le fichier choisi sans attendre, puis le remplace par sa version allégée', async () => {
+    installDecoder(4000, 3000);
+    installCanvas({ bytes: 200_000 });
+    const champFichier = champ();
+    const choisi = imageFile('IMG_4213.JPG', 'image/jpeg', 5_000_000);
+
+    pickCompressed(choisi, champFichier.retain);
+    // Tout de suite : un envoi lancé ici part avec la photo entière, jamais sans pièce jointe.
+    expect(champFichier.get()).toBe(choisi);
+
+    await compressionTerminée();
+    expect(champFichier.get()?.name).toBe('IMG_4213.webp');
+    expect(champFichier.get()?.size).toBe(200_000);
+  });
+
+  it('abandonne la version allégée quand un autre fichier a été choisi entre-temps', async () => {
+    installDecoder(4000, 3000);
+    installCanvas({ bytes: 200_000 });
+    const champFichier = champ();
+    const premier = imageFile('premier.jpg', 'image/jpeg', 5_000_000);
+    const second = imageFile('second.png', 'image/png', 4_000_000);
+
+    pickCompressed(premier, champFichier.retain);
+    pickCompressed(second, champFichier.retain);
+    await compressionTerminée();
+
+    // C'est l'identité du fichier retenu qui arbitre, pas l'ordre d'arrivée des compressions.
+    expect(champFichier.get()?.name).toBe('second.webp');
+  });
+
+  it('abandonne la version allégée quand le champ a été vidé entre-temps', async () => {
+    installDecoder(4000, 3000);
+    installCanvas({ bytes: 200_000 });
+    const champFichier = champ();
+
+    // Le geste d'envoi : la dépense part, le formulaire se vide, et l'image arrivée trop tard ne
+    // doit pas se coller à la dépense suivante.
+    pickCompressed(imageFile('IMG_4213.JPG', 'image/jpeg', 5_000_000), champFichier.retain);
+    champFichier.retain(() => null);
+    await compressionTerminée();
+
+    expect(champFichier.get()).toBeNull();
+  });
+
+  it('vide le champ quand le choix est annulé', async () => {
+    installDecoder(4000, 3000);
+    installCanvas({ bytes: 200_000 });
+    const champFichier = champ();
+
+    pickCompressed(imageFile('IMG_4213.JPG', 'image/jpeg', 5_000_000), champFichier.retain);
+    pickCompressed(null, champFichier.retain);
+    await compressionTerminée();
+
+    expect(champFichier.get()).toBeNull();
   });
 });
 
