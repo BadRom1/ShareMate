@@ -1,3 +1,4 @@
+import { compressImage } from '../../compressImage';
 import { formatBytes } from '../../format';
 import { IconClose, IconPaperclip } from '../../components/icons';
 
@@ -16,6 +17,9 @@ interface Props {
  * sous le même nom. Le champ reste donc dans l'arbre d'accessibilité — masqué à l'œil, pas au
  * clavier ni au lecteur d'écran — et sa valeur est remise à zéro après chaque choix, sinon
  * reprendre le même fichier après l'avoir retiré n'émettrait aucun `change`.
+ *
+ * Une image choisie est allégée avant d'être rendue au composeur : ce qui s'affiche au-dessus de
+ * la barre d'envoi est alors le fichier qui partira, poids compris.
  */
 export function AttachmentField({ onPick, disabled, label }: Props) {
   return (
@@ -26,9 +30,11 @@ export function AttachmentField({ onPick, disabled, label }: Props) {
         className="visually-hidden"
         aria-label={label}
         disabled={disabled}
-        onChange={(e) => {
-          onPick(e.target.files?.[0] ?? null);
+        onChange={async (e) => {
+          const picked = e.target.files?.[0] ?? null;
+          // Remise à zéro avant l'attente : après elle, un autre choix aurait pu passer.
           e.target.value = '';
+          onPick(picked ? await compressImage(picked) : null);
         }}
       />
     </label>

@@ -219,6 +219,14 @@ Plafonds et formats diffèrent selon la nature du fichier :
 | Poids maximal    | 10 Mo par fichier       | 25 Mo par fichier                                | 25 Mo par fichier       |
 | Formats acceptés | png, jpg, webp, pdf     | + gif, txt, csv, doc(x), xls(x), ppt(x), od[tsp] | idem document           |
 
+**Les images sont compressées avant de partir**, dans le navigateur de celui qui les dépose :
+ramenées à 2000 px sur leur plus grand côté et réencodées en WebP (qualité 0,82), une photo de
+téléphone tombe d'un ordre de grandeur. Le travail se fait avant la requête — c'est le seul endroit
+où il économise aussi le téléversement, souvent le trajet le plus lent. Rien n'est dégradé sans
+gain : si le résultat n'est pas plus léger, ou si le navigateur ne sait pas relire l'image, c'est le
+fichier d'origine qui part. Les plafonds ci-dessus, eux, ne bougent pas : ils bornent ce qui arrive,
+quoi qu'il arrive.
+
 **Documents et pièces jointes se partagent 500 Mo par équipement** — c'est le même bucket, donc la
 même enveloppe. Deux budgets séparés en feraient deux fois plus, et ne plafonner que le dossier
 ferait des discussions la façon la moins chère de remplir le bucket. Le contrôle a lieu avant que

@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { DOCUMENT_CATEGORIES, api, documentContentUrl } from '../api';
 import type { DocumentCategory, Equipment, EquipmentDocument, Member } from '../api';
+import { compressImage } from '../compressImage';
 import { DOCUMENT_CATEGORY_LABELS, formatBytes, formatDate, linkHost } from '../format';
 import { clearErrors, errorMessage, firstError, useApiResource } from '../useApiResource';
 import {
@@ -105,10 +106,16 @@ export function DocumentsPage({ members, equipment }: Props) {
     setDraft(null);
   }
 
-  function chooseFile(file: File | null) {
-    setNewFile(file);
+  /**
+   * Fichier retenu pour le dépôt. Une image y est allégée avant d'être posée : le poids affiché
+   * dans la zone de dépôt est donc bien celui qui partira, et le nom proposé porte l'extension du
+   * fichier réellement envoyé.
+   */
+  async function chooseFile(file: File | null) {
+    const retenu = file ? await compressImage(file) : null;
+    setNewFile(retenu);
     // Le nom du fichier est une proposition, pas une contrainte : il reste modifiable au-dessous.
-    if (file && newName.trim().length === 0) setNewName(file.name);
+    if (retenu && newName.trim().length === 0) setNewName(retenu.name);
   }
 
   async function submitDraft(event: React.FormEvent) {
@@ -343,7 +350,7 @@ export function DocumentsPage({ members, equipment }: Props) {
                   className="visually-hidden"
                   aria-label="Fichier à déposer"
                   onChange={(e) => {
-                    chooseFile(e.target.files?.[0] ?? null);
+                    void chooseFile(e.target.files?.[0] ?? null);
                     e.target.value = '';
                   }}
                 />

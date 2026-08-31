@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { api, receiptUrl } from '../api';
 import type { Equipment, Expense, ExpenseCategory, Member, SettlementTransaction, SplitInput } from '../api';
+import { compressImage } from '../compressImage';
 import { CATEGORY_LABELS, formatDate, formatEuros } from '../format';
 import { decimalPlaces, parseDecimal } from '../decimal';
 import { errorMessage, firstError, useApiResource } from '../useApiResource';
@@ -360,7 +361,14 @@ export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
               <input
                 type="file"
                 accept=".png,.jpg,.jpeg,.webp,.pdf"
-                onChange={(e) => setForm({ ...form, receiptFile: e.target.files?.[0] ?? null })}
+                onChange={async (e) => {
+                  const picked = e.target.files?.[0] ?? null;
+                  // Une image est allégée avant d'être retenue : la dépense part avec le fichier
+                  // compressé, et le formulaire n'a jamais à connaître l'original.
+                  const receiptFile = picked ? await compressImage(picked) : null;
+                  // Mise à jour fonctionnelle : le formulaire a pu changer pendant la compression.
+                  setForm((f) => ({ ...f, receiptFile }));
+                }}
               />
             </label>
 
