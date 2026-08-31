@@ -306,6 +306,45 @@ describe('UsageService — correction et suppression', () => {
     expect((await service.maintenanceStatus('e1', 'm1')).currentReading).toBe(100);
   });
 
+  it('baisser le compteur d’un relevé remet en attente les heures qu’il ne couvre plus', async () => {
+    await service.recordUsage({ ...input, meterReading: 100 });
+    f.clock.set(new Date('2026-07-03T10:00:00Z'));
+    const { record: milieu } = await service.recordUsage({ ...input, memberId: 'm2', meterReading: 165 });
+    f.clock.set(new Date('2026-07-04T10:00:00Z'));
+    await service.recordUsage({ ...input, meterReading: 200 });
+
+    const corrigé = await service.updateUsage(milieu.id, { meterReading: 120 }, 'm2');
+    expect(corrigé.duration).toBe(20);
+    const history = await service.historyByEquipment('e1', 'm1');
+    // Le compteur a bougé de 100 h : la somme des durées attribuées les retrouve toutes.
+    expect(history.reduce((total, e) => total + (e.duration ?? 0), 0)).toBe(100);
+    expect(history.filter((e) => e.record.memberId === null).map((e) => e.duration)).toEqual([45]);
+  });
+
+  it('baisser le dernier relevé corrige le compteur, sans heures à rendre', async () => {
+    await service.recordUsage({ ...input, meterReading: 100 });
+    f.clock.set(new Date('2026-07-03T10:00:00Z'));
+    const { record: dernier } = await service.recordUsage({ ...input, meterReading: 1650 });
+
+    // Rien au-dessus n'atteste ces heures : la faute de frappe s'efface, elle ne se redistribue pas.
+    await service.updateUsage(dernier.id, { meterReading: 165 }, 'm1');
+    const history = await service.historyByEquipment('e1', 'm1');
+    expect(history.map((e) => [e.record.memberId, e.duration])).toEqual([
+      ['m1', 65],
+      ['m1', null],
+    ]);
+  });
+
+  it('refuse un départ sous le relevé précédent : deux fois les mêmes heures', async () => {
+    await service.recordUsage({ ...input, meterReading: 100 });
+    f.clock.set(new Date('2026-07-03T10:00:00Z'));
+    const { record } = await service.recordUsage({ ...input, memberId: 'm2', meterReading: 165 });
+
+    await expect(service.updateUsage(record.id, { startReading: 10 }, 'm2')).rejects.toThrow(/départ/);
+    // Refermer un trou reste permis : le départ peut descendre jusqu'au relevé précédent.
+    expect((await service.updateUsage(record.id, { startReading: 100 }, 'm2')).duration).toBe(65);
+  });
+
   it('refuse de supprimer un segment en attente que le compteur atteste', async () => {
     await service.recordUsage({ ...input, meterReading: 100 });
     f.clock.set(new Date('2026-07-03T10:00:00Z'));

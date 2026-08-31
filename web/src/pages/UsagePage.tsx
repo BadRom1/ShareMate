@@ -224,7 +224,11 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
       const enregistre = await api.recordUsage({
         equipmentId: equipment.id,
         ...reading,
-        startReading,
+        // Départ inchangé : on ne l'envoie pas. Le préremplissage vient d'un historique chargé
+        // à l'ouverture de l'onglet ; un relevé saisi entre-temps par un autre membre le rend
+        // périmé, et le serveur refuserait un départ sous son dernier relevé — pour un écran qui
+        // n'affiche justement que la valeur périmée. Sans lui, le serveur part du sien.
+        ...(startReading !== null && startReading !== lastReading ? { startReading } : {}),
         gapMemberId: form.gapMemberId === EN_ATTENTE ? null : form.gapMemberId,
         fuelAddedLiters,
         notes: form.notes || null,

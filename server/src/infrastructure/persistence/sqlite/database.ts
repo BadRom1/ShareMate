@@ -527,11 +527,17 @@ const MIGRATIONS: Migration[] = [
       }
       if (!présentes.includes('start_reading')) {
         db.exec(`ALTER TABLE usage_records ADD COLUMN start_reading REAL;`);
+        // Le prédécesseur se cherche dans l'ordre de la chaîne — compteur, puis date — et non
+        // au compteur strictement inférieur : deux relevés au même compteur se suivent, et le
+        // second n'a rien fait tourner. Le chercher plus bas lui donnerait les heures du premier.
         db.exec(`
           UPDATE usage_records SET start_reading = (
-            SELECT MAX(précédent.meter_reading) FROM usage_records AS précédent
+            SELECT précédent.meter_reading FROM usage_records AS précédent
               WHERE précédent.equipment_id = usage_records.equipment_id
-                AND précédent.meter_reading < usage_records.meter_reading
+                AND (précédent.meter_reading, précédent.recorded_at, précédent.id)
+                  < (usage_records.meter_reading, usage_records.recorded_at, usage_records.id)
+              ORDER BY précédent.meter_reading DESC, précédent.recorded_at DESC, précédent.id DESC
+              LIMIT 1
           );
         `);
       }
