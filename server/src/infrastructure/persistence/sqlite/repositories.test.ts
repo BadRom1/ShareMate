@@ -309,6 +309,29 @@ describe("SQLite — relevés d'usage", () => {
     expect(await repo.findByEquipmentIds(['e1', 'e2'])).toHaveLength(1);
     expect(await repo.findByEquipmentIds([])).toEqual([]);
   });
+
+  it('roundtrip d’un segment en attente : compteur de départ, sans membre', async () => {
+    await seedBase();
+    const repo = new SqliteUsageRecordRepository(db);
+    await repo.save(
+      UsageRecord.create({
+        id: 'u1',
+        equipmentId: 'e1',
+        memberId: null,
+        recordedAt: new Date('2026-07-02T10:00:00Z'),
+        meterReading: 158,
+        startReading: 100.5,
+      }),
+    );
+    const relevé = await repo.findById('u1');
+    expect(relevé?.memberId).toBeNull();
+    expect(relevé?.startReading).toBe(100.5);
+    expect(await repo.findById('inconnu')).toBeNull();
+
+    await repo.delete('u1');
+    expect(await repo.findById('u1')).toBeNull();
+    expect(await repo.findByEquipmentId('e1')).toEqual([]);
+  });
 });
 
 describe('SQLite — dépenses et remboursements', () => {

@@ -39,6 +39,33 @@ describe('computeDurations', () => {
     expect(durations.get('u2')).toBe(0);
   });
 
+  it('le compteur de départ du relevé l’emporte sur le relevé précédent', () => {
+    const chaîne = [record('u1', 100), record('u2', 165)];
+    const avecDépart = UsageRecord.create({
+      id: 'u2',
+      equipmentId: 'e1',
+      memberId: 'm1',
+      recordedAt: new Date('2026-07-02T10:00:00Z'),
+      meterReading: 165,
+      startReading: 158,
+    });
+    // Sans départ, les 65 h séparant les deux relevés tomberaient entières sur le second.
+    expect(computeDurations(chaîne).get('u2')).toBe(65);
+    expect(computeDurations([chaîne[0]!, avecDépart]).get('u2')).toBe(7);
+  });
+
+  it('un segment en attente porte sa durée comme un autre', () => {
+    const attente = UsageRecord.create({
+      id: 'u2',
+      equipmentId: 'e1',
+      memberId: null,
+      recordedAt: new Date('2026-07-02T10:00:00Z'),
+      meterReading: 158,
+      startReading: 100,
+    });
+    expect(computeDurations([record('u1', 100), attente]).get('u2')).toBe(58);
+  });
+
   it('liste vide', () => {
     expect(computeDurations([]).size).toBe(0);
   });

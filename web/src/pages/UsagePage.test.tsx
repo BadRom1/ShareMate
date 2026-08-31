@@ -191,3 +191,136 @@ describe('saisie du relevé', () => {
     expect(screen.getByRole('button', { name: 'Enregistrer le relevé' })).toBeDefined();
   });
 });
+
+describe('trou d’utilisation', () => {
+  it('un départ au-dessus du dernier relevé annonce l’écart et demande à qui il est', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openForm(user);
+
+    const depart = screen.getByLabelText(/Compteur au départ/);
+    await user.clear(depart);
+    await user.type(depart, '158');
+    await user.type(screen.getByLabelText(/Durée d'utilisation/), '7');
+
+    expect(screen.getByText(/58 h ont tourné entre le dernier relevé/)).toBeDefined();
+    await user.selectOptions(screen.getByLabelText(/À qui sont ces/), 'm2');
+    await user.click(screen.getByRole('button', { name: 'Enregistrer le relevé' }));
+
+    await waitFor(() =>
+      expect(stub.recordUsage).toHaveBeenCalledWith(
+        expect.objectContaining({ startReading: 158, duration: 7, gapMemberId: 'm2' }),
+      ),
+    );
+  });
+
+  it('sans écart, aucune question n’est posée et rien n’est attribué', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openForm(user);
+
+    await user.type(screen.getByLabelText(/Durée d'utilisation/), '5');
+    expect(screen.queryByLabelText(/À qui sont ces/)).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Enregistrer le relevé' }));
+
+    await waitFor(() =>
+      expect(stub.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ startReading: 100, gapMemberId: null })),
+    );
+  });
+
+  it('annonce les heures laissées en attente par la saisie', async () => {
+    const user = userEvent.setup();
+    stub.recordUsage.mockResolvedValue({
+      ...aUsageRecord({ meterReading: 165, startReading: 158, duration: 7 }),
+      gap: aUsageRecord({ id: 'u9', memberId: null, meterReading: 158, startReading: 100, duration: 58 }),
+    });
+    renderPage();
+    await openForm(user);
+
+    await user.type(screen.getByLabelText(/Durée d'utilisation/), '7');
+    await user.click(screen.getByRole('button', { name: 'Enregistrer le relevé' }));
+
+    expect(await screen.findByText(/58 h restent en attente d'attribution/)).toBeDefined();
+  });
+
+  it('n’offre pas de supprimer des heures en attente que le compteur atteste', async () => {
+    stub.usageByEquipment.mockResolvedValue([
+      aUsageRecord({ id: 'u9', memberId: null, meterReading: 58, startReading: 0, duration: 58 }),
+    ]);
+    renderPage();
+
+    expect(await screen.findByRole('button', { name: "C'était moi" })).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Supprimer' })).toBeNull();
+  });
+
+  it('signale les heures en attente et les reprend d’un geste', async () => {
+    const user = userEvent.setup();
+    stub.usageByEquipment.mockResolvedValue([
+      aUsageRecord({ id: 'u9', memberId: null, meterReading: 158, startReading: 100, duration: 58 }),
+    ]);
+    renderPage();
+
+    expect(await screen.findByText(/58 h en attente d'attribution/)).toBeDefined();
+    await user.click(screen.getByRole('button', { name: "C'était moi" }));
+
+    await waitFor(() => expect(stub.updateUsage).toHaveBeenCalledWith('u9', { memberId: 'm1' }));
+    expect(await screen.findByText('Relevé attribué.')).toBeDefined();
+  });
+});
+
+describe('correction et suppression', () => {
+  beforeEach(() => {
+    stub.usageByEquipment.mockResolvedValue([
+      aUsageRecord({ id: 'u1', memberId: 'm1', meterReading: 120, startReading: 100, duration: 20 }),
+    ]);
+    // Un relevé plus haut existe : la suppression laissera donc ses heures en attente.
+    stub.maintenanceStatus.mockResolvedValue(aMaintenanceStatus({ currentReading: 160 }));
+  });
+
+  it('corrige le compteur et réattribue le relevé', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Modifier' }));
+    const compteur = screen.getByLabelText(/Compteur total/);
+    expect(compteur).toHaveProperty('value', '120');
+    await user.clear(compteur);
+    await user.type(compteur, '115');
+    await user.selectOptions(screen.getByLabelText('Attribué à'), 'm2');
+    await user.click(screen.getByRole('button', { name: 'Enregistrer la correction' }));
+
+    await waitFor(() =>
+      expect(stub.updateUsage).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ meterReading: 115, startReading: 100, memberId: 'm2' }),
+      ),
+    );
+    expect(await screen.findByText('Relevé corrigé.')).toBeDefined();
+  });
+
+  it('remet un relevé en attente d’attribution', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Modifier' }));
+    await user.selectOptions(screen.getByLabelText('Attribué à'), '');
+    await user.click(screen.getByRole('button', { name: 'Enregistrer la correction' }));
+
+    await waitFor(() =>
+      expect(stub.updateUsage).toHaveBeenCalledWith('u1', expect.objectContaining({ memberId: null })),
+    );
+  });
+
+  it('ne supprime qu’après confirmation, en disant ce que deviennent les heures', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Supprimer' }));
+    expect(screen.getByText(/ses heures restent en attente d.attribution/)).toBeDefined();
+    expect(stub.deleteUsage).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Supprimer le relevé' }));
+    await waitFor(() => expect(stub.deleteUsage).toHaveBeenCalledWith('u1'));
+    expect(await screen.findByText('Relevé supprimé.')).toBeDefined();
+  });
+});

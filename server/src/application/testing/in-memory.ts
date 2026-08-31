@@ -156,6 +156,9 @@ function byRecordedAt(a: UsageRecord, b: UsageRecord): number {
 
 export class InMemoryUsageRecordRepository implements UsageRecordRepository {
   private items = new Map<string, UsageRecord>();
+  async findById(id: string) {
+    return this.items.get(id) ?? null;
+  }
   async findByEquipmentId(equipmentId: string) {
     return [...this.items.values()].filter((u) => u.equipmentId === equipmentId).sort(byRecordedAt);
   }
@@ -168,6 +171,9 @@ export class InMemoryUsageRecordRepository implements UsageRecordRepository {
   }
   async save(record: UsageRecord) {
     this.items.set(record.id, record);
+  }
+  async delete(id: string) {
+    this.items.delete(id);
   }
 }
 

@@ -837,6 +837,92 @@ describe('API — parcours complet du MVP', () => {
   });
 });
 
+describe('API — relevés : trou d’utilisation, correction, suppression', () => {
+  it('un départ au-dessus du dernier relevé ouvre un segment que le cercle attribue ensuite', async () => {
+    const { equipment, alice, bruno, chloe } = await setupMembersAndEquipment();
+
+    await post('/api/usage', { equipmentId: equipment.id, meterReading: 100 }, alice.cookies);
+
+    // Bruno trouve l'engin à 158 h alors que le dernier relevé s'arrête à 100 : il ne prend que les siennes.
+    const saisie = await post(
+      '/api/usage',
+      { equipmentId: equipment.id, startReading: 158, meterReading: 165 },
+      bruno.cookies,
+    );
+    expect(saisie.statusCode).toBe(201);
+    const relevé = saisie.json() as {
+      id: string;
+      duration: number;
+      gap: { id: string; memberId: string | null; duration: number };
+    };
+    expect(relevé).toMatchObject({ memberId: bruno.id, duration: 7 });
+    expect(relevé.gap).toMatchObject({ memberId: null, duration: 58 });
+
+    // Alice reconnaît les heures laissées en attente.
+    const attribution = await app.inject({
+      method: 'PUT',
+      url: `/api/usage/${relevé.gap.id}`,
+      payload: { memberId: alice.id },
+      cookies: alice.cookies,
+    });
+    expect(attribution.statusCode).toBe(200);
+    expect(attribution.json()).toMatchObject({ memberId: alice.id, duration: 58 });
+
+    const aliceHistory = await get(`/api/members/${alice.id}/usage`, alice.cookies);
+    expect((aliceHistory.json() as { duration: number | null }[]).map((u) => u.duration)).toEqual(
+      expect.arrayContaining([58, null]),
+    );
+
+    // Hors du cercle, le relevé n'existe pas : ni correction, ni suppression.
+    const pirate = await app.inject({
+      method: 'PUT',
+      url: `/api/usage/${relevé.id}`,
+      payload: { notes: 'pirate' },
+      cookies: chloe.cookies,
+    });
+    expect(pirate.statusCode).toBe(404);
+  });
+
+  it('corrige un relevé, puis le supprime : ses heures restent au compteur', async () => {
+    const { equipment, alice, bruno } = await setupMembersAndEquipment();
+    await post('/api/usage', { equipmentId: equipment.id, meterReading: 100 }, alice.cookies);
+    const saisi = (await post('/api/usage', { equipmentId: equipment.id, duration: 50 }, bruno.cookies)).json() as {
+      id: string;
+    };
+    await post('/api/usage', { equipmentId: equipment.id, duration: 10 }, alice.cookies);
+
+    const corrigé = await app.inject({
+      method: 'PUT',
+      url: `/api/usage/${saisi.id}`,
+      payload: { meterReading: 140, fuelAddedLiters: 20, notes: 'Plein fait', memberId: alice.id },
+      cookies: alice.cookies,
+    });
+    expect(corrigé.statusCode).toBe(200);
+    expect(corrigé.json()).toMatchObject({ meterReading: 140, duration: 40, memberId: alice.id, notes: 'Plein fait' });
+
+    // Un compteur au-delà du relevé suivant réordonnerait la chaîne : refusé.
+    const trop = await app.inject({
+      method: 'PUT',
+      url: `/api/usage/${saisi.id}`,
+      payload: { meterReading: 500 },
+      cookies: alice.cookies,
+    });
+    expect(trop.statusCode).toBe(400);
+
+    const supprimé = await app.inject({ method: 'DELETE', url: `/api/usage/${saisi.id}`, cookies: bruno.cookies });
+    expect(supprimé.statusCode).toBe(204);
+
+    // Le compteur n'a pas bougé, et les heures du relevé supprimé attendent leur auteur.
+    const maintenance = await get(`/api/equipments/${equipment.id}/maintenance`, alice.cookies);
+    expect(maintenance.json()).toMatchObject({ currentReading: 160 });
+    const history = (await get(`/api/equipments/${equipment.id}/usage`, alice.cookies)).json() as {
+      memberId: string | null;
+      duration: number | null;
+    }[];
+    expect(history.filter((u) => u.memberId === null).map((u) => u.duration)).toEqual([40]);
+  });
+});
+
 describe('API — la session ne tient qu’au cookie httpOnly', () => {
   it('le token de session n’est jamais exposé dans le corps', async () => {
     const res = await post('/api/auth/bootstrap', { name: 'Alice', password: PASSWORD });
@@ -2093,7 +2179,9 @@ describe('API — cloisonnement par cercle (aucune fuite hors du cercle)', () =>
       )
     ).json() as { id: string };
     await post('/api/usage', { equipmentId: equipment.id, meterReading: 100, isMaintenance: true }, alice.cookies);
-    await post('/api/usage', { equipmentId: equipment.id, meterReading: 200 }, alice.cookies);
+    const usage = (
+      await post('/api/usage', { equipmentId: equipment.id, meterReading: 200 }, alice.cookies)
+    ).json() as { id: string };
     const expense = (
       await post(
         '/api/expenses',
@@ -2120,7 +2208,7 @@ describe('API — cloisonnement par cercle (aucune fuite hors du cercle)', () =>
       )
     ).json() as { id: string };
     const item = ((await get(`/api/checklists/${checklist.id}/items`, alice.cookies)).json() as { id: string }[])[0]!;
-    return { ...ctx, reservation, expense, thread, checklist, item };
+    return { ...ctx, reservation, usage, expense, thread, checklist, item };
   }
 
   it('masque en 404 toutes les routes rattachées à un équipement, en lecture comme en écriture', async () => {
@@ -2164,6 +2252,8 @@ describe('API — cloisonnement par cercle (aucune fuite hors du cercle)', () =>
       { method: 'PUT', url: `/api/reservations/${f.reservation.id}`, payload: { notes: 'pirate' } },
       { method: 'DELETE', url: `/api/reservations/${f.reservation.id}` },
       { method: 'POST', url: '/api/usage', payload: { equipmentId: e, meterReading: 300 } },
+      { method: 'PUT', url: `/api/usage/${f.usage.id}`, payload: { notes: 'pirate' } },
+      { method: 'DELETE', url: `/api/usage/${f.usage.id}` },
       {
         method: 'POST',
         url: '/api/expenses',

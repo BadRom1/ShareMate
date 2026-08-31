@@ -21,6 +21,7 @@ import type {
   SubEquipment,
   ThreadSummary,
   UsageRecord,
+  RecordedUsage,
 } from '../api';
 
 export function aMember(over: Partial<DirectoryMember> = {}): DirectoryMember {
@@ -194,6 +195,7 @@ export function aUsageRecord(over: Partial<UsageRecord> = {}): UsageRecord {
     memberId: 'm1',
     recordedAt: '2026-03-02T18:00:00.000Z',
     meterReading: 120,
+    startReading: 116,
     duration: 4,
     fuelAddedLiters: null,
     notes: null,
@@ -280,7 +282,9 @@ export function createApiStub() {
     updateReservation: vi.fn(async () => aReservation()),
     cancelReservation: vi.fn(async (_id: string) => {}),
 
-    recordUsage: vi.fn(async (_input: unknown) => aUsageRecord()),
+    recordUsage: vi.fn(async (_input: unknown): Promise<RecordedUsage> => ({ ...aUsageRecord(), gap: null })),
+    updateUsage: vi.fn(async (_id: string, _changes: unknown) => aUsageRecord()),
+    deleteUsage: vi.fn(async (_id: string) => {}),
     alerts: vi.fn(async () => [] as MaintenanceStatus[]),
     maintenanceStatus: vi.fn(async (_equipmentId: string) => aMaintenanceStatus()),
     usageByEquipment: vi.fn(async (_equipmentId: string) => [] as UsageRecord[]),

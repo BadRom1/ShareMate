@@ -26,6 +26,9 @@ export const AJV_OPTIONS = { removeAdditional: false, coerceTypes: false };
 /** Identifiant opaque (UUID côté serveur) : borné, jamais interprété à ce niveau. */
 export const id = { type: 'string', minLength: 1, maxLength: 64 };
 
+/** Identifiant facultatif, que le client peut aussi remettre à `null` (relevé sans membre). */
+export const nullableId = { type: ['string', 'null'], minLength: 1, maxLength: 64 };
+
 /** Paramètre d'URL `:id`, de loin le plus fréquent. */
 export const idParams = params({ id });
 

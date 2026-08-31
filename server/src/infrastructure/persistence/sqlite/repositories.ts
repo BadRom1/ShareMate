@@ -490,9 +490,10 @@ export class SqliteReservationRepository implements ReservationRepository {
 interface UsageRow {
   id: string;
   equipment_id: string;
-  member_id: string;
+  member_id: string | null;
   recorded_at: string;
   meter_reading: number;
+  start_reading: number | null;
   fuel_added_liters: number | null;
   notes: string | null;
   is_maintenance: number;
@@ -508,10 +509,16 @@ export class SqliteUsageRecordRepository implements UsageRecordRepository {
       memberId: row.member_id,
       recordedAt: new Date(row.recorded_at),
       meterReading: row.meter_reading,
+      startReading: row.start_reading,
       fuelAddedLiters: row.fuel_added_liters,
       notes: row.notes,
       isMaintenance: row.is_maintenance === 1,
     });
+  }
+
+  async findById(id: string): Promise<UsageRecord | null> {
+    const row = this.db.prepare('SELECT * FROM usage_records WHERE id = ?').get(id) as UsageRow | undefined;
+    return row ? this.toEntity(row) : null;
   }
 
   async findByEquipmentId(equipmentId: string): Promise<UsageRecord[]> {
@@ -543,8 +550,8 @@ export class SqliteUsageRecordRepository implements UsageRecordRepository {
   async save(record: UsageRecord): Promise<void> {
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO usage_records (id, equipment_id, member_id, recorded_at, meter_reading, fuel_added_liters, notes, is_maintenance)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO usage_records (id, equipment_id, member_id, recorded_at, meter_reading, start_reading, fuel_added_liters, notes, is_maintenance)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.id,
@@ -552,10 +559,15 @@ export class SqliteUsageRecordRepository implements UsageRecordRepository {
         record.memberId,
         record.recordedAt.toISOString(),
         record.meterReading,
+        record.startReading,
         record.fuelAddedLiters,
         record.notes,
         record.isMaintenance ? 1 : 0,
       );
+  }
+
+  async delete(id: string): Promise<void> {
+    this.db.prepare('DELETE FROM usage_records WHERE id = ?').run(id);
   }
 }
 
