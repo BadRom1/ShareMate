@@ -111,6 +111,57 @@ describe('formulaire de dépense', () => {
     );
   });
 
+  it('refuse un montant nul sans téléverser le justificatif', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openForm(user);
+
+    await user.type(screen.getByLabelText('Libellé'), 'Gazole');
+    await user.type(screen.getByLabelText('Montant (€)'), '0');
+    await user.upload(
+      screen.getByLabelText('Justificatif (image ou PDF, optionnel)'),
+      new File(['x'], 'facture.jpg', { type: 'image/jpeg' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
+
+    expect(await screen.findByText('Le montant de la dépense doit être supérieur à 0 €.')).toBeDefined();
+    // Le refus tombe avant l'envoi : pas de fichier orphelin sur le serveur.
+    expect(stub.uploadReceipt).not.toHaveBeenCalled();
+    expect(stub.addExpense).not.toHaveBeenCalled();
+  });
+
+  it('refuse un montant plus précis que le centime plutôt que de l’arrondir en silence', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openForm(user);
+
+    await user.type(screen.getByLabelText('Libellé'), 'Gazole');
+    await user.type(screen.getByLabelText('Montant (€)'), '90,555');
+    await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
+
+    expect(
+      await screen.findByText('Le montant de la dépense ne va pas au-delà du centime (deux décimales).'),
+    ).toBeDefined();
+    expect(stub.addExpense).not.toHaveBeenCalled();
+  });
+
+  it('refuse une part personnalisée mal saisie, en nommant le membre', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openForm(user);
+
+    await user.type(screen.getByLabelText('Libellé'), 'Assurance');
+    await user.type(screen.getByLabelText('Montant (€)'), '200');
+    await user.selectOptions(screen.getByLabelText('Répartition (au sein du cercle)'), 'CUSTOM');
+    await user.type(screen.getByLabelText('Alice (€)'), '200,005');
+    await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
+
+    expect(
+      await screen.findByText('La part de « Alice » ne va pas au-delà du centime (deux décimales).'),
+    ).toBeDefined();
+    expect(stub.addExpense).not.toHaveBeenCalled();
+  });
+
   it('téléverse le justificatif avant la dépense et transmet son chemin', async () => {
     const user = userEvent.setup();
     stub.uploadReceipt.mockResolvedValue('/uploads/0189a4c2-1f3b-4d5e-8a9b-0c1d2e3f4a5b.jpg');

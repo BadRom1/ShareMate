@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { api, receiptUrl } from '../api';
 import type { Equipment, Expense, ExpenseCategory, Member, SettlementTransaction, SplitInput } from '../api';
 import { CATEGORY_LABELS, formatDate, formatEuros } from '../format';
-import { parseDecimal } from '../decimal';
+import { decimalPlaces, parseDecimal } from '../decimal';
 import { errorMessage, firstError, useApiResource } from '../useApiResource';
 import { Modal } from '../components/Modal';
 import { DecimalInput } from '../components/DecimalInput';
@@ -92,6 +92,32 @@ export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
     setShowForm(false);
   }
 
+  /**
+   * Montant saisi, ou ce qui cloche avec lui. Le champ étant du texte (la virgule des
+   * claviers mobiles), c'est ici que se font les refus que `type="number"` opérait :
+   * un montant nul, et une précision au-delà du centime que l'arrondi trahirait en silence.
+   */
+  function lireMontant(saisie: string): { montant: number } | { refus: 'POSITIF' | 'CENTIME' } {
+    const montant = parseDecimal(saisie);
+    if (montant === null || montant <= 0) return { refus: 'POSITIF' };
+    if (decimalPlaces(saisie) > 2) return { refus: 'CENTIME' };
+    return { montant };
+  }
+
+  /** Première part personnalisée mal saisie, le cas échéant. */
+  function refusDesParts(): string | null {
+    if (form.splitType !== 'CUSTOM') return null;
+    for (const m of circle) {
+      const saisie = form.customAmounts[m.id] ?? '';
+      const part = lireMontant(saisie);
+      // Une part vide ou nulle n'est pas une erreur : ce membre n'a simplement pas de part.
+      if ('refus' in part && part.refus === 'CENTIME') {
+        return `La part de « ${m.name} » ne va pas au-delà du centime (deux décimales).`;
+      }
+    }
+    return null;
+  }
+
   function buildSplit(): SplitInput {
     if (form.splitType === 'EQUAL') return { type: 'EQUAL', memberIds: form.equalMemberIds };
     if (form.splitType === 'USAGE_PRORATED') return { type: 'USAGE_PRORATED' };
@@ -107,9 +133,20 @@ export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setActionError(null);
-    const amountEuros = parseDecimal(form.amountEuros);
-    if (amountEuros === null) {
-      setActionError('Indiquez le montant de la dépense.');
+    // Tout se vérifie avant le téléversement du justificatif : un refus après coup
+    // laisserait un fichier orphelin sur le serveur.
+    const montant = lireMontant(form.amountEuros);
+    if ('refus' in montant) {
+      setActionError(
+        montant.refus === 'POSITIF'
+          ? 'Le montant de la dépense doit être supérieur à 0 €.'
+          : 'Le montant de la dépense ne va pas au-delà du centime (deux décimales).',
+      );
+      return;
+    }
+    const refusParts = refusDesParts();
+    if (refusParts !== null) {
+      setActionError(refusParts);
       return;
     }
     setBusy(true);
@@ -121,7 +158,7 @@ export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
       await api.addExpense({
         equipmentId: equipment.id,
         label: form.label,
-        amountEuros,
+        amountEuros: montant.montant,
         payerId: form.payerId,
         date: form.date,
         category: form.category,
