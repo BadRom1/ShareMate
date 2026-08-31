@@ -69,6 +69,36 @@ export async function compressImage(file: File): Promise<File> {
 }
 
 /**
+ * Fichier choisi par un membre, retenu tout de suite puis remplacé par sa version allégée dès
+ * qu'elle est prête.
+ *
+ * Attendre la compression pour retenir quoi que ce soit laissait un trou : pendant ces quelques
+ * centaines de millisecondes le formulaire se croyait sans fichier, un envoi lancé là partait sans
+ * la pièce jointe — et l'image, arrivée trop tard, se collait au message *suivant*. Retenir
+ * l'original d'abord ferme le trou : envoyer pendant la compression envoie la photo entière,
+ * exactement ce qui se passait avant qu'on la compresse.
+ *
+ * Le remplacement ne se fait que si l'original est toujours celui qui est retenu. C'est l'identité
+ * du fichier qui l'arbitre, et non l'ordre d'arrivée des compressions : un second choix, un envoi
+ * parti, un formulaire vidé — dans les trois cas ce qui est retenu n'est plus l'original, et la
+ * version allégée est simplement abandonnée.
+ *
+ * `retain` a la signature d'un `setState` fonctionnel de React, qui est le seul moyen de décider
+ * au vu de la valeur courante plutôt qu'au vu de celle qu'un rendu passé avait capturée.
+ */
+export function pickCompressed(
+  file: File | null,
+  retain: (update: (current: File | null) => File | null) => void,
+): void {
+  retain(() => file);
+  if (!file) return;
+  void compressImage(file).then((lighter) => {
+    if (lighter === file) return;
+    retain((current) => (current === file ? lighter : current));
+  });
+}
+
+/**
  * Pixels de l'image. `createImageBitmap` décode hors du fil principal — l'interface ne se fige pas
  * pendant les quelques centaines de millisecondes que prend une photo de 12 Mpx — et
  * `from-image` applique l'orientation EXIF : sans elle, une photo prise à la verticale repartirait
@@ -94,10 +124,13 @@ export function fitted(width: number, height: number): { width: number; height: 
  * que le JPEG, et le serveur l'accepte partout où il accepte une image.
  */
 async function encode(bitmap: ImageBitmap, width: number, height: number): Promise<Blob | null> {
-  const webp = await paint(bitmap, width, height, 'image/webp');
+  // L'échec est rattrapé ici, pas plus haut : un encodeur qui refuse le WebP en levant plutôt
+  // qu'en rendant autre chose ferait sinon abandonner la compression entière, là où il suffit de
+  // demander l'autre format.
+  const webp = await paint(bitmap, width, height, 'image/webp').catch(() => null);
   if (webp?.type === 'image/webp') return webp;
-  // Le navigateur ne sait pas écrire le WebP (Safari d'avant 16.4) : la spécification lui fait
-  // rendre un PNG à la place, plus lourd que la photo d'origine. On repasse alors en JPEG.
+  // Le navigateur ne sait pas écrire le WebP (Safari d'avant 16.4) : selon la manière dont il le
+  // signale, il rend un PNG — plus lourd que la photo d'origine — ou lève. On repasse en JPEG.
   return paint(bitmap, width, height, 'image/jpeg');
 }
 

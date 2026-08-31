@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { api } from '../api';
 import type { Equipment, Member } from '../api';
+import { pickCompressed } from '../compressImage';
 import { formatRelative } from '../format';
 import { clearErrors, errorMessage, firstError, useApiResource } from '../useApiResource';
 import { IconBack, IconChat, IconCheck, IconClose, IconEdit, IconSend, IconTrash } from '../components/icons';
@@ -373,7 +374,11 @@ export function DiscussionsPage({ members, currentMemberId, equipment, initialTh
               rows={2}
               maxLength={4000}
             />
-            <AttachmentField onPick={setFile} disabled={busy} label="Joindre un fichier au message" />
+            <AttachmentField
+              onPick={(picked) => pickCompressed(picked, setFile)}
+              disabled={busy}
+              label="Joindre un fichier au message"
+            />
             <button
               type="submit"
               className="icon-btn icon-primary"
