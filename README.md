@@ -345,7 +345,9 @@ admin:designate`) et jamais deviné. À tout autre, `/api/admin/*` répond `403`
 - **Entrées** : schéma JSON sur le corps, les paramètres et la querystring de chaque route ; objets
   fermés, longueurs bornées. Un chemin de justificatif n'est accepté que sous la forme exacte que
   produit le téléversement, ce qui interdit d'afficher une URL externe sous couvert de reçu.
-- **Justificatifs** : servis par une route applicative qui remonte à la dépense qui les porte,
+- **Justificatifs** : déposés avec la dépense qui les porte, en une seule requête — un fichier
+  déposé seul survivrait au refus de la dépense sans que rien ne le nomme, donc hors de portée de
+  la purge. Servis par une route applicative qui remonte à la dépense qui les porte,
   jamais mis en cache par le client (`Cache-Control: private, no-store`, `NetworkOnly` côté service
   worker), supprimés avec la dépense — du bucket **et** du volume, puisqu'après une bascule on ne
   sait plus lequel des deux les porte. La déconnexion vide les caches `sharemate-*` de l'appareil.

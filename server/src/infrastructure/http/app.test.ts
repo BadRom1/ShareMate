@@ -159,15 +159,37 @@ async function setupMembersAndEquipment(target: FastifyInstance = app) {
 }
 
 /** Corps multipart minimal : `app.inject` n'a pas de constructeur de formulaire. */
-function filePayload(filename: string, content: Buffer, contentType = 'image/png') {
+function filePayload(filename: string, content: Buffer, contentType = 'image/png', champs: Champs = {}) {
   const boundary = '----sharemateTestBoundary';
+  const parties = Object.entries(champs).map((entrée) =>
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${entrée[0]}"\r\n\r\n${entrée[1]}\r\n`),
+  );
   const head =
     `--${boundary}\r\n` +
     `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
     `Content-Type: ${contentType}\r\n\r\n`;
   return {
-    payload: Buffer.concat([Buffer.from(head), content, Buffer.from(`\r\n--${boundary}--\r\n`)]),
+    payload: Buffer.concat([...parties, Buffer.from(head), content, Buffer.from(`\r\n--${boundary}--\r\n`)]),
     headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+  };
+}
+
+type Champs = Record<string, string>;
+
+/**
+ * Champs d'une dépense accompagnée de son justificatif. Le fichier ne se dépose plus seul : il
+ * part avec la dépense qui le porte, sinon rien ne le nommerait en cas de refus.
+ */
+function champsDépense(equipmentId: string, payerId: string, extra: Champs = {}): Champs {
+  return {
+    equipmentId,
+    label: 'Plein gasoil',
+    amountEuros: '90',
+    payerId,
+    date: '2026-07-01',
+    category: 'FUEL',
+    split: JSON.stringify({ type: 'EQUAL' }),
+    ...extra,
   };
 }
 
@@ -205,32 +227,16 @@ describe('API — justificatifs et front statique', () => {
     return sessionCookie(res);
   }
 
-  /** Téléverse un justificatif et le rattache à une dépense de `equipmentId`. */
+  /** Enregistre une dépense de `equipmentId` avec son justificatif, en une seule requête. */
   async function dépenseAvecJustificatif(equipmentId: string, payerId: string, cookies: Cookies) {
     const contenu = Buffer.from(`justificatif-${equipmentId}`);
-    const { payload, headers } = filePayload('recu.png', contenu);
-    const upload = await staticApp.inject({ method: 'POST', url: '/api/uploads/receipts', payload, headers, cookies });
-    expect(upload.statusCode).toBe(201);
-    const { path: servedPath } = upload.json() as { path: string };
+    const { payload, headers } = filePayload('recu.png', contenu, 'image/png', champsDépense(equipmentId, payerId));
+    const dépense = await staticApp.inject({ method: 'POST', url: '/api/expenses/file', payload, headers, cookies });
+    expect(dépense.statusCode, dépense.body).toBe(201);
+    const { id, receiptPath: servedPath } = dépense.json() as { id: string; receiptPath: string };
     expect(servedPath).toMatch(/^\/uploads\/[\w-]+\.png$/);
-    const dépense = await post(
-      '/api/expenses',
-      {
-        equipmentId,
-        label: 'Plein gasoil',
-        amountEuros: 90,
-        payerId,
-        date: '2026-07-01',
-        category: 'FUEL',
-        split: { type: 'EQUAL' },
-        receiptPath: servedPath,
-      },
-      cookies,
-      staticApp,
-    );
-    expect(dépense.statusCode).toBe(201);
     const fichier = path.join(uploadsDir, servedPath.slice('/uploads/'.length));
-    return { id: (dépense.json() as { id: string }).id, servedPath, contenu, fichier };
+    return { id, servedPath, contenu, fichier };
   }
 
   it('téléverse un justificatif, puis ne le sert qu’avec une session', async () => {
@@ -312,18 +318,57 @@ describe('API — justificatifs et front statique', () => {
   });
 
   it('refuse les formats non autorisés', async () => {
-    const cookies = await session();
-    const { payload, headers } = filePayload('charge.svg', Buffer.from('<svg/>'), 'image/svg+xml');
-    const res = await staticApp.inject({ method: 'POST', url: '/api/uploads/receipts', payload, headers, cookies });
+    const { equipment, alice } = await setupMembersAndEquipment(staticApp);
+    const { payload, headers } = filePayload(
+      'charge.svg',
+      Buffer.from('<svg/>'),
+      'image/svg+xml',
+      champsDépense(equipment.id, alice.id),
+    );
+    const res = await staticApp.inject({
+      method: 'POST',
+      url: '/api/expenses/file',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
     expect(res.statusCode).toBe(400);
+    // Refusé avant toute écriture : le format se vérifie sur le nom, pas sur le fichier déposé.
+    expect(fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : []).toEqual([]);
+  });
+
+  /**
+   * Le fichier n'existe que si la dépense existe : refusée, elle emporte le justificatif qui vient
+   * d'être écrit. Sans cela il restait sur le disque sans qu'aucune dépense ne le nomme — donc
+   * hors de portée de la purge, qui remonte des dépenses aux fichiers.
+   */
+  it('ne laisse aucun justificatif derrière une dépense refusée', async () => {
+    const { equipment, alice, chloe } = await setupMembersAndEquipment(staticApp);
+    const { payload, headers } = filePayload(
+      'recu.png',
+      Buffer.from('justificatif-orphelin'),
+      'image/png',
+      // Chloé n'est pas dans le cercle de la minipelle : la dépense est refusée après l'écriture.
+      champsDépense(equipment.id, chloe.id),
+    );
+
+    const res = await staticApp.inject({
+      method: 'POST',
+      url: '/api/expenses/file',
+      payload,
+      headers,
+      cookies: alice.cookies,
+    });
+
+    expect(res.statusCode, res.body).toBe(400);
+    expect(fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : []).toEqual([]);
   });
 
   it('ne sert aucun justificatif via un chemin non canonique ou une traversée (GHSA-8pvw / GHSA-83w8)', async () => {
-    const cookies = await session();
-    const contenu = Buffer.from('justificatif-confidentiel');
-    const { payload, headers } = filePayload('recu.png', contenu);
-    const upload = await staticApp.inject({ method: 'POST', url: '/api/uploads/receipts', payload, headers, cookies });
-    const nom = (upload.json() as { path: string }).path.split('/').pop() as string;
+    const { equipment, alice } = await setupMembersAndEquipment(staticApp);
+    const cookies = alice.cookies;
+    const { servedPath, contenu } = await dépenseAvecJustificatif(equipment.id, alice.id, cookies);
+    const nom = servedPath.split('/').pop() as string;
 
     // Variantes non canoniques du chemin : aucune ne doit livrer le fichier sans session.
     const sondages = [
@@ -379,7 +424,7 @@ describe('API — justificatifs et front statique', () => {
     // Le routeur décode le pourcentage avant d'apparier, l'URL brute non : décider de
     // l'authentification sur `request.raw.url` laissait `/%61pi/...` atteindre le handler.
     const { payload, headers } = filePayload('recu.png', Buffer.from('charge-utile-anonyme'));
-    const dépôt = await staticApp.inject({ method: 'POST', url: '/%61pi/uploads/receipts', payload, headers });
+    const dépôt = await staticApp.inject({ method: 'POST', url: '/%61pi/expenses/file', payload, headers });
     expect(dépôt.statusCode, `corps : ${dépôt.body}`).toBe(401);
     // Aucun octet écrit : le remplissage de disque anonyme passait par là.
     expect(fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : []).toEqual([]);
@@ -1291,12 +1336,16 @@ describe('API — refus de téléversement rendus en français', () => {
   // Le plafond annoncé doit être celui de la route qui refuse : le greffon multipart lève le même
   // code pour toutes, et un chiffre unique renvoyait le membre à un plafond qui n'était pas le sien.
   it('refuse un justificatif trop lourd au plafond de sa route, et non à celui du dossier', async () => {
-    const { alice } = await setupMembersAndEquipment(filesApp);
-    const { payload, headers } = multipart({}, Buffer.alloc(12 * 1024 * 1024, 0x41), 'recu.jpg');
+    const { equipment, alice } = await setupMembersAndEquipment(filesApp);
+    const { payload, headers } = multipart(
+      champsDépense(equipment.id, alice.id),
+      Buffer.alloc(12 * 1024 * 1024, 0x41),
+      'recu.jpg',
+    );
 
     const res = await filesApp.inject({
       method: 'POST',
-      url: '/api/uploads/receipts',
+      url: '/api/expenses/file',
       payload,
       headers,
       cookies: alice.cookies,
@@ -1316,7 +1365,7 @@ describe('API — refus de téléversement rendus en français', () => {
     const dépôts = [
       ['/api/documents/file', { equipmentId: equipment.id, category: 'MANUAL' }],
       ['/api/messages/file', { threadId }],
-      ['/api/uploads/receipts', {}],
+      ['/api/expenses/file', champsDépense(equipment.id, alice.id)],
     ] as const;
 
     for (const [url, champs] of dépôts) {
@@ -1657,39 +1706,26 @@ describe('API — stockage dans un bucket (justificatifs et documents)', () => {
     await bucketApp.close();
   });
 
+  /** Dépense et justificatif en une requête, sur l'app branchée au bucket. */
+  async function dépenseAvecJustificatif(equipmentId: string, payerId: string, cookies: Cookies) {
+    const { payload, headers } = filePayload(
+      'recu.png',
+      Buffer.from('le reçu'),
+      'image/png',
+      champsDépense(equipmentId, payerId),
+    );
+    const res = await bucketApp.inject({ method: 'POST', url: '/api/expenses/file', payload, headers, cookies });
+    expect(res.statusCode, res.body).toBe(201);
+    return res.json() as { id: string; receiptPath: string };
+  }
+
   it('redirige vers une URL signée plutôt que de servir le justificatif', async () => {
     const { equipment, alice } = await setupMembersAndEquipment(bucketApp);
-    const { payload, headers } = filePayload('recu.png', Buffer.from('le reçu'));
-    const upload = await bucketApp.inject({
-      method: 'POST',
-      url: '/api/uploads/receipts',
-      payload,
-      headers,
-      cookies: alice.cookies,
-    });
-    expect(upload.statusCode).toBe(201);
-    const { path: receiptPath } = upload.json() as { path: string };
+    const { receiptPath } = await dépenseAvecJustificatif(equipment.id, alice.id, alice.cookies);
     // Le chemin public n'a pas changé de forme : les dépenses existantes restent valides.
     expect(receiptPath).toMatch(/^\/uploads\/[\w-]+\.png$/);
     // L'objet, lui, est rangé sous son propre préfixe dans le bucket.
     expect([...magasin.objets.keys()]).toEqual([`receipts/${receiptPath.slice('/uploads/'.length)}`]);
-
-    const dépense = await post(
-      '/api/expenses',
-      {
-        equipmentId: equipment.id,
-        label: 'Plein gasoil',
-        amountEuros: 90,
-        payerId: alice.id,
-        date: '2026-03-02',
-        category: 'FUEL',
-        split: { type: 'EQUAL' },
-        receiptPath,
-      },
-      alice.cookies,
-      bucketApp,
-    );
-    expect(dépense.statusCode).toBe(201);
 
     const lecture = await get(receiptPath, alice.cookies, bucketApp);
     expect(lecture.statusCode).toBe(302);
@@ -1701,30 +1737,7 @@ describe('API — stockage dans un bucket (justificatifs et documents)', () => {
 
   it('la redirection reste refusée hors du cercle', async () => {
     const { equipment, alice, chloe } = await setupMembersAndEquipment(bucketApp);
-    const { payload, headers } = filePayload('recu.png', Buffer.from('le reçu'));
-    const upload = await bucketApp.inject({
-      method: 'POST',
-      url: '/api/uploads/receipts',
-      payload,
-      headers,
-      cookies: alice.cookies,
-    });
-    const { path: receiptPath } = upload.json() as { path: string };
-    await post(
-      '/api/expenses',
-      {
-        equipmentId: equipment.id,
-        label: 'Plein gasoil',
-        amountEuros: 90,
-        payerId: alice.id,
-        date: '2026-03-02',
-        category: 'FUEL',
-        split: { type: 'EQUAL' },
-        receiptPath,
-      },
-      alice.cookies,
-      bucketApp,
-    );
+    const { receiptPath } = await dépenseAvecJustificatif(equipment.id, alice.id, alice.cookies);
 
     // Détenir le chemin ne suffit pas : la signature n'est émise qu'après le contrôle du cercle.
     const refusée = await get(receiptPath, chloe.cookies, bucketApp);
@@ -1765,35 +1778,12 @@ describe('API — stockage dans un bucket (justificatifs et documents)', () => {
 
   it('purge l’objet du bucket à la suppression de la dépense', async () => {
     const { equipment, alice } = await setupMembersAndEquipment(bucketApp);
-    const { payload, headers } = filePayload('recu.png', Buffer.from('le reçu'));
-    const upload = await bucketApp.inject({
-      method: 'POST',
-      url: '/api/uploads/receipts',
-      payload,
-      headers,
-      cookies: alice.cookies,
-    });
-    const { path: receiptPath } = upload.json() as { path: string };
-    const dépense = await post(
-      '/api/expenses',
-      {
-        equipmentId: equipment.id,
-        label: 'Plein gasoil',
-        amountEuros: 90,
-        payerId: alice.id,
-        date: '2026-03-02',
-        category: 'FUEL',
-        split: { type: 'EQUAL' },
-        receiptPath,
-      },
-      alice.cookies,
-      bucketApp,
-    );
+    const { id } = await dépenseAvecJustificatif(equipment.id, alice.id, alice.cookies);
     expect(magasin.objets.size).toBe(1);
 
     const supprimée = await bucketApp.inject({
       method: 'DELETE',
-      url: `/api/expenses/${(dépense.json() as { id: string }).id}`,
+      url: `/api/expenses/${id}`,
       cookies: alice.cookies,
     });
     expect(supprimée.statusCode).toBe(204);
@@ -3377,7 +3367,7 @@ describe('API — validation des requêtes (schémas)', () => {
       (await post('/api/expenses', dépense({ receiptPath: '/uploads/../secret.txt' }), alice.cookies)).statusCode,
     ).toBe(400);
 
-    // Seule la forme réellement produite par POST /api/uploads/receipts est acceptée.
+    // Seule la forme réellement produite par le dépôt d'un justificatif est acceptée.
     const valide = await post(
       '/api/expenses',
       dépense({ receiptPath: `/uploads/${crypto.randomUUID()}.png` }),
@@ -3546,12 +3536,14 @@ describe('API — plafonds de requêtes (rate-limit)', () => {
     expect((await membre('Bruno')).statusCode).toBe(201);
     expect((await membre('Chloé')).statusCode).toBe(429);
 
-    // Téléversement : 10 Mo par fichier, jamais supprimé — le plafond global serait trop haut.
+    // Dépense avec justificatif : 10 Mo par fichier, jamais supprimé — le plafond global serait
+    // trop haut. Le premier envoi est refusé par la route elle-même (aucun équipement ici), ce qui
+    // suffit : ce qui se vérifie est que le second n'atteint plus la route du tout.
     const envoi = () => {
       const { payload, headers } = filePayload('recu.png', Buffer.from('image-factice'));
-      return bridée.inject({ method: 'POST', url: '/api/uploads/receipts', payload, headers, cookies });
+      return bridée.inject({ method: 'POST', url: '/api/expenses/file', payload, headers, cookies });
     };
-    expect((await envoi()).statusCode).toBe(201);
+    expect((await envoi()).statusCode).not.toBe(429);
     expect((await envoi()).statusCode).toBe(429);
   });
 });

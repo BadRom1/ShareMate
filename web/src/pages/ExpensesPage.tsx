@@ -151,11 +151,7 @@ export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
     }
     setBusy(true);
     try {
-      let receiptPath: string | null = null;
-      if (form.receiptFile) {
-        receiptPath = await api.uploadReceipt(form.receiptFile);
-      }
-      await api.addExpense({
+      const dépense = {
         equipmentId: equipment.id,
         label: form.label,
         amountEuros: montant.montant,
@@ -163,8 +159,10 @@ export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
         date: form.date,
         category: form.category,
         split: buildSplit(),
-        receiptPath,
-      });
+      };
+      // Le justificatif part avec la dépense : téléversé à part, il resterait sur le serveur
+      // sans que rien ne le nomme dès que l'enregistrement est refusé.
+      await (form.receiptFile ? api.addExpenseWithReceipt(dépense, form.receiptFile) : api.addExpense(dépense));
       setShowForm(false);
       setForm({
         ...form,
