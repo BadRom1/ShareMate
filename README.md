@@ -37,9 +37,18 @@ partage des frais façon Tricount.
 - **Réservations** : calendrier de créneaux par équipement, détection de conflit (409 en cas de
   chevauchement), vue calendrier commune à tous les cercles du membre, récurrences plafonnées à
   52 occurrences.
-- **Suivi d'usage** : à chaque fin d'utilisation, saisie du relevé de compteur, carburant ajouté et
-  remarques ; historique par équipement et par membre ; **alertes d'entretien** dès qu'un seuil
-  d'heures/km est dépassé depuis la dernière maintenance déclarée.
+- **Suivi d'usage** : à chaque fin d'utilisation, saisie du **compteur au départ** et du relevé
+  d'arrivée, carburant ajouté et remarques ; historique par équipement et par membre ; **alertes
+  d'entretien** dès qu'un seuil d'heures/km est dépassé depuis la dernière maintenance déclarée.
+  Un relevé porte sa propre durée, au lieu de la déduire du relevé précédent : celui qui oublie sa
+  saisie ne fait plus porter ses heures au suivant. Quand le compteur trouvé au départ dépasse le
+  dernier relevé connu, l'engin a tourné pour quelqu'un — ces heures deviennent un **segment en
+  attente d'attribution**, que son auteur reconnaît (« c'était moi ») ou que le déclarant attribue
+  aussitôt s'il sait à qui. Tout relevé se **corrige** et se **réattribue** par n'importe quel
+  membre du cercle — un compteur mal recopié, un relevé porté par le mauvais membre —, dans la
+  limite de ses voisins dans la chaîne : un relevé se corrige, il ne se déplace pas. Toute heure
+  qu'une correction ou une suppression retire d'un relevé sans la donner à quelqu'un retourne en
+  attente : elle reste au compteur, elle ne s'évapore pas de l'historique.
 - **Frais partagés** : dépenses (achat, assurance, carburant, entretien, réparation) avec justificatif
   image/PDF optionnel ; répartition **par parts égales**, **au prorata du temps d'usage** (calculé à
   partir des réservations) ou **montants personnalisés** ; soldes « qui doit combien à qui » avec

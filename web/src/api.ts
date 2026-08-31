@@ -135,14 +135,22 @@ export interface Reservation {
 export interface UsageRecord {
   id: string;
   equipmentId: string;
-  memberId: string;
+  /** `null` : segment constaté par le cercle, en attente d'attribution. */
+  memberId: string | null;
   recordedAt: string;
   meterReading: number;
-  /** Durée (heures/km) attribuée au membre : delta avec le relevé précédent, null pour le premier relevé. */
+  /** Compteur au départ, `null` quand il est inconnu (premier relevé, ou relevé antérieur au champ). */
+  startReading: number | null;
+  /** Durée (heures/km) attribuée au membre, null quand le compteur de départ est inconnu. */
   duration: number | null;
   fuelAddedLiters: number | null;
   notes: string | null;
   isMaintenance: boolean;
+}
+
+/** Relevé enregistré, avec le segment que sa saisie a mis au jour, s'il y en avait un. */
+export interface RecordedUsage extends UsageRecord {
+  gap: UsageRecord | null;
 }
 
 export interface MaintenanceStatus {
@@ -504,13 +512,29 @@ export const api = {
 
   recordUsage: (input: {
     equipmentId: string;
-    /** Relevé de compteur, ou `duration` pour laisser le serveur le calculer depuis le dernier relevé. */
+    /** Relevé de compteur, ou `duration` pour laisser le serveur le calculer depuis le compteur au départ. */
     meterReading?: number;
     duration?: number;
+    /** Compteur trouvé au départ ; au-dessus du dernier relevé connu, il ouvre un segment. */
+    startReading?: number | null;
+    /** À qui attribuer ce segment. Absent : il reste en attente. */
+    gapMemberId?: string | null;
     fuelAddedLiters?: number | null;
     notes?: string | null;
     isMaintenance?: boolean;
-  }) => request<UsageRecord>('/api/usage', { method: 'POST', body: JSON.stringify(input) }),
+  }) => request<RecordedUsage>('/api/usage', { method: 'POST', body: JSON.stringify(input) }),
+  updateUsage: (
+    id: string,
+    changes: {
+      meterReading?: number;
+      startReading?: number | null;
+      memberId?: string | null;
+      fuelAddedLiters?: number | null;
+      notes?: string | null;
+      isMaintenance?: boolean;
+    },
+  ) => request<UsageRecord>(`/api/usage/${id}`, { method: 'PUT', body: JSON.stringify(changes) }),
+  deleteUsage: (id: string) => request<void>(`/api/usage/${id}`, { method: 'DELETE' }),
   usageByEquipment: (equipmentId: string) => request<UsageRecord[]>(`/api/equipments/${equipmentId}/usage`),
   usageByMember: (memberId: string) => request<UsageRecord[]>(`/api/members/${memberId}/usage`),
   maintenanceStatus: (equipmentId: string) => request<MaintenanceStatus>(`/api/equipments/${equipmentId}/maintenance`),
