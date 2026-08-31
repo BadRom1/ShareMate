@@ -38,6 +38,18 @@ async function openForm(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('formulaire de dépense', () => {
+  it('accepte un montant à la virgule', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openForm(user);
+
+    await user.type(screen.getByLabelText('Libellé'), 'Plein de gazole');
+    await user.type(screen.getByLabelText('Montant (€)'), '90,55');
+    await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
+
+    await waitFor(() => expect(stub.addExpense).toHaveBeenCalledWith(expect.objectContaining({ amountEuros: 90.55 })));
+  });
+
   it('enregistre une dépense partagée à parts égales sur tout le cercle', async () => {
     const user = userEvent.setup();
     renderPage();
