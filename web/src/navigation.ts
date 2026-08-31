@@ -147,12 +147,20 @@ export function useRoute(initial?: Route): {
   route: Route;
   /** Remplace la route et empile une entrée d'historique. */
   go: (next: RouteChange) => void;
+  /**
+   * Même chose, sans empiler : la navigation que l'application se commande à elle-même — la
+   * visite guidée qui promène le membre d'un onglet à l'autre — n'a pas à peupler le bouton
+   * Retour de pas qu'il n'a pas faits, ni à le laisser rejouer la visite au lieu de sortir.
+   */
+  replace: (next: RouteChange) => void;
   /** Applique un lien de notification (`/?tab=discussions&equipment=e1&thread=t1`). */
   follow: (link: string) => void;
 } {
   // Un lien de notification ouvert directement l'emporte sur la route proposée par l'appelant.
   const [route, setRoute] = useState<Route>(() => parseRoute(window.location.href) ?? initial ?? defaultRoute());
   const first = useRef(true);
+  /** Prochaine écriture d'URL à faire sur place, armée par `replace`. */
+  const surPlace = useRef(false);
   const lastEquipmentRoute = useRef<EquipmentRoute>(route.view === 'equipment' ? route : defaultRoute());
 
   useEffect(() => {
@@ -160,11 +168,15 @@ export function useRoute(initial?: Route): {
     const search = routeToSearch(route);
     const isFirst = first.current;
     first.current = false;
+    // Le drapeau se consomme avant toute sortie : oublié armé, il détournerait le pas suivant,
+    // qui est celui du membre.
+    const remplacer = surPlace.current;
+    surPlace.current = false;
     // Retour navigateur : l'URL porte déjà cette route, la réécrire empilerait une entrée fantôme.
     if (window.location.search === search) return;
     // Au premier rendu, l'entrée courante est simplement complétée : le Retour doit sortir de
     // l'application, pas ramener à l'URL par laquelle on est entré.
-    if (isFirst) window.history.replaceState(null, '', search);
+    if (isFirst || remplacer) window.history.replaceState(null, '', search);
     else window.history.pushState(null, '', search);
   }, [route]);
 
@@ -181,10 +193,20 @@ export function useRoute(initial?: Route): {
     setRoute((current) => applyChange(current, next, lastEquipmentRoute.current));
   }, []);
 
+  const replace = useCallback((next: RouteChange) => {
+    setRoute((current) => {
+      const suivante = applyChange(current, next, lastEquipmentRoute.current);
+      // Deux étapes de la visite peuvent désigner le même onglet. Armer le drapeau pour un
+      // déplacement qui n'a pas lieu le laisserait en attente du suivant, qui n'est plus le sien.
+      if (routeToSearch(suivante) !== routeToSearch(current)) surPlace.current = true;
+      return suivante;
+    });
+  }, []);
+
   const follow = useCallback((link: string) => {
     const next = parseRoute(link);
     if (next) setRoute(next);
   }, []);
 
-  return { route, go, follow };
+  return { route, go, replace, follow };
 }

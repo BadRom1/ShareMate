@@ -154,7 +154,7 @@ function AdminScreen({ currentMemberId, onClose }: { currentMemberId: string; on
  * par-dessus. Tout cela se lit dans l'URL, donc dans l'historique du navigateur.
  */
 function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut: () => void }) {
-  const { route, go, follow } = useRoute();
+  const { route, go, replace, follow } = useRoute();
   const membersResource = useApiResource(useCallback(() => api.listMembers(), []));
   const equipmentsResource = useApiResource(useCallback(() => api.listEquipments(), []));
 
@@ -366,7 +366,7 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
 
       {/* Posée par-dessus la coque, jamais dedans : la visite désigne aussi les deux barres. */}
       {visiteOuverte && (
-        <Tour onSelectTab={(tab, section) => go({ tab, section })} onClose={() => setVisiteOuverte(false)} />
+        <Tour onSelectTab={(tab, section) => replace({ tab, section })} onClose={() => setVisiteOuverte(false)} />
       )}
     </>
   );
