@@ -46,6 +46,16 @@ describe('UsageService', () => {
     expect(duration).toBe(3.5);
   });
 
+  it('une durée à décimale ne laisse pas filtrer le bruit flottant', async () => {
+    await service.recordUsage({ ...input, meterReading: 164 });
+    const { record, duration } = await service.recordUsage({ equipmentId: 'e1', memberId: 'm2', duration: 1.3 });
+    expect(record.meterReading).toBe(165.3);
+    expect(duration).toBe(1.3);
+
+    const history = await service.historyByEquipment('e1', 'm1');
+    expect(history.find((e) => e.record.id === record.id)!.duration).toBe(1.3);
+  });
+
   it('refuse une durée sans relevé précédent (compteur de départ inconnu)', async () => {
     await expect(service.recordUsage({ equipmentId: 'e1', memberId: 'm1', duration: 3 })).rejects.toThrow(
       /relevé précédent/i,

@@ -1,3 +1,4 @@
+import { roundMeterValue } from './meter-value.js';
 import type { UsageRecord } from './usage-record.js';
 
 /**
@@ -12,7 +13,7 @@ export function computeDurations(records: readonly UsageRecord[]): Map<string, n
   const durations = new Map<string, number | null>();
   let previousReading: number | null = null;
   for (const record of ordered) {
-    durations.set(record.id, previousReading === null ? null : record.meterReading - previousReading);
+    durations.set(record.id, previousReading === null ? null : roundMeterValue(record.meterReading - previousReading));
     previousReading = record.meterReading;
   }
   return durations;

@@ -2,6 +2,7 @@ import { UsageRecord } from '../domain/usage/usage-record.js';
 import { computeMaintenanceStatus } from '../domain/usage/maintenance-alert.js';
 import type { MaintenanceStatus } from '../domain/usage/maintenance-alert.js';
 import { computeDurations } from '../domain/usage/usage-duration.js';
+import { roundMeterValue } from '../domain/usage/meter-value.js';
 import { DomainError } from '../domain/shared/domain-error.js';
 import { accessibleEquipmentIds, equipmentForMember, equipmentsForMember } from './equipment-access.js';
 import type { Clock, EquipmentRepository, IdGenerator, Notifier, UsageRecordRepository } from './ports.js';
@@ -67,13 +68,16 @@ export class UsageService {
         link: `/?tab=usage&equipment=${equipment.id}`,
       });
     }
-    return { record, duration: lastReading === null ? null : record.meterReading - lastReading };
+    return {
+      record,
+      duration: lastReading === null ? null : roundMeterValue(record.meterReading - lastReading),
+    };
   }
 
   /** Compteur saisi directement, ou calculé « dernier relevé + durée ». */
   private resolveMeterReading(input: RecordUsageInput, lastReading: number | null): number {
     if (input.meterReading != null) {
-      return input.meterReading;
+      return roundMeterValue(input.meterReading);
     }
     if (input.duration == null) {
       throw new DomainError("Indiquez le relevé de compteur ou la durée d'utilisation.");
@@ -84,7 +88,7 @@ export class UsageService {
     if (lastReading === null) {
       throw new DomainError('Aucun relevé précédent pour cet équipement : saisissez le relevé de compteur.');
     }
-    return lastReading + input.duration;
+    return roundMeterValue(lastReading + input.duration);
   }
 
   async historyByEquipment(equipmentId: string, requesterId: string): Promise<UsageEntry[]> {

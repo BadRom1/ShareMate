@@ -1,5 +1,6 @@
 import { DomainError } from '../shared/domain-error.js';
 import { assertValidDate } from '../shared/iso-date.js';
+import { roundMeterValue } from './meter-value.js';
 
 export interface UsageRecordProps {
   id: string;
@@ -40,8 +41,8 @@ export class UsageRecord {
       props.equipmentId,
       props.memberId,
       new Date(props.recordedAt),
-      props.meterReading,
-      props.fuelAddedLiters ?? null,
+      roundMeterValue(props.meterReading),
+      props.fuelAddedLiters == null ? null : roundMeterValue(props.fuelAddedLiters),
       props.notes?.trim() || null,
       props.isMaintenance ?? false,
     );
