@@ -61,6 +61,10 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
   /** Évite les artefacts de virgule flottante lors des conversions durée ↔ total. */
   const round = (n: number) => Math.round(n * 100) / 100;
 
+  /** Compteur saisi sous le dernier relevé connu : le serveur le refusera, autant le dire tout de suite. */
+  const saisieCompteur = parseDecimal(form.meterReading);
+  const meterBelowLast = saisieCompteur !== null && lastReading !== null && saisieCompteur < lastReading;
+
   function onDurationChange(value: string) {
     setEntryMode('duration');
     const d = parseDecimal(value);
@@ -74,10 +78,14 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
   function onMeterChange(value: string) {
     setEntryMode('total');
     const m = parseDecimal(value);
+    // Un compteur sous le dernier relevé ne donne pas de durée : une durée négative
+    // n'a pas de sens, et le champ, qui n'accepte que des nombres positifs, resterait
+    // bloqué dessus. Le relevé lui-même est refusé à l'enregistrement.
+    const delta = m !== null && lastReading !== null ? round(m - lastReading) : null;
     setForm((f) => ({
       ...f,
       meterReading: value,
-      duration: m !== null && lastReading !== null ? decimalInputValue(round(m - lastReading)) : '',
+      duration: delta !== null && delta >= 0 ? decimalInputValue(delta) : '',
     }));
   }
 
@@ -241,11 +249,16 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
               <label className="field">
                 Compteur total ({unit})
                 <DecimalInput value={form.meterReading} onValueChange={onMeterChange} required />
-                {lastReading !== null && (
-                  <span className="muted">
-                    Dernier relevé : {formatDecimal(lastReading)} {unit}
-                  </span>
-                )}
+                {lastReading !== null &&
+                  (meterBelowLast ? (
+                    <span className="field-warn">
+                      Un compteur ne recule pas : le dernier relevé est à {formatDecimal(lastReading)} {unit}.
+                    </span>
+                  ) : (
+                    <span className="muted">
+                      Dernier relevé : {formatDecimal(lastReading)} {unit}
+                    </span>
+                  ))}
               </label>
               <label className="field">
                 Carburant ajouté (L, optionnel)

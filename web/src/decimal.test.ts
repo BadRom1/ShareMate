@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decimalInputValue, isDecimalDraft, parseDecimal } from './decimal';
+import { decimalInputValue, decimalPlaces, isDecimalDraft, parseDecimal } from './decimal';
 
 describe('parseDecimal', () => {
   it('lit la virgule comme le point', () => {
@@ -35,5 +35,14 @@ describe('decimalInputValue', () => {
   it('pré-remplit à la française, sans séparateur de milliers', () => {
     expect(decimalInputValue(165.3)).toBe('165,3');
     expect(decimalInputValue(1200)).toBe('1200');
+  });
+});
+
+describe('decimalPlaces', () => {
+  it('compte les décimales saisies, virgule ou point', () => {
+    expect(decimalPlaces('90,555')).toBe(3);
+    expect(decimalPlaces('90.55')).toBe(2);
+    expect(decimalPlaces('90')).toBe(0);
+    expect(decimalPlaces('')).toBe(0);
   });
 });

@@ -29,3 +29,9 @@ export function parseDecimal(value: string): number | null {
 export function decimalInputValue(value: number): string {
   return String(value).replace('.', ',');
 }
+
+/** Décimales effectivement saisies (« 90,555 » → 3), pour refuser ce qu'un arrondi trahirait. */
+export function decimalPlaces(value: string): number {
+  const [, decimales = ''] = value.trim().replace(',', '.').split('.');
+  return decimales.length;
+}

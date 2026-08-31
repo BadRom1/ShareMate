@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { api } from '../api';
 import type { DirectoryMember, Equipment, MaintenanceStatus, MeterUnit } from '../api';
 import { formatDate, formatDecimal, formatEuros, meterLabel } from '../format';
-import { decimalInputValue, parseDecimal } from '../decimal';
+import { decimalInputValue, decimalPlaces, parseDecimal } from '../decimal';
 import { errorMessage, useApiResource } from '../useApiResource';
 import { IconEdit, IconLogout, IconTrash } from '../components/icons';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -78,6 +78,12 @@ export function EquipmentsPage({ members, currentMemberId, onMemberCreated }: Pr
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setActionError(null);
+    // Le champ est du texte (la virgule des claviers mobiles) : un montant plus précis que
+    // le centime serait arrondi sans le dire, autant le refuser ici.
+    if (decimalPlaces(form.purchaseValueEuros) > 2) {
+      setActionError("La valeur d'achat ne va pas au-delà du centime (deux décimales).");
+      return;
+    }
     // Champ facultatif laissé vide : une absence (`null`), et surtout pas une valeur d'achat
     // de 0 € — le serveur les distingue, l'affichage aussi.
     const payload = {

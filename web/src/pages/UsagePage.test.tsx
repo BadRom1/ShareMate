@@ -125,6 +125,26 @@ describe('saisie du relevé', () => {
     );
   });
 
+  it('un compteur sous le dernier relevé laisse la durée modifiable et le dit', async () => {
+    const user = userEvent.setup();
+    stub.maintenanceStatus.mockResolvedValue(aMaintenanceStatus({ currentReading: 164 }));
+    renderPage();
+    await openForm(user);
+
+    const compteur = screen.getByLabelText(/Compteur total/);
+    await user.clear(compteur);
+    await user.type(compteur, '100');
+
+    // Une durée négative (100 − 164) bloquerait le champ, qui n'accepte que des nombres positifs.
+    const duree = screen.getByLabelText(/Durée d'utilisation/);
+    expect(duree).toHaveProperty('value', '');
+    expect(screen.getByText(/Un compteur ne recule pas/)).toBeDefined();
+
+    await user.type(duree, '5');
+    expect(duree).toHaveProperty('value', '5');
+    expect(compteur).toHaveProperty('value', '169');
+  });
+
   it('ignore les frappes qui ne font pas un nombre', async () => {
     const user = userEvent.setup();
     renderPage();

@@ -13,6 +13,10 @@ type Props = Omit<InputHTMLAttributes<HTMLInputElement>, 'type' | 'inputMode' | 
  * mobiles français font échouer sur la virgule. La frappe est filtrée pour qu'il
  * n'y entre que des chiffres et un seul séparateur ; la valeur se lit avec
  * `parseDecimal`.
+ *
+ * Le filtre porte sur la valeur entière du champ : ce qu'on y écrit par programme
+ * doit donc rester une saisie valide (un nombre négatif, par exemple, bloquerait
+ * jusqu'à l'effacement). `isDecimalDraft` répond à la question avant d'écrire.
  */
 export function DecimalInput({ value, onValueChange, ...rest }: Props) {
   return (
