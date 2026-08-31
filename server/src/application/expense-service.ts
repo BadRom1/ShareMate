@@ -111,6 +111,15 @@ export class ExpenseService {
     return expense;
   }
 
+  /**
+   * Autorise le dépôt d'un justificatif **avant** que l'octet n'atteigne le stockage : sans ce
+   * garde-fou, un refus survenu après l'écriture laisserait dans le bucket un fichier que plus
+   * aucune dépense ne nommerait — c'est-à-dire exactement ce que la purge ne sait pas rattraper.
+   */
+  async assertCanAttachReceipt(equipmentId: string, requesterId: string): Promise<void> {
+    await equipmentForMember(this.equipments, equipmentId, requesterId);
+  }
+
   private async resolveSplit(input: AddExpenseInput, circleMemberIds: readonly string[]): Promise<SplitRule> {
     switch (input.split.type) {
       case 'EQUAL': {

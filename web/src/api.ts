@@ -11,7 +11,7 @@ export function assetUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
-/** Forme exacte des chemins produits par POST /api/uploads/receipts. */
+/** Forme exacte des chemins produits par le dépôt d'un justificatif (POST /api/expenses/file). */
 const RECEIPT_PATH = /^\/uploads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpe?g|webp|pdf)$/;
 
 /**
@@ -155,6 +155,17 @@ export interface MaintenanceStatus {
 }
 
 export type ExpenseCategory = 'PURCHASE' | 'INSURANCE' | 'FUEL' | 'MAINTENANCE' | 'REPAIR' | 'OTHER';
+
+export interface AddExpenseInput {
+  equipmentId: string;
+  label: string;
+  amountEuros: number;
+  payerId: string;
+  date: string;
+  category: ExpenseCategory;
+  split: SplitInput;
+  receiptPath?: string | null;
+}
 
 export type SplitInput =
   | { type: 'EQUAL'; memberIds?: string[] }
@@ -506,16 +517,35 @@ export const api = {
   alerts: () => request<MaintenanceStatus[]>('/api/alerts'),
 
   listExpenses: (equipmentId: string) => request<Expense[]>(`/api/equipments/${equipmentId}/expenses`),
-  addExpense: (input: {
-    equipmentId: string;
-    label: string;
-    amountEuros: number;
-    payerId: string;
-    date: string;
-    category: ExpenseCategory;
-    split: SplitInput;
-    receiptPath?: string | null;
-  }) => request<Expense>('/api/expenses', { method: 'POST', body: JSON.stringify(input) }),
+  addExpense: (input: AddExpenseInput) =>
+    request<Expense>('/api/expenses', { method: 'POST', body: JSON.stringify(input) }),
+  /**
+   * Dépense et justificatif en une seule requête : le fichier n'est écrit que si la dépense l'est.
+   * Téléversé à part, il restait sur le serveur sans que rien ne le nomme dès que la dépense était
+   * refusée ou le formulaire abandonné.
+   */
+  addExpenseWithReceipt: async (input: AddExpenseInput, receipt: File): Promise<Expense> => {
+    const form = new FormData();
+    form.append('equipmentId', input.equipmentId);
+    form.append('label', input.label);
+    form.append('amountEuros', String(input.amountEuros));
+    form.append('payerId', input.payerId);
+    form.append('date', input.date);
+    form.append('category', input.category);
+    form.append('split', JSON.stringify(input.split));
+    form.append('file', receipt);
+    // Pas de Content-Type manuel : le navigateur pose la frontière multipart.
+    const response = await fetch(`${API_BASE}/api/expenses/file`, {
+      method: 'POST',
+      body: form,
+      headers: buildHeaders(false),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new ApiError(body.error ?? 'Échec de l’enregistrement de la dépense.', response.status);
+    }
+    return (await response.json()) as Expense;
+  },
   deleteExpense: (id: string) => request<void>(`/api/expenses/${id}`, { method: 'DELETE' }),
   balances: (equipmentId: string) => request<Balance[]>(`/api/equipments/${equipmentId}/balances`),
   settlement: (equipmentId: string) => request<SettlementTransaction[]>(`/api/equipments/${equipmentId}/settlement`),
@@ -638,20 +668,4 @@ export const api = {
     }),
   unsubscribeWebPush: (endpoint: string) =>
     request<void>('/api/notifications/subscriptions', { method: 'DELETE', body: JSON.stringify({ endpoint }) }),
-
-  uploadReceipt: async (file: File): Promise<string> => {
-    const form = new FormData();
-    form.append('file', file);
-    // Pas de Content-Type manuel : le navigateur pose la frontière multipart.
-    const response = await fetch(`${API_BASE}/api/uploads/receipts`, {
-      method: 'POST',
-      body: form,
-      headers: buildHeaders(false),
-    });
-    if (!response.ok) {
-      const body = (await response.json().catch(() => ({}))) as { error?: string };
-      throw new ApiError(body.error ?? "Échec de l'upload.", response.status);
-    }
-    return ((await response.json()) as { path: string }).path;
-  },
 };
