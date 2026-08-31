@@ -2,9 +2,11 @@ import { useCallback, useState } from 'react';
 import { api } from '../api';
 import type { Equipment, Member } from '../api';
 import { formatDateTime, formatDecimal, meterLabel } from '../format';
+import { decimalInputValue, parseDecimal } from '../decimal';
 import { errorMessage, useApiResource } from '../useApiResource';
 import { Modal } from '../components/Modal';
 import { Fab } from '../components/Fab';
+import { DecimalInput } from '../components/DecimalInput';
 
 interface Props {
   members: Member[];
@@ -61,22 +63,21 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
 
   function onDurationChange(value: string) {
     setEntryMode('duration');
-    const d = Number(value);
+    const d = parseDecimal(value);
     setForm((f) => ({
       ...f,
       duration: value,
-      meterReading:
-        value !== '' && Number.isFinite(d) && lastReading !== null ? String(round(lastReading + d)) : f.meterReading,
+      meterReading: d !== null && lastReading !== null ? decimalInputValue(round(lastReading + d)) : f.meterReading,
     }));
   }
 
   function onMeterChange(value: string) {
     setEntryMode('total');
-    const m = Number(value);
+    const m = parseDecimal(value);
     setForm((f) => ({
       ...f,
       meterReading: value,
-      duration: value !== '' && Number.isFinite(m) && lastReading !== null ? String(round(m - lastReading)) : '',
+      duration: m !== null && lastReading !== null ? decimalInputValue(round(m - lastReading)) : '',
     }));
   }
 
@@ -86,7 +87,7 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
     setInfo(null);
     setForm({
       duration: '',
-      meterReading: lastReading !== null ? String(lastReading) : '',
+      meterReading: lastReading !== null ? decimalInputValue(lastReading) : '',
       fuelAddedLiters: '',
       notes: '',
       isMaintenance: false,
@@ -103,15 +104,23 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setActionError(null);
+    const duration = parseDecimal(form.duration);
+    const meterReading = parseDecimal(form.meterReading);
+    const reading =
+      entryMode === 'duration' && duration !== null && lastReading !== null
+        ? { duration }
+        : meterReading !== null
+          ? { meterReading }
+          : null;
+    if (reading === null) {
+      setActionError("Indiquez la durée d'utilisation ou le compteur total.");
+      return;
+    }
     try {
-      const reading =
-        entryMode === 'duration' && form.duration !== '' && lastReading !== null
-          ? { duration: Number(form.duration) }
-          : { meterReading: Number(form.meterReading) };
       await api.recordUsage({
         equipmentId: equipment.id,
         ...reading,
-        fuelAddedLiters: form.fuelAddedLiters === '' ? null : Number(form.fuelAddedLiters),
+        fuelAddedLiters: parseDecimal(form.fuelAddedLiters),
         notes: form.notes || null,
         isMaintenance: form.isMaintenance,
       });
@@ -217,12 +226,9 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
             <div className="row">
               <label className="field">
                 Durée d'utilisation ({unit})
-                <input
-                  type="number"
-                  min="0"
-                  step="0.1"
+                <DecimalInput
                   value={form.duration}
-                  onChange={(e) => onDurationChange(e.target.value)}
+                  onValueChange={onDurationChange}
                   disabled={lastReading === null}
                   title={
                     lastReading === null
@@ -234,14 +240,7 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
               </label>
               <label className="field">
                 Compteur total ({unit})
-                <input
-                  type="number"
-                  min="0"
-                  step="0.1"
-                  value={form.meterReading}
-                  onChange={(e) => onMeterChange(e.target.value)}
-                  required
-                />
+                <DecimalInput value={form.meterReading} onValueChange={onMeterChange} required />
                 {lastReading !== null && (
                   <span className="muted">
                     Dernier relevé : {formatDecimal(lastReading)} {unit}
@@ -250,12 +249,9 @@ export function UsagePage({ members, currentMemberId, equipment }: Props) {
               </label>
               <label className="field">
                 Carburant ajouté (L, optionnel)
-                <input
-                  type="number"
-                  min="0"
-                  step="0.1"
+                <DecimalInput
                   value={form.fuelAddedLiters}
-                  onChange={(e) => setForm({ ...form, fuelAddedLiters: e.target.value })}
+                  onValueChange={(value) => setForm({ ...form, fuelAddedLiters: value })}
                 />
               </label>
             </div>

@@ -2,9 +2,11 @@ import { useCallback, useState } from 'react';
 import { api } from '../api';
 import type { DirectoryMember, Equipment, MaintenanceStatus, MeterUnit } from '../api';
 import { formatDate, formatDecimal, formatEuros, meterLabel } from '../format';
+import { decimalInputValue, parseDecimal } from '../decimal';
 import { errorMessage, useApiResource } from '../useApiResource';
 import { IconEdit, IconLogout, IconTrash } from '../components/icons';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { DecimalInput } from '../components/DecimalInput';
 
 interface Props {
   members: DirectoryMember[];
@@ -65,7 +67,7 @@ export function EquipmentsPage({ members, currentMemberId, onMemberCreated }: Pr
       name: e.name,
       category: e.category ?? '',
       acquisitionDate: e.acquisitionDate.slice(0, 10),
-      purchaseValueEuros: e.purchaseValueEuros === null ? '' : String(e.purchaseValueEuros),
+      purchaseValueEuros: e.purchaseValueEuros === null ? '' : decimalInputValue(e.purchaseValueEuros),
       meterUnit: e.meterUnit,
       memberIds: [...e.memberIds],
       maintenanceThreshold: e.maintenanceThreshold === null ? '' : String(e.maintenanceThreshold),
@@ -82,7 +84,7 @@ export function EquipmentsPage({ members, currentMemberId, onMemberCreated }: Pr
       name: form.name,
       category: form.category.trim() || null,
       acquisitionDate: form.acquisitionDate,
-      purchaseValueEuros: form.purchaseValueEuros.trim() === '' ? null : Number(form.purchaseValueEuros),
+      purchaseValueEuros: parseDecimal(form.purchaseValueEuros),
       meterUnit: form.meterUnit,
       memberIds: form.memberIds,
       maintenanceThreshold: form.maintenanceThreshold === '' ? null : Number(form.maintenanceThreshold),
@@ -217,12 +219,9 @@ export function EquipmentsPage({ members, currentMemberId, onMemberCreated }: Pr
               </label>
               <label className="field">
                 Valeur d'achat (€) <span className="muted">(facultatif)</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
+                <DecimalInput
                   value={form.purchaseValueEuros}
-                  onChange={(e) => setForm({ ...form, purchaseValueEuros: e.target.value })}
+                  onValueChange={(value) => setForm({ ...form, purchaseValueEuros: value })}
                   placeholder="vide = non renseignée"
                 />
               </label>

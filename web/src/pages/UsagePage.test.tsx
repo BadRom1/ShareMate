@@ -110,6 +110,32 @@ describe('saisie du relevé', () => {
 
   // Le changement d'équipement remet la page à neuf par le remontage décidé dans `App` (`key`) :
   // ce qui reste ici, c'est la bascule de l'historique, qui ne démonte rien.
+  it('accepte la virgule du clavier français et convertit en compteur total', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openForm(user);
+
+    await user.type(screen.getByLabelText(/Durée d'utilisation/), '1,3');
+
+    expect(screen.getByLabelText(/Compteur total/)).toHaveProperty('value', '101,3');
+    await user.click(screen.getByRole('button', { name: 'Enregistrer le relevé' }));
+
+    await waitFor(() =>
+      expect(stub.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ equipmentId: 'e1', duration: 1.3 })),
+    );
+  });
+
+  it('ignore les frappes qui ne font pas un nombre', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openForm(user);
+
+    const duree = screen.getByLabelText(/Durée d'utilisation/);
+    await user.type(duree, '1,3,5abc');
+
+    expect(duree).toHaveProperty('value', '1,35');
+  });
+
   it("retire la confirmation dès qu'on bascule l'historique", async () => {
     const user = userEvent.setup();
     renderPage();

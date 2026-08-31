@@ -2,8 +2,10 @@ import { useCallback, useMemo, useState } from 'react';
 import { api, receiptUrl } from '../api';
 import type { Equipment, Expense, ExpenseCategory, Member, SettlementTransaction, SplitInput } from '../api';
 import { CATEGORY_LABELS, formatDate, formatEuros } from '../format';
+import { parseDecimal } from '../decimal';
 import { errorMessage, firstError, useApiResource } from '../useApiResource';
 import { Modal } from '../components/Modal';
+import { DecimalInput } from '../components/DecimalInput';
 import { Fab } from '../components/Fab';
 
 interface Props {
@@ -93,19 +95,23 @@ export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
   function buildSplit(): SplitInput {
     if (form.splitType === 'EQUAL') return { type: 'EQUAL', memberIds: form.equalMemberIds };
     if (form.splitType === 'USAGE_PRORATED') return { type: 'USAGE_PRORATED' };
-    return {
-      type: 'CUSTOM',
-      amountsEuros: Object.fromEntries(
-        Object.entries(form.customAmounts)
-          .filter(([, v]) => v !== '' && Number(v) > 0)
-          .map(([k, v]) => [k, Number(v)]),
-      ),
-    };
+    // Une part vide ou nulle n'est pas une part : seul le renseigné compte.
+    const amountsEuros: Record<string, number> = {};
+    for (const [memberId, saisie] of Object.entries(form.customAmounts)) {
+      const montant = parseDecimal(saisie);
+      if (montant !== null && montant > 0) amountsEuros[memberId] = montant;
+    }
+    return { type: 'CUSTOM', amountsEuros };
   }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setActionError(null);
+    const amountEuros = parseDecimal(form.amountEuros);
+    if (amountEuros === null) {
+      setActionError('Indiquez le montant de la dépense.');
+      return;
+    }
     setBusy(true);
     try {
       let receiptPath: string | null = null;
@@ -115,7 +121,7 @@ export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
       await api.addExpense({
         equipmentId: equipment.id,
         label: form.label,
-        amountEuros: Number(form.amountEuros),
+        amountEuros,
         payerId: form.payerId,
         date: form.date,
         category: form.category,
@@ -215,12 +221,9 @@ export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
               </label>
               <label className="field">
                 Montant (€)
-                <input
-                  type="number"
-                  min="0.01"
-                  step="0.01"
+                <DecimalInput
                   value={form.amountEuros}
-                  onChange={(e) => setForm({ ...form, amountEuros: e.target.value })}
+                  onValueChange={(value) => setForm({ ...form, amountEuros: value })}
                   required
                 />
               </label>
@@ -306,13 +309,10 @@ export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
                 {circle.map((m) => (
                   <label key={m.id} className="field">
                     {m.name} (€)
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
+                    <DecimalInput
                       value={form.customAmounts[m.id] ?? ''}
-                      onChange={(e) =>
-                        setForm({ ...form, customAmounts: { ...form.customAmounts, [m.id]: e.target.value } })
+                      onValueChange={(value) =>
+                        setForm({ ...form, customAmounts: { ...form.customAmounts, [m.id]: value } })
                       }
                     />
                   </label>
