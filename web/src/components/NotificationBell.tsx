@@ -231,6 +231,7 @@ export function NotificationBell({ onNavigate }: Props) {
       <button
         className={`bell-button ${count > 0 ? 'bell-active' : ''}`}
         onClick={() => void toggleOpen()}
+        data-tour="notifications"
         aria-label="Notifications"
       >
         <IconBell size={22} />

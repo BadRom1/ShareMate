@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type * as ApiModule from '../api';
@@ -105,6 +105,42 @@ describe('invitation', () => {
 
     expect(await screen.findByText('Invitation invalide ou expirée.')).toBeDefined();
     expect(onRedeemed).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Les écrans publics sont les seuls où l'on est encore dans un navigateur, et l'invitation est le
+ * moment précis où quelqu'un découvre l'application : c'est là que l'installation se propose.
+ */
+describe("installation depuis les écrans d'accueil", () => {
+  // Le prompt est retenu au niveau du module : `appinstalled` est ce qui le périme.
+  afterEach(() => window.dispatchEvent(new Event('appinstalled')));
+
+  function annoncerLInstallation() {
+    window.dispatchEvent(Object.assign(new Event('beforeinstallprompt'), { prompt: vi.fn() }));
+  }
+
+  it("propose l'installation sous le formulaire de connexion", async () => {
+    annoncerLInstallation();
+
+    render(<LoginPage onLoggedIn={vi.fn()} />);
+
+    expect(await screen.findByRole('button', { name: "Installer l'app" })).toBeDefined();
+  });
+
+  it("propose l'installation à qui arrive par un lien d'invitation", async () => {
+    stub.inviteInfo.mockResolvedValue({ memberName: 'Bob' });
+    annoncerLInstallation();
+
+    render(<InvitePage code="code-invitation" onRedeemed={vi.fn()} />);
+
+    expect(await screen.findByRole('button', { name: "Installer l'app" })).toBeDefined();
+  });
+
+  it("ne propose rien tant que le navigateur ne sait pas installer l'application", () => {
+    render(<LoginPage onLoggedIn={vi.fn()} />);
+
+    expect(screen.queryByRole('button', { name: "Installer l'app" })).toBeNull();
   });
 });
 

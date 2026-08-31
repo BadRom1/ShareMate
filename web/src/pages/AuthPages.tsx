@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import type { Member } from '../api';
+import { InstallAppCard } from '../components/InstallApp';
 
 /** Écrans publics : connexion, création du premier compte, invitation, mot de passe perdu. */
 
@@ -47,6 +48,7 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: (member: Member) => void
           transmet comme un lien d'invitation, et vous choisissez un nouveau mot de passe.
         </p>
       </form>
+      <InstallAppCard />
     </div>
   );
 }
@@ -156,6 +158,9 @@ export function InvitePage({ code, onRedeemed }: { code: string; onRedeemed: (me
               Activer mon accès
             </button>
           </form>
+          {/* Arrivé par un lien, on est dans le navigateur : c'est le seul moment où proposer
+              l'installation tombe juste, avant que l'application ne devienne un onglet perdu. */}
+          <InstallAppCard />
         </>
       )}
     </div>

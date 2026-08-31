@@ -3,6 +3,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type * as ApiModule from './api';
 import { App } from './App';
+import { marquerVisiteFaite } from './components/Tour';
 import { anEquipment, aMember, aMessage, aThread, createApiStub } from './test/factories';
 import type { ApiStub } from './test/factories';
 
@@ -39,6 +40,9 @@ beforeEach(() => {
   Object.defineProperty(navigator, 'serviceWorker', { value: serviceWorker, configurable: true });
   window.history.replaceState(null, '', '/');
   localStorage.clear();
+  // La visite guidée s'ouvre d'elle-même au tout premier usage. Ces tests-ci parlent de
+  // navigation : on la déclare déjà faite, et le seul describe qui la concerne l'oublie.
+  marquerVisiteFaite();
 
   stub.listMembers.mockResolvedValue([aMember(), aMember({ id: 'm2', name: 'Bob' })]);
   stub.listEquipments.mockResolvedValue([
@@ -295,6 +299,49 @@ describe('session', () => {
     expect(stub.me).not.toHaveBeenCalled();
     // Et ce n'est pas l'écran d'invitation : les deux codes ne s'échangent pas.
     expect(stub.inviteInfo).not.toHaveBeenCalled();
+  });
+});
+
+describe('visite guidée', () => {
+  // Le tout premier usage, celui qu'on ne rejoue jamais : rien en mémoire, aucun équipement.
+  beforeEach(() => localStorage.clear());
+
+  it("s'ouvre d'elle-même au premier lancement, puis ne revient plus", async () => {
+    const premier = render(<App />);
+
+    expect(await screen.findByRole('dialog', { name: 'Visite guidée' })).toBeDefined();
+    await userEvent.click(screen.getByRole('button', { name: 'Passer' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Visite guidée' })).toBeNull());
+    premier.unmount();
+
+    render(<App />);
+
+    await waitFor(() => expect(activeTab()).toBe('Agenda'));
+    expect(screen.queryByRole('dialog', { name: 'Visite guidée' })).toBeNull();
+  });
+
+  it('se relance à la demande depuis le menu', async () => {
+    render(<App />);
+    await screen.findByRole('dialog', { name: 'Visite guidée' });
+    await userEvent.click(screen.getByRole('button', { name: 'Passer' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Visite guidée' })).toBeNull());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Menu' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Visite guidée' }));
+
+    expect(await screen.findByRole('dialog', { name: 'Visite guidée' })).toBeDefined();
+  });
+
+  // La visite pilote l'écran qu'elle décrit : sinon elle parlerait de l'agenda devant les dépenses.
+  it('ouvre l’onglet de chaque étape au fil de la visite', async () => {
+    render(<App />);
+    await screen.findByRole('dialog', { name: 'Visite guidée' });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Suivant' }));
+
+    await waitFor(() => expect(activeTab()).toBe('Agenda'));
+    await userEvent.click(screen.getByRole('button', { name: 'Suivant' }));
+    await waitFor(() => expect(activeTab()).toBe('Machine'));
   });
 });
 

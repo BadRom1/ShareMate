@@ -11,6 +11,7 @@ import { AdminPage } from './pages/AdminPage';
 import { BootstrapPage, InvitePage, LoginPage, PasswordResetPage } from './pages/AuthPages';
 import { AppShell } from './components/AppShell';
 import { OverviewPanel } from './components/OverviewPanel';
+import { Tour, visiteDéjàFaite } from './components/Tour';
 import { IconClose } from './components/icons';
 import { useRoute } from './navigation';
 import { useEscape } from './useEscape';
@@ -212,6 +213,13 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
     }
   }, [route.view, reloadEquipments]);
 
+  /**
+   * Visite guidée du premier usage. Le drapeau se lève dès l'entrée, mais la visite n'est rendue
+   * que dans la coque, plus bas : annuaire et parc chargés, donc des barres sur lesquelles poser
+   * ses bulles. Le menu la relance ensuite à la demande.
+   */
+  const [visiteOuverte, setVisiteOuverte] = useState(() => !visiteDéjàFaite());
+
   // Clics de notification Web Push relayés par le service worker.
   useEffect(() => {
     const sw = navigator.serviceWorker;
@@ -268,88 +276,98 @@ function AuthenticatedApp({ member, onLoggedOut }: { member: Member; onLoggedOut
   const currentEquipment = equipments.find((e) => e.id === currentEquipmentId) ?? null;
 
   return (
-    <AppShell
-      equipments={equipments}
-      currentEquipmentId={currentEquipmentId}
-      tab={route.tab}
-      member={member}
-      onSelectEquipment={(equipmentId) => go({ view: 'equipment', equipmentId })}
-      onSelectTab={(tab) => go({ tab })}
-      onOpenOverview={() => go({ view: 'overview' })}
-      onAddEquipment={() => go({ view: 'equipments' })}
-      onOpenAdmin={() => go({ view: 'admin' })}
-      onNavigate={follow}
-      onLogout={() => void logout()}
-    >
-      {error && (
-        <div className="alert" onClick={() => clearErrors(membersResource, equipmentsResource)}>
-          {error}
-        </div>
-      )}
+    <>
+      <AppShell
+        equipments={equipments}
+        currentEquipmentId={currentEquipmentId}
+        tab={route.tab}
+        member={member}
+        onSelectEquipment={(equipmentId) => go({ view: 'equipment', equipmentId })}
+        onSelectTab={(tab) => go({ tab })}
+        onOpenOverview={() => go({ view: 'overview' })}
+        onAddEquipment={() => go({ view: 'equipments' })}
+        onOpenAdmin={() => go({ view: 'admin' })}
+        onNavigate={follow}
+        onStartTour={() => setVisiteOuverte(true)}
+        onLogout={() => void logout()}
+      >
+        {error && (
+          <div className="alert" onClick={() => clearErrors(membersResource, equipmentsResource)}>
+            {error}
+          </div>
+        )}
 
-      {currentEquipment === null ? (
-        <>
-          <p className="empty">Aucun équipement partagé avec vous. Ajoutez votre minipelle, utilitaire, bétonnière…</p>
-          <button className="primary" onClick={() => go({ view: 'equipments' })}>
-            + Ajouter un équipement
-          </button>
-        </>
-      ) : (
-        <>
-          {/*
-           * `key` sur l'équipement : changer d'espace de travail remet chaque onglet à neuf —
-           * fil ouvert, filtres, brouillons de saisie. Le dire ici une fois vaut mieux que le
-           * réparer page par page dans un effet, qui laissait un rendu avec l'état du précédent.
-           */}
-          {route.tab === 'agenda' && (
-            <CalendarPage
-              key={currentEquipment.id}
-              members={members}
-              currentMemberId={member.id}
-              equipment={currentEquipment}
-              // Le relevé se saisit dans l'entretien de l'équipement du créneau, pas de celui affiché.
-              onRecordUsage={(equipmentId) =>
-                go({ view: 'equipment', equipmentId, tab: 'maintenance', section: 'usage' })
-              }
-            />
-          )}
-          {route.tab === 'maintenance' && (
-            <MaintenancePage
-              key={currentEquipment.id}
-              members={members}
-              currentMemberId={member.id}
-              equipment={currentEquipment}
-              section={route.section}
-              onSelectSection={(section) => go({ section })}
-            />
-          )}
-          {route.tab === 'expenses' && (
-            <ExpensesPage
-              key={currentEquipment.id}
-              members={members}
-              currentMemberId={member.id}
-              equipment={currentEquipment}
-            />
-          )}
-          {route.tab === 'forum' && (
-            <DiscussionsPage
-              key={currentEquipment.id}
-              members={members}
-              currentMemberId={member.id}
-              equipment={currentEquipment}
-              initialThreadId={route.threadId}
-            />
-          )}
-          {route.tab === 'documents' && (
-            <DocumentsPage
-              key={currentEquipment.id}
-              members={members}
-              currentMemberId={member.id}
-              equipment={currentEquipment}
-            />
-          )}
-        </>
+        {currentEquipment === null ? (
+          <>
+            <p className="empty">
+              Aucun équipement partagé avec vous. Ajoutez votre minipelle, utilitaire, bétonnière…
+            </p>
+            <button className="primary" onClick={() => go({ view: 'equipments' })}>
+              + Ajouter un équipement
+            </button>
+          </>
+        ) : (
+          <>
+            {/*
+             * `key` sur l'équipement : changer d'espace de travail remet chaque onglet à neuf —
+             * fil ouvert, filtres, brouillons de saisie. Le dire ici une fois vaut mieux que le
+             * réparer page par page dans un effet, qui laissait un rendu avec l'état du précédent.
+             */}
+            {route.tab === 'agenda' && (
+              <CalendarPage
+                key={currentEquipment.id}
+                members={members}
+                currentMemberId={member.id}
+                equipment={currentEquipment}
+                // Le relevé se saisit dans l'entretien de l'équipement du créneau, pas de celui affiché.
+                onRecordUsage={(equipmentId) =>
+                  go({ view: 'equipment', equipmentId, tab: 'maintenance', section: 'usage' })
+                }
+              />
+            )}
+            {route.tab === 'maintenance' && (
+              <MaintenancePage
+                key={currentEquipment.id}
+                members={members}
+                currentMemberId={member.id}
+                equipment={currentEquipment}
+                section={route.section}
+                onSelectSection={(section) => go({ section })}
+              />
+            )}
+            {route.tab === 'expenses' && (
+              <ExpensesPage
+                key={currentEquipment.id}
+                members={members}
+                currentMemberId={member.id}
+                equipment={currentEquipment}
+              />
+            )}
+            {route.tab === 'forum' && (
+              <DiscussionsPage
+                key={currentEquipment.id}
+                members={members}
+                currentMemberId={member.id}
+                equipment={currentEquipment}
+                initialThreadId={route.threadId}
+              />
+            )}
+            {route.tab === 'documents' && (
+              <DocumentsPage
+                key={currentEquipment.id}
+                members={members}
+                currentMemberId={member.id}
+                equipment={currentEquipment}
+              />
+            )}
+          </>
+        )}
+      </AppShell>
+
+      {/* Posée par-dessus la coque, jamais dedans : la visite désigne aussi les deux barres. */}
+      {visiteOuverte && (
+        <Tour onSelectTab={(tab, section) => go({ tab, section })} onClose={() => setVisiteOuverte(false)} />
       )}
-    </AppShell>
+    </>
   );
 }
