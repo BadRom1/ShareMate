@@ -166,14 +166,13 @@ export class UsageService {
     const siblings = await this.usageRecords.findByEquipmentId(existing.equipmentId);
     const meterReading =
       changes.meterReading === undefined ? existing.meterReading : roundMeterValue(changes.meterReading);
-    this.assertFitsChain(meterReading, existing.id, siblings);
-
     const startReading =
       changes.startReading === undefined
         ? existing.startReading
         : changes.startReading === null
           ? null
           : roundMeterValue(changes.startReading);
+    this.assertFitsChain(meterReading, startReading, existing.id, siblings);
     const updated = UsageRecord.create({
       id: existing.id,
       equipmentId: existing.equipmentId,
@@ -188,13 +187,25 @@ export class UsageService {
     await this.usageRecords.save(updated);
 
     // « Je n'ai fait que deux heures sur les sept » : les cinq autres ont tourné pour quelqu'un.
-    // Reculer le départ d'un relevé les lui retire, il ne les efface pas.
-    const released =
-      existing.startReading !== null && startReading !== null && startReading > existing.startReading
-        ? await this.recordGap(equipment, existing.startReading, startReading, null)
-        : null;
+    // Rétrécir un relevé les lui retire, il ne les efface pas — par le départ comme par l'arrivée.
+    const rendus: [number, number][] = [];
+    if (existing.startReading !== null && startReading !== null && startReading > existing.startReading) {
+      rendus.push([existing.startReading, startReading]);
+    }
+    // Côté arrivée, seul un relevé plus haut atteste que l'engin a tourné jusque-là. Sans lui,
+    // baisser le compteur corrige le compteur lui-même : il n'y a pas d'heures à rendre.
+    if (
+      meterReading < existing.meterReading &&
+      siblings.some((r) => r.id !== existing.id && r.meterReading > meterReading)
+    ) {
+      rendus.push([meterReading, existing.meterReading]);
+    }
+    const released: UsageRecord[] = [];
+    for (const [from, to] of rendus) {
+      released.push((await this.recordGap(equipment, from, to, null)).record);
+    }
 
-    const after = [...siblings.map((r) => (r.id === updated.id ? updated : r)), ...(released ? [released.record] : [])];
+    const after = [...siblings.map((r) => (r.id === updated.id ? updated : r)), ...released];
     await this.notifyIfMaintenanceReached(equipment, siblings, after);
     return { record: updated, duration: computeDurations(after).get(updated.id) ?? null };
   }
@@ -234,11 +245,19 @@ export class UsageService {
   }
 
   /**
-   * Un relevé se corrige, il ne se déplace pas dans la chaîne : son compteur reste
-   * borné par celui d'avant et celui d'après. Sans cette borne, une correction
-   * réordonnerait la chaîne et redistribuerait en silence les durées des voisins.
+   * Un relevé se corrige, il ne se déplace pas dans la chaîne : son compteur reste borné par
+   * celui d'avant et celui d'après. Sans cette borne, une correction réordonnerait la chaîne et
+   * redistribuerait en silence les durées des voisins.
+   *
+   * Son départ est borné de la même façon par le relevé précédent : plus bas, il recouvrirait
+   * des heures déjà portées par quelqu'un d'autre, et les mêmes heures compteraient deux fois.
    */
-  private assertFitsChain(meterReading: number, id: string, siblings: readonly UsageRecord[]): void {
+  private assertFitsChain(
+    meterReading: number,
+    startReading: number | null,
+    id: string,
+    siblings: readonly UsageRecord[],
+  ): void {
     const chain = [...siblings].sort(chainOrder);
     const index = chain.findIndex((r) => r.id === id);
     const previous = chain[index - 1];
@@ -251,6 +270,11 @@ export class UsageService {
     if (next && meterReading > next.meterReading) {
       throw new DomainError(
         `Le relevé de compteur (${meterReading}) ne peut pas être supérieur au relevé suivant (${next.meterReading}).`,
+      );
+    }
+    if (previous && startReading !== null && startReading < previous.meterReading) {
+      throw new DomainError(
+        `Le compteur au départ (${startReading}) ne peut pas être inférieur au relevé précédent (${previous.meterReading}).`,
       );
     }
   }

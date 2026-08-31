@@ -214,7 +214,7 @@ describe('trou d’utilisation', () => {
     );
   });
 
-  it('sans écart, aucune question n’est posée et rien n’est attribué', async () => {
+  it('sans écart, aucune question n’est posée et le départ n’est pas imposé au serveur', async () => {
     const user = userEvent.setup();
     renderPage();
     await openForm(user);
@@ -223,9 +223,34 @@ describe('trou d’utilisation', () => {
     expect(screen.queryByLabelText(/À qui sont ces/)).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Enregistrer le relevé' }));
 
-    await waitFor(() =>
-      expect(stub.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ startReading: 100, gapMemberId: null })),
-    );
+    await waitFor(() => expect(stub.recordUsage).toHaveBeenCalled());
+    // Le départ prérempli vient d'un historique qui a pu vieillir : ne pas l'envoyer laisse le
+    // serveur partir de son dernier relevé, au lieu de refuser la saisie sur une valeur périmée.
+    const [envoyé] = stub.recordUsage.mock.calls[0]!;
+    expect(envoyé).not.toHaveProperty('startReading');
+    expect(envoyé).toMatchObject({ duration: 5, gapMemberId: null });
+  });
+
+  it('un relevé posé par un autre membre entre-temps ne fait pas échouer la saisie', async () => {
+    const user = userEvent.setup();
+    // L'écran affiche encore 100 h ; le serveur, lui, en est à 165 depuis la saisie d'un autre,
+    // et refuse tout départ sous son dernier relevé — comme le fait le vrai serveur.
+    stub.recordUsage.mockImplementation(async (input: unknown) => {
+      const { startReading } = input as { startReading?: number };
+      if (startReading !== undefined && startReading < 165) {
+        throw new Error(
+          `Le compteur au départ (${startReading}) ne peut pas être inférieur au dernier relevé connu (165).`,
+        );
+      }
+      return { ...aUsageRecord(), gap: null };
+    });
+    renderPage();
+    await openForm(user);
+
+    await user.type(screen.getByLabelText(/Durée d'utilisation/), '5');
+    await user.click(screen.getByRole('button', { name: 'Enregistrer le relevé' }));
+
+    expect(await screen.findByText('Relevé enregistré.')).toBeDefined();
   });
 
   it('annonce les heures laissées en attente par la saisie', async () => {

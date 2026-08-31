@@ -919,7 +919,11 @@ describe('API — relevés : trou d’utilisation, correction, suppression', () 
       memberId: string | null;
       duration: number | null;
     }[];
-    expect(history.filter((u) => u.memberId === null).map((u) => u.duration)).toEqual([40]);
+    // Deux fois des heures rendues : les 10 h que la correction a retirées de l'arrivée (140 au
+    // lieu de 150, alors qu'un relevé plus haut les atteste), puis les 40 h du relevé supprimé.
+    expect(history.filter((u) => u.memberId === null).map((u) => u.duration)).toEqual([40, 10]);
+    // Le compteur est passé de 100 à 160 : les 60 h se retrouvent toutes, attribuées ou en attente.
+    expect(history.reduce((total, u) => total + (u.duration ?? 0), 0)).toBe(60);
   });
 });
 

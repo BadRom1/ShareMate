@@ -232,7 +232,10 @@ describe('Migration « compteur de départ et relevés en attente d’attributio
         ('u1', 'e1', 'm1', '2026-01-01T10:00:00.000Z', 100, 'RAS'),
         ('u2', 'e1', 'm2', '2026-01-02T10:00:00.000Z', 165.3, NULL),
         ('u3', 'e1', 'm1', '2026-01-03T10:00:00.000Z', 180, NULL),
-        ('u4', 'e2', 'm1', '2026-01-04T10:00:00.000Z', 50, NULL);
+        ('u4', 'e2', 'm1', '2026-01-04T10:00:00.000Z', 50, NULL),
+        -- Deux relevés au même compteur : le second n'a rien fait tourner (durée nulle).
+        ('u5', 'e2', 'm2', '2026-01-05T10:00:00.000Z', 80, NULL),
+        ('u6', 'e2', 'm1', '2026-01-06T10:00:00.000Z', 80, NULL);
     `);
     db.close();
   }
@@ -252,6 +255,10 @@ describe('Migration « compteur de départ et relevés en attente d’attributio
       { id: 'u2', start_reading: 100 },
       { id: 'u3', start_reading: 165.3 },
       { id: 'u4', start_reading: null },
+      { id: 'u5', start_reading: 50 },
+      // Le prédécesseur de `u6` est `u5`, à compteur égal : sa durée reste nulle. La chercher
+      // strictement plus bas lui donnerait le départ de `u5` — et 30 h qu'il n'a jamais faites.
+      { id: 'u6', start_reading: 80 },
     ]);
     expect(db.prepare(`SELECT notes FROM usage_records WHERE id = 'u1'`).get()).toEqual({ notes: 'RAS' });
     expect(db.pragma('foreign_key_check')).toEqual([]);
@@ -265,9 +272,9 @@ describe('Migration « compteur de départ et relevés en attente d’attributio
 
     db.prepare(
       `INSERT INTO usage_records (id, equipment_id, member_id, recorded_at, meter_reading, start_reading)
-       VALUES ('u5', 'e1', NULL, '2026-01-05T10:00:00.000Z', 200, 180)`,
+       VALUES ('u9', 'e1', NULL, '2026-01-07T10:00:00.000Z', 200, 180)`,
     ).run();
-    expect(db.prepare(`SELECT member_id FROM usage_records WHERE id = 'u5'`).get()).toEqual({ member_id: null });
+    expect(db.prepare(`SELECT member_id FROM usage_records WHERE id = 'u9'`).get()).toEqual({ member_id: null });
     db.close();
   });
 
@@ -281,6 +288,8 @@ describe('Migration « compteur de départ et relevés en attente d’attributio
       { id: 'u2', start_reading: 100 },
       { id: 'u3', start_reading: 165.3 },
       { id: 'u4', start_reading: null },
+      { id: 'u5', start_reading: 50 },
+      { id: 'u6', start_reading: 80 },
     ]);
     db.close();
   });
