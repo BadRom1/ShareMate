@@ -60,6 +60,7 @@ export function EquipmentSwitcher({
       <button
         type="button"
         className="switcher"
+        data-tour="equipment-switcher"
         aria-haspopup="dialog"
         aria-expanded={ouvert}
         onClick={() => setOuvert(true)}

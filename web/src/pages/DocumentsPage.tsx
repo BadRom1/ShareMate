@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { DOCUMENT_CATEGORIES, api, documentContentUrl } from '../api';
 import type { DocumentCategory, Equipment, EquipmentDocument, Member } from '../api';
+import { pickCompressed } from '../compressImage';
 import { DOCUMENT_CATEGORY_LABELS, formatBytes, formatDate, linkHost } from '../format';
 import { clearErrors, errorMessage, firstError, useApiResource } from '../useApiResource';
 import {
@@ -44,6 +45,9 @@ export function DocumentsPage({ members, equipment }: Props) {
   // Modale d'ajout.
   const [draft, setDraft] = useState<Draft | null>(null);
   const [newName, setNewName] = useState('');
+  // Un nom retouché à la main ne suit plus le fichier : sans cette distinction, un nom tapé pendant
+  // la compression serait écrasé par le fichier allégé qui arrive derrière.
+  const [nameTyped, setNameTyped] = useState(false);
   const [newCategory, setNewCategory] = useState<DocumentCategory>('MANUAL');
   const [newUrl, setNewUrl] = useState('');
   const [newFile, setNewFile] = useState<File | null>(null);
@@ -93,6 +97,7 @@ export function DocumentsPage({ members, equipment }: Props) {
   function openDraft() {
     setActionError(null);
     setNewName('');
+    setNameTyped(false);
     setNewUrl('');
     setNewFile(null);
     setNewCategory('MANUAL');
@@ -105,11 +110,13 @@ export function DocumentsPage({ members, equipment }: Props) {
     setDraft(null);
   }
 
-  function chooseFile(file: File | null) {
-    setNewFile(file);
-    // Le nom du fichier est une proposition, pas une contrainte : il reste modifiable au-dessous.
-    if (file && newName.trim().length === 0) setNewName(file.name);
-  }
+  /**
+   * Nom du document tel qu'il partira : celui qui a été tapé, sinon le nom du fichier retenu — une
+   * proposition, pas une contrainte. Dérivé plutôt que recopié dans l'état : il suit ainsi le
+   * fichier allégé qui remplace l'original, et un passage en « Lien » ne garde pas le nom d'une
+   * image finalement abandonnée.
+   */
+  const draftName = nameTyped ? newName : draft === 'file' ? (newFile?.name ?? '') : '';
 
   async function submitDraft(event: React.FormEvent) {
     event.preventDefault();
@@ -120,14 +127,14 @@ export function DocumentsPage({ members, equipment }: Props) {
         await api.addDocumentLink({
           equipmentId: equipment.id,
           url: newUrl.trim(),
-          name: newName.trim() || undefined,
+          name: draftName.trim() || undefined,
           category: newCategory,
         });
       } else if (newFile) {
         await api.uploadDocument(newFile, {
           equipmentId: equipment.id,
           category: newCategory,
-          name: newName.trim() || undefined,
+          name: draftName.trim() || undefined,
         });
       }
       closeDraft();
@@ -343,7 +350,9 @@ export function DocumentsPage({ members, equipment }: Props) {
                   className="visually-hidden"
                   aria-label="Fichier à déposer"
                   onChange={(e) => {
-                    chooseFile(e.target.files?.[0] ?? null);
+                    // Le fichier est retenu tel quel, puis remplacé par sa version allégée : un
+                    // dépôt lancé entre les deux part avec l'image entière, jamais sans elle.
+                    pickCompressed(e.target.files?.[0] ?? null, setNewFile);
                     e.target.value = '';
                   }}
                 />
@@ -379,8 +388,11 @@ export function DocumentsPage({ members, equipment }: Props) {
             <label className="field">
               Nom affiché {draft === 'file' && <span className="muted">(le nom du fichier par défaut)</span>}
               <input
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
+                value={draftName}
+                onChange={(e) => {
+                  setNameTyped(true);
+                  setNewName(e.target.value);
+                }}
                 placeholder="ex. Manuel d’utilisation"
                 maxLength={200}
               />

@@ -21,6 +21,7 @@ import type {
   SubEquipment,
   ThreadSummary,
   UsageRecord,
+  RecordedUsage,
 } from '../api';
 
 export function aMember(over: Partial<DirectoryMember> = {}): DirectoryMember {
@@ -194,6 +195,7 @@ export function aUsageRecord(over: Partial<UsageRecord> = {}): UsageRecord {
     memberId: 'm1',
     recordedAt: '2026-03-02T18:00:00.000Z',
     meterReading: 120,
+    startReading: 116,
     duration: 4,
     fuelAddedLiters: null,
     notes: null,
@@ -280,7 +282,9 @@ export function createApiStub() {
     updateReservation: vi.fn(async () => aReservation()),
     cancelReservation: vi.fn(async (_id: string) => {}),
 
-    recordUsage: vi.fn(async (_input: unknown) => aUsageRecord()),
+    recordUsage: vi.fn(async (_input: unknown): Promise<RecordedUsage> => ({ ...aUsageRecord(), gap: null })),
+    updateUsage: vi.fn(async (_id: string, _changes: unknown) => aUsageRecord()),
+    deleteUsage: vi.fn(async (_id: string) => {}),
     alerts: vi.fn(async () => [] as MaintenanceStatus[]),
     maintenanceStatus: vi.fn(async (_equipmentId: string) => aMaintenanceStatus()),
     usageByEquipment: vi.fn(async (_equipmentId: string) => [] as UsageRecord[]),
@@ -293,7 +297,7 @@ export function createApiStub() {
     settlement: vi.fn(async (_equipmentId: string) => [] as SettlementTransaction[]),
     listReimbursements: vi.fn(async (_equipmentId: string) => [] as Reimbursement[]),
     recordReimbursement: vi.fn(async (_input: unknown) => aReimbursement()),
-    uploadReceipt: vi.fn(async (_file: File) => '/uploads/0189a4c2-1f3b-4d5e-8a9b-0c1d2e3f4a5b.jpg'),
+    addExpenseWithReceipt: vi.fn(async (_input: unknown, _receipt: File) => anExpense()),
 
     listThreads: vi.fn(async (_equipmentId: string) => [] as ThreadSummary[]),
     listMessages: vi.fn(async (_threadId: string) => [] as Message[]),

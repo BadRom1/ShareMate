@@ -297,6 +297,12 @@ th {
   font-size: 0.85rem;
 }
 
+/* Refus annoncé sous un champ, avant même l'envoi du formulaire. */
+.field-warn {
+  color: var(--warning);
+  font-size: 0.85rem;
+}
+
 .day-group {
   margin-bottom: 1rem;
 }
@@ -2589,4 +2595,126 @@ th {
 
 .lot-form .lot-note-input {
   flex: 3 1 9rem;
+}
+
+/* --- Installation sur l'écran d'accueil --- */
+
+/*
+ * Encart posé au bas des écrans publics, séparé du formulaire par un filet : il propose autre
+ * chose que ce pour quoi on est venu, et n'a donc pas à se confondre avec lui.
+ */
+.install-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.install-panel p {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.install-steps {
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.install-steps li {
+  margin-bottom: 0.25rem;
+}
+
+/* --- Visite guidée --- */
+
+/*
+ * Voile posé sur la coque le temps de la visite : les clics à côté ne doivent pas déclencher
+ * l'action qu'on est en train d'expliquer. Il se range au-dessus du bouton flottant (35) et sous
+ * les modales (50), qui prennent la main. Assombrir, en revanche, ne lui revient que faute de
+ * cible : dès qu'il y en a une, c'est l'ombre du halo qui fait le noir, tout autour d'elle.
+ */
+.tour-overlay {
+  /* Le voile des boîtes de dialogue : l'application n'a qu'une seule façon de s'assombrir. */
+  --tour-voile: rgba(15, 30, 25, 0.45);
+
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+}
+
+/* Sans cible à désigner — le parc encore vide — la bulle est seule, et le voile fait tout le travail. */
+.tour-overlay-plein {
+  background: var(--tour-voile);
+}
+
+/*
+ * Halo : une ombre démesurée noircit tout l'écran *sauf* le rectangle de la cible, qui reste donc
+ * en clair, entouré d'un liseré de marque. C'est ce découpage qui fait qu'on regarde au bon endroit.
+ */
+.tour-halo {
+  position: fixed;
+  border-radius: var(--radius);
+  border: 2px solid var(--green);
+  box-shadow: 0 0 0 9999px var(--tour-voile);
+  pointer-events: none;
+}
+
+.tour-bubble {
+  position: fixed;
+  left: 1rem;
+  right: 1rem;
+  max-width: 24rem;
+  margin-inline: auto;
+  background: var(--card);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 1rem;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 30%);
+}
+
+/*
+ * Cible absente — le cas du tout premier lancement, sans équipement : la bulle se pose au milieu
+ * de l'écran et le texte se suffit à lui-même, puisqu'il n'y a rien à montrer du doigt.
+ */
+.tour-bubble-centre {
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.tour-bubble:focus-visible {
+  outline: 3px solid var(--green);
+  outline-offset: 2px;
+}
+
+.tour-progress {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.tour-title {
+  margin: 0.25rem 0 0.4rem;
+  font-size: 1.05rem;
+  color: var(--green-dark);
+}
+
+.tour-body {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+/* « Passer » à gauche, la suite à droite : le geste principal reste sous le pouce. */
+.tour-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.tour-actions .tour-next {
+  margin-left: auto;
 }

@@ -93,6 +93,7 @@ export interface ReservationRepository {
 }
 
 export interface UsageRecordRepository {
+  findById(id: string): Promise<UsageRecord | null>;
   /** Relevés de l'équipement, du plus ancien au plus récent. */
   findByEquipmentId(equipmentId: string): Promise<UsageRecord[]>;
   /**
@@ -103,6 +104,7 @@ export interface UsageRecordRepository {
   /** Relevés saisis par le membre, du plus ancien au plus récent. */
   findByMemberId(memberId: string): Promise<UsageRecord[]>;
   save(record: UsageRecord): Promise<void>;
+  delete(id: string): Promise<void>;
 }
 
 export interface ExpenseRepository {

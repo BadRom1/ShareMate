@@ -1,9 +1,12 @@
 import { useCallback, useMemo, useState } from 'react';
 import { api, receiptUrl } from '../api';
 import type { Equipment, Expense, ExpenseCategory, Member, SettlementTransaction, SplitInput } from '../api';
+import { pickCompressed } from '../compressImage';
 import { CATEGORY_LABELS, formatDate, formatEuros } from '../format';
+import { decimalPlaces, parseDecimal } from '../decimal';
 import { errorMessage, firstError, useApiResource } from '../useApiResource';
 import { Modal } from '../components/Modal';
+import { DecimalInput } from '../components/DecimalInput';
 import { Fab } from '../components/Fab';
 
 interface Props {
@@ -90,38 +93,77 @@ export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
     setShowForm(false);
   }
 
+  /**
+   * Montant saisi, ou ce qui cloche avec lui. Le champ étant du texte (la virgule des
+   * claviers mobiles), c'est ici que se font les refus que `type="number"` opérait :
+   * un montant nul, et une précision au-delà du centime que l'arrondi trahirait en silence.
+   */
+  function lireMontant(saisie: string): { montant: number } | { refus: 'POSITIF' | 'CENTIME' } {
+    const montant = parseDecimal(saisie);
+    if (montant === null || montant <= 0) return { refus: 'POSITIF' };
+    if (decimalPlaces(saisie) > 2) return { refus: 'CENTIME' };
+    return { montant };
+  }
+
+  /** Première part personnalisée mal saisie, le cas échéant. */
+  function refusDesParts(): string | null {
+    if (form.splitType !== 'CUSTOM') return null;
+    for (const m of circle) {
+      const saisie = form.customAmounts[m.id] ?? '';
+      const part = lireMontant(saisie);
+      // Une part vide ou nulle n'est pas une erreur : ce membre n'a simplement pas de part.
+      if ('refus' in part && part.refus === 'CENTIME') {
+        return `La part de « ${m.name} » ne va pas au-delà du centime (deux décimales).`;
+      }
+    }
+    return null;
+  }
+
   function buildSplit(): SplitInput {
     if (form.splitType === 'EQUAL') return { type: 'EQUAL', memberIds: form.equalMemberIds };
     if (form.splitType === 'USAGE_PRORATED') return { type: 'USAGE_PRORATED' };
-    return {
-      type: 'CUSTOM',
-      amountsEuros: Object.fromEntries(
-        Object.entries(form.customAmounts)
-          .filter(([, v]) => v !== '' && Number(v) > 0)
-          .map(([k, v]) => [k, Number(v)]),
-      ),
-    };
+    // Une part vide ou nulle n'est pas une part : seul le renseigné compte.
+    const amountsEuros: Record<string, number> = {};
+    for (const [memberId, saisie] of Object.entries(form.customAmounts)) {
+      const montant = parseDecimal(saisie);
+      if (montant !== null && montant > 0) amountsEuros[memberId] = montant;
+    }
+    return { type: 'CUSTOM', amountsEuros };
   }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setActionError(null);
+    // Tout se vérifie avant le téléversement du justificatif : un refus après coup
+    // laisserait un fichier orphelin sur le serveur.
+    const montant = lireMontant(form.amountEuros);
+    if ('refus' in montant) {
+      setActionError(
+        montant.refus === 'POSITIF'
+          ? 'Le montant de la dépense doit être supérieur à 0 €.'
+          : 'Le montant de la dépense ne va pas au-delà du centime (deux décimales).',
+      );
+      return;
+    }
+    const refusParts = refusDesParts();
+    if (refusParts !== null) {
+      setActionError(refusParts);
+      return;
+    }
     setBusy(true);
     try {
-      let receiptPath: string | null = null;
-      if (form.receiptFile) {
-        receiptPath = await api.uploadReceipt(form.receiptFile);
-      }
-      await api.addExpense({
+      const dépense = {
         equipmentId: equipment.id,
         label: form.label,
-        amountEuros: Number(form.amountEuros),
+        amountEuros: montant.montant,
         payerId: form.payerId,
         date: form.date,
         category: form.category,
         split: buildSplit(),
-        receiptPath,
-      });
+      };
+      // Le justificatif part avec la dépense : téléversé à part, il resterait sur le serveur
+      // sans que rien ne le nomme dès que l'enregistrement est refusé.
+      await (form.receiptFile ? api.addExpenseWithReceipt(dépense, form.receiptFile) : api.addExpense(dépense));
       setShowForm(false);
       setForm({
         ...form,
@@ -215,12 +257,9 @@ export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
               </label>
               <label className="field">
                 Montant (€)
-                <input
-                  type="number"
-                  min="0.01"
-                  step="0.01"
+                <DecimalInput
                   value={form.amountEuros}
-                  onChange={(e) => setForm({ ...form, amountEuros: e.target.value })}
+                  onValueChange={(value) => setForm({ ...form, amountEuros: value })}
                   required
                 />
               </label>
@@ -306,13 +345,10 @@ export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
                 {circle.map((m) => (
                   <label key={m.id} className="field">
                     {m.name} (€)
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
+                    <DecimalInput
                       value={form.customAmounts[m.id] ?? ''}
-                      onChange={(e) =>
-                        setForm({ ...form, customAmounts: { ...form.customAmounts, [m.id]: e.target.value } })
+                      onValueChange={(value) =>
+                        setForm({ ...form, customAmounts: { ...form.customAmounts, [m.id]: value } })
                       }
                     />
                   </label>
@@ -325,7 +361,13 @@ export function ExpensesPage({ members, currentMemberId, equipment }: Props) {
               <input
                 type="file"
                 accept=".png,.jpg,.jpeg,.webp,.pdf"
-                onChange={(e) => setForm({ ...form, receiptFile: e.target.files?.[0] ?? null })}
+                onChange={(e) =>
+                  // Le justificatif est retenu tel quel, puis remplacé par sa version allégée : une
+                  // dépense enregistrée entre les deux part avec la photo entière, jamais sans elle.
+                  pickCompressed(e.target.files?.[0] ?? null, (retenir) =>
+                    setForm((f) => ({ ...f, receiptFile: retenir(f.receiptFile) })),
+                  )
+                }
               />
             </label>
 

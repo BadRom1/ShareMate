@@ -86,6 +86,7 @@ export function usageRecordDto(u: UsageRecord, duration: number | null = null) {
     memberId: u.memberId,
     recordedAt: u.recordedAt.toISOString(),
     meterReading: u.meterReading,
+    startReading: u.startReading,
     duration,
     fuelAddedLiters: u.fuelAddedLiters,
     notes: u.notes,

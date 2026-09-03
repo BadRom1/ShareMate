@@ -309,3 +309,24 @@ export function IconGrid(props: IconProps) {
     </svg>
   );
 }
+
+/** Flèche vers un socle (installer l'application sur l'appareil). */
+export function IconDownload(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12 3v12" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+    </svg>
+  );
+}
+
+/** Boussole (visite guidée : de quoi s'orienter dans l'application). */
+export function IconCompass(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m15.5 8.5-2 5-5 2 2-5Z" />
+    </svg>
+  );
+}

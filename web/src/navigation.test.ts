@@ -186,6 +186,33 @@ describe('useRoute', () => {
     push.mockRestore();
   });
 
+  it('remplace l’entrée courante quand la visite guidée pilote la navigation', () => {
+    const { result } = renderHook(() => useRoute(aRoute()));
+    const push = vi.spyOn(window.history, 'pushState');
+    const replace = vi.spyOn(window.history, 'replaceState');
+
+    act(() => result.current.replace({ tab: 'forum' }));
+
+    expect(push).not.toHaveBeenCalled();
+    expect(replace).toHaveBeenCalledOnce();
+    expect(window.location.search).toBe('?equipment=e1&tab=forum');
+    expect(result.current.route).toEqual(aRoute({ tab: 'forum' }));
+    push.mockRestore();
+    replace.mockRestore();
+  });
+
+  it('rend la main au membre après un remplacement resté sans effet', () => {
+    const { result } = renderHook(() => useRoute(aRoute()));
+    // Deux étapes de la visite désignent le même onglet : la seconde ne déplace rien.
+    act(() => result.current.replace({ tab: 'agenda' }));
+    const push = vi.spyOn(window.history, 'pushState');
+
+    act(() => result.current.go({ tab: 'forum' }));
+
+    expect(push).toHaveBeenCalledOnce();
+    push.mockRestore();
+  });
+
   it('revient à l’onglet précédent au retour navigateur', async () => {
     const { result } = renderHook(() => useRoute(aRoute()));
     act(() => result.current.go({ tab: 'expenses' }));

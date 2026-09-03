@@ -33,6 +33,11 @@ describe('computeMaintenanceStatus', () => {
     expect(s.threshold).toBeNull();
   });
 
+  it('les unités écoulées restent lisibles malgré le calcul flottant', () => {
+    const s = computeMaintenanceStatus(equipment(10), [usage('u1', 164), usage('u2', 164 + 1.3)]);
+    expect(s.unitsSinceMaintenance).toBe(1.3);
+  });
+
   it("sans aucun relevé : pas d'alerte, compteur inconnu", () => {
     const s = computeMaintenanceStatus(equipment(50), []);
     expect(s.alert).toBe(false);

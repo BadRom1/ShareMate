@@ -297,6 +297,18 @@ describe.each(IMPLÉMENTATIONS)('Contrat des ports — $nom', ({ ouvrir }) => {
     expect(await dépôts.usageRecords.findByEquipmentIds([])).toEqual([]);
   });
 
+  it('retrouve et supprime un relevé par son identifiant', async () => {
+    await dépôts.usageRecords.save(relevé('u1', 'e1', 'm1', '2026-03-01T10:00:00.000Z', 30));
+
+    expect((await dépôts.usageRecords.findById('u1'))?.meterReading).toBe(30);
+    expect(await dépôts.usageRecords.findById('inconnu')).toBeNull();
+
+    await dépôts.usageRecords.delete('u1');
+    expect(await dépôts.usageRecords.findById('u1')).toBeNull();
+    // Supprimer deux fois n'est pas une erreur : le second geste n'a plus rien à faire.
+    await dépôts.usageRecords.delete('u1');
+  });
+
   it('range dépenses et remboursements du plus récent au plus ancien', async () => {
     await dépôts.expenses.save(dépense('x1', 'e2', '2026-01-15T00:00:00.000Z'));
     await dépôts.expenses.save(dépense('x2', 'e2', '2026-04-15T00:00:00.000Z'));

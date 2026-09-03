@@ -11,7 +11,7 @@ export function assetUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
-/** Forme exacte des chemins produits par POST /api/uploads/receipts. */
+/** Forme exacte des chemins produits par le dépôt d'un justificatif (POST /api/expenses/file). */
 const RECEIPT_PATH = /^\/uploads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpe?g|webp|pdf)$/;
 
 /**
@@ -135,14 +135,22 @@ export interface Reservation {
 export interface UsageRecord {
   id: string;
   equipmentId: string;
-  memberId: string;
+  /** `null` : segment constaté par le cercle, en attente d'attribution. */
+  memberId: string | null;
   recordedAt: string;
   meterReading: number;
-  /** Durée (heures/km) attribuée au membre : delta avec le relevé précédent, null pour le premier relevé. */
+  /** Compteur au départ, `null` quand il est inconnu (premier relevé, ou relevé antérieur au champ). */
+  startReading: number | null;
+  /** Durée (heures/km) attribuée au membre, null quand le compteur de départ est inconnu. */
   duration: number | null;
   fuelAddedLiters: number | null;
   notes: string | null;
   isMaintenance: boolean;
+}
+
+/** Relevé enregistré, avec le segment que sa saisie a mis au jour, s'il y en avait un. */
+export interface RecordedUsage extends UsageRecord {
+  gap: UsageRecord | null;
 }
 
 export interface MaintenanceStatus {
@@ -155,6 +163,17 @@ export interface MaintenanceStatus {
 }
 
 export type ExpenseCategory = 'PURCHASE' | 'INSURANCE' | 'FUEL' | 'MAINTENANCE' | 'REPAIR' | 'OTHER';
+
+export interface AddExpenseInput {
+  equipmentId: string;
+  label: string;
+  amountEuros: number;
+  payerId: string;
+  date: string;
+  category: ExpenseCategory;
+  split: SplitInput;
+  receiptPath?: string | null;
+}
 
 export type SplitInput =
   | { type: 'EQUAL'; memberIds?: string[] }
@@ -493,29 +512,64 @@ export const api = {
 
   recordUsage: (input: {
     equipmentId: string;
-    /** Relevé de compteur, ou `duration` pour laisser le serveur le calculer depuis le dernier relevé. */
+    /** Relevé de compteur, ou `duration` pour laisser le serveur le calculer depuis le compteur au départ. */
     meterReading?: number;
     duration?: number;
+    /** Compteur trouvé au départ ; au-dessus du dernier relevé connu, il ouvre un segment. */
+    startReading?: number | null;
+    /** À qui attribuer ce segment. Absent : il reste en attente. */
+    gapMemberId?: string | null;
     fuelAddedLiters?: number | null;
     notes?: string | null;
     isMaintenance?: boolean;
-  }) => request<UsageRecord>('/api/usage', { method: 'POST', body: JSON.stringify(input) }),
+  }) => request<RecordedUsage>('/api/usage', { method: 'POST', body: JSON.stringify(input) }),
+  updateUsage: (
+    id: string,
+    changes: {
+      meterReading?: number;
+      startReading?: number | null;
+      memberId?: string | null;
+      fuelAddedLiters?: number | null;
+      notes?: string | null;
+      isMaintenance?: boolean;
+    },
+  ) => request<UsageRecord>(`/api/usage/${id}`, { method: 'PUT', body: JSON.stringify(changes) }),
+  deleteUsage: (id: string) => request<void>(`/api/usage/${id}`, { method: 'DELETE' }),
   usageByEquipment: (equipmentId: string) => request<UsageRecord[]>(`/api/equipments/${equipmentId}/usage`),
   usageByMember: (memberId: string) => request<UsageRecord[]>(`/api/members/${memberId}/usage`),
   maintenanceStatus: (equipmentId: string) => request<MaintenanceStatus>(`/api/equipments/${equipmentId}/maintenance`),
   alerts: () => request<MaintenanceStatus[]>('/api/alerts'),
 
   listExpenses: (equipmentId: string) => request<Expense[]>(`/api/equipments/${equipmentId}/expenses`),
-  addExpense: (input: {
-    equipmentId: string;
-    label: string;
-    amountEuros: number;
-    payerId: string;
-    date: string;
-    category: ExpenseCategory;
-    split: SplitInput;
-    receiptPath?: string | null;
-  }) => request<Expense>('/api/expenses', { method: 'POST', body: JSON.stringify(input) }),
+  addExpense: (input: AddExpenseInput) =>
+    request<Expense>('/api/expenses', { method: 'POST', body: JSON.stringify(input) }),
+  /**
+   * Dépense et justificatif en une seule requête : le fichier n'est écrit que si la dépense l'est.
+   * Téléversé à part, il restait sur le serveur sans que rien ne le nomme dès que la dépense était
+   * refusée ou le formulaire abandonné.
+   */
+  addExpenseWithReceipt: async (input: AddExpenseInput, receipt: File): Promise<Expense> => {
+    const form = new FormData();
+    form.append('equipmentId', input.equipmentId);
+    form.append('label', input.label);
+    form.append('amountEuros', String(input.amountEuros));
+    form.append('payerId', input.payerId);
+    form.append('date', input.date);
+    form.append('category', input.category);
+    form.append('split', JSON.stringify(input.split));
+    form.append('file', receipt);
+    // Pas de Content-Type manuel : le navigateur pose la frontière multipart.
+    const response = await fetch(`${API_BASE}/api/expenses/file`, {
+      method: 'POST',
+      body: form,
+      headers: buildHeaders(false),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new ApiError(body.error ?? 'Échec de l’enregistrement de la dépense.', response.status);
+    }
+    return (await response.json()) as Expense;
+  },
   deleteExpense: (id: string) => request<void>(`/api/expenses/${id}`, { method: 'DELETE' }),
   balances: (equipmentId: string) => request<Balance[]>(`/api/equipments/${equipmentId}/balances`),
   settlement: (equipmentId: string) => request<SettlementTransaction[]>(`/api/equipments/${equipmentId}/settlement`),
@@ -638,20 +692,4 @@ export const api = {
     }),
   unsubscribeWebPush: (endpoint: string) =>
     request<void>('/api/notifications/subscriptions', { method: 'DELETE', body: JSON.stringify({ endpoint }) }),
-
-  uploadReceipt: async (file: File): Promise<string> => {
-    const form = new FormData();
-    form.append('file', file);
-    // Pas de Content-Type manuel : le navigateur pose la frontière multipart.
-    const response = await fetch(`${API_BASE}/api/uploads/receipts`, {
-      method: 'POST',
-      body: form,
-      headers: buildHeaders(false),
-    });
-    if (!response.ok) {
-      const body = (await response.json().catch(() => ({}))) as { error?: string };
-      throw new ApiError(body.error ?? "Échec de l'upload.", response.status);
-    }
-    return ((await response.json()) as { path: string }).path;
-  },
 };

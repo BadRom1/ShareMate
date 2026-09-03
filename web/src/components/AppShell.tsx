@@ -29,6 +29,8 @@ interface Props {
   onOpenAdmin: () => void;
   /** Navigation demandée par un lien de notification, passée telle quelle à la cloche. */
   onNavigate: (link: string) => void;
+  /** Relance de la visite guidée depuis le menu. */
+  onStartTour: () => void;
   onLogout: () => void;
   children: ReactNode;
 }
@@ -52,6 +54,7 @@ export function AppShell({
   onAddEquipment,
   onOpenAdmin,
   onNavigate,
+  onStartTour,
   onLogout,
   children,
 }: Props) {
@@ -67,7 +70,7 @@ export function AppShell({
         />
         <div className="appbar-actions">
           <NotificationBell onNavigate={onNavigate} />
-          <UserMenu member={member} onOpenAdmin={onOpenAdmin} onLogout={onLogout} />
+          <UserMenu member={member} onOpenAdmin={onOpenAdmin} onStartTour={onStartTour} onLogout={onLogout} />
         </div>
       </header>
 
@@ -80,6 +83,8 @@ export function AppShell({
             <button
               key={id}
               type="button"
+              // Repère de la visite guidée : c'est par la barre basse qu'elle montre les sections.
+              data-tour={`tab-${id}`}
               aria-current={id === tab ? 'page' : undefined}
               onClick={() => onSelectTab(id)}
             >

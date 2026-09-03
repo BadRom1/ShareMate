@@ -1,23 +1,27 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import type { Member } from '../api';
-import { IconLock, IconLogout, IconMenu, IconUsers } from './icons';
+import { InstallSteps, useInstallPrompt } from './InstallApp';
+import { IconCompass, IconDownload, IconLock, IconLogout, IconMenu, IconUsers } from './icons';
 
 interface Props {
   member: Member;
   /** Administration de l'instance, proposée au seul administrateur. */
   onOpenAdmin: () => void;
+  /** Relance de la visite guidée, à la demande — elle ne s'ouvre d'elle-même qu'une fois. */
+  onStartTour: () => void;
   /** Déconnexion demandée depuis le menu. */
   onLogout: () => void;
 }
 
-type View = 'menu' | 'password';
+type View = 'menu' | 'password' | 'install';
 
 /** Menu hamburger : nom de l'utilisateur connecté, changement de mot de passe et déconnexion. */
-export function UserMenu({ member, onOpenAdmin, onLogout }: Props) {
+export function UserMenu({ member, onOpenAdmin, onStartTour, onLogout }: Props) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<View>('menu');
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const { mode: modeInstallation, installer } = useInstallPrompt();
 
   // Ferme le menu au clic extérieur.
   useEffect(() => {
@@ -44,12 +48,38 @@ export function UserMenu({ member, onOpenAdmin, onLogout }: Props) {
 
       {open && (
         <div className="bell-panel usermenu-panel">
-          {view === 'menu' ? (
+          {view === 'menu' && (
             <>
               <div className="usermenu-head">
                 <span className="muted">Connecté</span>
                 <strong>{member.name}</strong>
               </div>
+              <button
+                className="menu-item"
+                onClick={() => {
+                  setOpen(false);
+                  onStartTour();
+                }}
+              >
+                <IconCompass size={18} />
+                Visite guidée
+              </button>
+              {/* Rien à installer — déjà sur l'écran d'accueil, ou navigateur qui ne sait pas
+                  faire — et l'entrée disparaît : elle ne mènerait nulle part. */}
+              {modeInstallation !== null && (
+                <button
+                  className="menu-item"
+                  onClick={() => {
+                    if (modeInstallation === 'prompt') {
+                      setOpen(false);
+                      void installer();
+                    } else setView('install');
+                  }}
+                >
+                  <IconDownload size={18} />
+                  Installer l&apos;app
+                </button>
+              )}
               <button className="menu-item" onClick={() => setView('password')}>
                 <IconLock size={18} />
                 Changer le mot de passe
@@ -72,12 +102,30 @@ export function UserMenu({ member, onOpenAdmin, onLogout }: Props) {
                 Déconnexion
               </button>
             </>
-          ) : (
-            <ChangePasswordForm onBack={() => setView('menu')} onDone={() => setOpen(false)} />
           )}
+          {view === 'password' && <ChangePasswordForm onBack={() => setView('menu')} onDone={() => setOpen(false)} />}
+          {view === 'install' && <InstallHelp onBack={() => setView('menu')} />}
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Étapes d'installation à la main (sous-vue du menu). Safari n'expose aucune API : le menu ne
+ * peut pas installer à la place de l'utilisateur, seulement lui dire où se cache le geste.
+ */
+function InstallHelp({ onBack }: { onBack: () => void }) {
+  return (
+    <>
+      <div className="bell-head">
+        <strong>Installer l&apos;app</strong>
+        <button className="link" onClick={onBack}>
+          ← Retour
+        </button>
+      </div>
+      <InstallSteps />
+    </>
   );
 }
 

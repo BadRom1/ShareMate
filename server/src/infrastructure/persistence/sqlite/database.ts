@@ -507,6 +507,75 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    // Deux manques d'un même trou : celui qui oublie sa saisie faisait porter ses heures au
+    // suivant, sans que personne ne puisse ni le voir ni le corriger.
+    // - `start_reading` : le relevé porte son propre point de départ, au lieu de le déduire du
+    //   relevé précédent. Un écart entre les deux devient visible, et attribuable.
+    // - `member_id` facultatif : le segment constaté par un membre mais dû à un autre existe
+    //   comme relevé à part entière, en attente d'attribution, plutôt que d'être fondu dans
+    //   celui qui le découvre.
+    // La reprise donne à chaque relevé antérieur le compteur qui le précède dans la chaîne de
+    // son équipement : exactement ce que le calcul des durées déduisait jusqu'ici, écrit une
+    // fois pour toutes. Le premier relevé de chaque équipement garde NULL — son compteur
+    // d'origine reste inconnu, et sa durée avec.
+    description: 'compteur de départ et relevés en attente d’attribution',
+    apply(db) {
+      const présentes = columns(db, 'usage_records');
+      if (présentes.length === 0) {
+        return;
+      }
+      if (!présentes.includes('start_reading')) {
+        db.exec(`ALTER TABLE usage_records ADD COLUMN start_reading REAL;`);
+        // Le prédécesseur se cherche dans l'ordre de la chaîne — compteur, puis date — et non
+        // au compteur strictement inférieur : deux relevés au même compteur se suivent, et le
+        // second n'a rien fait tourner. Le chercher plus bas lui donnerait les heures du premier.
+        db.exec(`
+          UPDATE usage_records SET start_reading = (
+            SELECT précédent.meter_reading FROM usage_records AS précédent
+              WHERE précédent.equipment_id = usage_records.equipment_id
+                AND (précédent.meter_reading, précédent.recorded_at, précédent.id)
+                  < (usage_records.meter_reading, usage_records.recorded_at, usage_records.id)
+              ORDER BY précédent.meter_reading DESC, précédent.recorded_at DESC, précédent.id DESC
+              LIMIT 1
+          );
+        `);
+      }
+      if (nullable(db, 'usage_records', 'member_id')) {
+        return;
+      }
+      // Reconstruction : SQLite ne sait pas relâcher un NOT NULL sur place. Aucune table ne
+      // référence `usage_records` — le renommage n'a donc pas de clause `REFERENCES` fille à
+      // préserver, et les clés étrangères peuvent rester armées pendant l'étape.
+      db.exec(`
+        ALTER TABLE usage_records RENAME TO usage_records_ancien;
+        CREATE TABLE usage_records (
+          id TEXT PRIMARY KEY,
+          equipment_id TEXT NOT NULL REFERENCES equipments(id) ON DELETE CASCADE,
+          member_id TEXT REFERENCES members(id),
+          recorded_at TEXT NOT NULL,
+          meter_reading REAL NOT NULL,
+          start_reading REAL,
+          fuel_added_liters REAL,
+          notes TEXT,
+          is_maintenance INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO usage_records
+            (id, equipment_id, member_id, recorded_at, meter_reading, start_reading, fuel_added_liters, notes, is_maintenance)
+          SELECT id, equipment_id, member_id, recorded_at, meter_reading, start_reading, fuel_added_liters, notes, is_maintenance
+            FROM usage_records_ancien;
+        DROP TABLE usage_records_ancien;
+        CREATE INDEX IF NOT EXISTS idx_usage_equipment ON usage_records(equipment_id);
+        CREATE INDEX IF NOT EXISTS idx_usage_member ON usage_records(member_id);
+      `);
+      const orphelines = db.pragma('foreign_key_check') as unknown[];
+      if (orphelines.length > 0) {
+        throw new Error(
+          `Reconstruction de la table « usage_records » incohérente : ${orphelines.length} ligne(s) orpheline(s). ${BACKUP_FIRST}`,
+        );
+      }
+    },
+  },
 ];
 
 /** Version de schéma attendue par ce code : rank de la dernière migration connue. */

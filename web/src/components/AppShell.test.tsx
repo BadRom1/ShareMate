@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
@@ -37,6 +37,7 @@ function afficher(over: Partial<ComponentProps<typeof AppShell>> = {}) {
     onAddEquipment: vi.fn(),
     onOpenAdmin: vi.fn(),
     onNavigate: vi.fn(),
+    onStartTour: vi.fn(),
     onLogout: vi.fn(),
     children: <p>Contenu de l’onglet</p>,
     ...over,
@@ -109,6 +110,56 @@ describe('AppShell', () => {
     expect(onOpenAdmin).toHaveBeenCalled();
     // Le menu se referme : l'écran demandé prend toute la place.
     expect(screen.queryByRole('button', { name: 'Administration' })).toBeNull();
+  });
+
+  it('marque les cibles de la visite guidée sur les onglets', () => {
+    afficher();
+
+    // La visite désigne des éléments réels : sans ces repères, elle n'a rien à montrer.
+    expect(document.querySelector('[data-tour="tab-agenda"]')).not.toBeNull();
+    expect(document.querySelector('[data-tour="tab-expenses"]')).not.toBeNull();
+    expect(document.querySelector('[data-tour="tab-forum"]')).not.toBeNull();
+  });
+});
+
+describe('UserMenu', () => {
+  // Le prompt d'installation est retenu au niveau du module : `appinstalled` est le signal par
+  // lequel le navigateur le périme, donc celui qui remet le test suivant à zéro.
+  afterEach(() => window.dispatchEvent(new Event('appinstalled')));
+
+  it('relance la visite guidée depuis le menu, et le referme', async () => {
+    const user = userEvent.setup();
+    const { onStartTour } = afficher();
+
+    await user.click(screen.getByRole('button', { name: 'Menu' }));
+    await user.click(screen.getByRole('button', { name: 'Visite guidée' }));
+
+    expect(onStartTour).toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Visite guidée' })).toBeNull();
+  });
+
+  // Hors d'un navigateur qui sait installer l'application, l'entrée ne mènerait nulle part.
+  it("ne propose pas l'installation quand le navigateur ne la permet pas", async () => {
+    const user = userEvent.setup();
+    afficher();
+
+    await user.click(screen.getByRole('button', { name: 'Menu' }));
+
+    expect(screen.queryByRole('button', { name: "Installer l'app" })).toBeNull();
+  });
+
+  it("propose l'installation dès que le navigateur l'annonce", async () => {
+    const user = userEvent.setup();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    window.dispatchEvent(Object.assign(new Event('beforeinstallprompt'), { prompt }));
+    afficher();
+
+    await user.click(screen.getByRole('button', { name: 'Menu' }));
+    await user.click(screen.getByRole('button', { name: "Installer l'app" }));
+
+    expect(prompt).toHaveBeenCalled();
+    // L'invite du navigateur prend la main : le menu n'a plus rien à dire.
+    await waitFor(() => expect(screen.queryByRole('button', { name: "Installer l'app" })).toBeNull());
   });
 });
 

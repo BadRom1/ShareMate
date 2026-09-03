@@ -13,6 +13,9 @@ import type { ReceiptStorage as ReceiptStoragePort } from '../../application/por
  */
 export const RECEIPT_PREFIX = '/uploads/';
 
+/** Poids maximal d'un justificatif de dépense : plafond serré, sinon le disque se remplit à volonté. */
+export const RECEIPT_MAX_BYTES = 10 * 1024 * 1024;
+
 /** Préfixe des clés dans le magasin d'objets, distinct des documents qui partagent le bucket. */
 export const RECEIPT_KEY_PREFIX = 'receipts/';
 

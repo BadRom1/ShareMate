@@ -199,6 +199,102 @@ describe('Migration « catégorie et valeur d’achat facultatives »', () => {
   });
 });
 
+describe('Migration « compteur de départ et relevés en attente d’attribution »', () => {
+  /** Base au schéma précédent : `usage_records` sans départ, et dont le membre est obligatoire. */
+  function baseSansCompteurDeDépart(): void {
+    const db = new Database(fichier);
+    db.exec(`
+      CREATE TABLE members (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT);
+      CREATE TABLE equipments (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        category TEXT,
+        acquisition_date TEXT NOT NULL,
+        purchase_value_cents INTEGER,
+        meter_unit TEXT NOT NULL,
+        maintenance_threshold REAL
+      );
+      CREATE TABLE usage_records (
+        id TEXT PRIMARY KEY,
+        equipment_id TEXT NOT NULL REFERENCES equipments(id) ON DELETE CASCADE,
+        member_id TEXT NOT NULL REFERENCES members(id),
+        recorded_at TEXT NOT NULL,
+        meter_reading REAL NOT NULL,
+        fuel_added_liters REAL,
+        notes TEXT,
+        is_maintenance INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO members (id, name) VALUES ('m1', 'Alice'), ('m2', 'Bruno');
+      INSERT INTO equipments (id, name, acquisition_date, meter_unit)
+        VALUES ('e1', 'Minipelle', '2025-03-01T00:00:00.000Z', 'HOURS'),
+               ('e2', 'Bétonnière', '2025-04-01T00:00:00.000Z', 'HOURS');
+      INSERT INTO usage_records (id, equipment_id, member_id, recorded_at, meter_reading, notes) VALUES
+        ('u1', 'e1', 'm1', '2026-01-01T10:00:00.000Z', 100, 'RAS'),
+        ('u2', 'e1', 'm2', '2026-01-02T10:00:00.000Z', 165.3, NULL),
+        ('u3', 'e1', 'm1', '2026-01-03T10:00:00.000Z', 180, NULL),
+        ('u4', 'e2', 'm1', '2026-01-04T10:00:00.000Z', 50, NULL),
+        -- Deux relevés au même compteur : le second n'a rien fait tourner (durée nulle).
+        ('u5', 'e2', 'm2', '2026-01-05T10:00:00.000Z', 80, NULL),
+        ('u6', 'e2', 'm1', '2026-01-06T10:00:00.000Z', 80, NULL);
+    `);
+    db.close();
+  }
+
+  function départs(db: Database.Database): unknown[] {
+    return db.prepare('SELECT id, start_reading FROM usage_records ORDER BY id').all();
+  }
+
+  it('donne à chaque relevé le compteur qui le précède dans la chaîne de son équipement', () => {
+    baseSansCompteurDeDépart();
+    const db = openDatabase(fichier);
+
+    // Exactement ce que le calcul des durées déduisait jusqu'ici, écrit une fois pour toutes.
+    // Le premier relevé de chaque équipement garde NULL : son compteur d'origine est inconnu.
+    expect(départs(db)).toEqual([
+      { id: 'u1', start_reading: null },
+      { id: 'u2', start_reading: 100 },
+      { id: 'u3', start_reading: 165.3 },
+      { id: 'u4', start_reading: null },
+      { id: 'u5', start_reading: 50 },
+      // Le prédécesseur de `u6` est `u5`, à compteur égal : sa durée reste nulle. La chercher
+      // strictement plus bas lui donnerait le départ de `u5` — et 30 h qu'il n'a jamais faites.
+      { id: 'u6', start_reading: 80 },
+    ]);
+    expect(db.prepare(`SELECT notes FROM usage_records WHERE id = 'u1'`).get()).toEqual({ notes: 'RAS' });
+    expect(db.pragma('foreign_key_check')).toEqual([]);
+    expect(version()).toBe(SCHEMA_VERSION);
+    db.close();
+  });
+
+  it('accepte désormais un relevé sans membre : le segment en attente d’attribution', () => {
+    baseSansCompteurDeDépart();
+    const db = openDatabase(fichier);
+
+    db.prepare(
+      `INSERT INTO usage_records (id, equipment_id, member_id, recorded_at, meter_reading, start_reading)
+       VALUES ('u9', 'e1', NULL, '2026-01-07T10:00:00.000Z', 200, 180)`,
+    ).run();
+    expect(db.prepare(`SELECT member_id FROM usage_records WHERE id = 'u9'`).get()).toEqual({ member_id: null });
+    db.close();
+  });
+
+  it('est sans effet sur une base déjà migrée', () => {
+    baseSansCompteurDeDépart();
+    openDatabase(fichier).close();
+    const db = openDatabase(fichier);
+
+    expect(départs(db)).toEqual([
+      { id: 'u1', start_reading: null },
+      { id: 'u2', start_reading: 100 },
+      { id: 'u3', start_reading: 165.3 },
+      { id: 'u4', start_reading: null },
+      { id: 'u5', start_reading: 50 },
+      { id: 'u6', start_reading: 80 },
+    ]);
+    db.close();
+  });
+});
+
 describe('Migration des emails de membres', () => {
   /** Base portant les emails que les versions antérieures acceptaient sans les valider. */
   function baseAvecEmailsLibres(): void {
