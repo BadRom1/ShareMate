@@ -37,14 +37,14 @@
     "brace-expansion@^5.0.0": "^5.0.9"
   },
   "devDependencies": {
-    "@testing-library/dom": "^10.4.1",
+    "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
-    "@testing-library/user-event": "^14.6.6",
+    "@testing-library/user-event": "^14.6.8",
     "@vitest/coverage-v8": "^4.1.11",
     "jsdom": "^30.0.1",
-    "lefthook": "^2.1.9",
-    "oxlint": "^1.80.0",
-    "prettier": "^3.9.4",
+    "lefthook": "^2.2.2",
+    "oxlint": "^1.91.0",
+    "prettier": "^3.9.10",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   }
